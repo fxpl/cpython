@@ -12,6 +12,9 @@ extern "C" {
 #include "object.h"
 #include "regions.h"
 
+#define Py_IS_REGION_AWARE(tp) (tp->tp_flags & Py_TPFLAGS_REGION_AWARE)
+#define Py_OBJ_IS_REGION_AWARE(op) Py_IS_REGION_AWARE(Py_TYPE(op))
+
 #define Py_CHECKWRITE(op) ((op) && !Py_IsImmutable(op))
 #define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
 
@@ -56,7 +59,6 @@ PyObject* _Py_EnableInvariant(void);
 PyObject* _Py_ResetInvariant(void);
 #define Py_ResetInvariant() _Py_ResetInvariant()
 
-// Invariant placeholder
 bool _Py_RegionAddReference(PyObject* src, PyObject* new_tgt);
 #define Py_REGIONADDREFERENCE(a, b) _Py_RegionAddReference(_PyObject_CAST(a), b)
 
@@ -92,6 +94,7 @@ PyObject *_PyCown_close_region(PyObject* ob);
 #define PyCown_close_region(op) _PyCown_close_region(_PyObject_CAST(op))
 int _PyRegion_is_closed(PyObject* op);
 #define PyRegion_is_closed(op) _PyRegion_is_closed(_PyObject_CAST(op))
+void _PyObject_mark_region_as_dirty(PyObject *op);
 
 
 #ifdef _Py_TYPEOF
