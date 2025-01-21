@@ -100,8 +100,8 @@ int _PyRegion_is_closed(PyObject* op);
 #ifdef _Py_TYPEOF
 #define Py_CLEAR_OBJECT_FIELD(op, field) \
     do { \
-        _Py_TYPEOF(op)* _tmp_field_ptr = &(field); \
-        _Py_TYPEOF(op) _tmp_old_field = (*_tmp_field_ptr); \
+        _Py_TYPEOF(field)* _tmp_field_ptr = &(field); \
+        _Py_TYPEOF(field) _tmp_old_field = (*_tmp_field_ptr); \
         if (_tmp_old_field != NULL) { \
             *_tmp_field_ptr = _Py_NULL; \
             Py_REGIONREMOVEREFERENCE(op, _tmp_old_field); \
