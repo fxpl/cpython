@@ -298,6 +298,14 @@ append_ast_lambda(_PyUnicodeWriter *writer, expr_ty e, int level)
 }
 
 static int
+append_ast_move(_PyUnicodeWriter *writer, expr_ty e, int level)
+{
+    APPEND_STR("move ");
+    APPEND_EXPR(e->v.Move.source, PR_ATOM);
+    return 0;
+}
+
+static int
 append_ast_ifexp(_PyUnicodeWriter *writer, expr_ty e, int level)
 {
     APPEND_STR_IF(level > PR_TEST, "(");
@@ -857,6 +865,8 @@ append_ast_expr(_PyUnicodeWriter *writer, expr_ty e, int level)
         return append_ast_unaryop(writer, e, level);
     case Lambda_kind:
         return append_ast_lambda(writer, e, level);
+    case Move_kind:
+        return append_ast_move(writer, e, level);
     case IfExp_kind:
         return append_ast_ifexp(writer, e, level);
     case Dict_kind:
