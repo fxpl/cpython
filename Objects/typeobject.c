@@ -2943,10 +2943,7 @@ subtype_setdict(PyObject *obj, PyObject *value, void *context)
         return -1;
     }
     if (value == NULL || Py_REGIONADDREFERENCE(obj, value)) {
-        if (*dictptr) {
-            Py_REGIONREMOVEREFERENCE(obj, *dictptr);
-        }
-        Py_XSETREF(*dictptr, Py_XNewRef(value));
+        Py_XSETREF_WITH_REGION(*dictptr, Py_XNewRef(value), obj);
         return 0;
     } else {
         return -1;
