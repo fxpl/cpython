@@ -1689,7 +1689,7 @@ PyObject_GenericSetDict(PyObject *obj, PyObject *value, void *context)
         return -1;
     }
     if (Py_REGIONADDREFERENCE(obj, value)) {
-        Py_XSETREF(*dictptr, Py_NewRef(value));
+        Py_XSETREF_WITH_REGION(*dictptr, Py_NewRef(value), obj);
         return 0;
     } else {
         return -1;
