@@ -145,6 +145,7 @@ Tools/msi/obj
 Tools/ssl/amd64
 Tools/ssl/win32
 Tools/freeze/test/outdir
+/mermaid.md
 
 # This is where my build ends up.
 debug/

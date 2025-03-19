@@ -558,6 +558,15 @@ static PyObject* stack_pop(stack* s){
     return object;
 }
 
+// Returns a pointer to the top object without poping it.
+static PyObject* stack_peek(stack* s){
+    if(s->head == NULL){
+        return NULL;
+    }
+
+    return s->head->object;
+}
+
 static void stack_free(stack* s){
     while(s->head != NULL){
         PyObject* op = stack_pop(s);
@@ -571,12 +580,16 @@ static bool stack_empty(stack* s){
     return s->head == NULL;
 }
 
-__attribute__((unused))
-static void stack_print(stack* s){
+static bool stack_contains(stack* s, PyObject* object){
     node* n = s->head;
     while(n != NULL){
+        if (n->object == object) {
+            return true;
+        }
         n = n->next;
     }
+
+    return false;
 }
 
 static bool is_c_wrapper(PyObject* obj){
@@ -746,7 +759,7 @@ static void invariant_reset_captured_list(void) {
 int _Py_CheckRegionInvariant(PyThreadState *tstate)
 {
     // Check if we should perform the region invariant check
-    if(!invariant_do_region_check){
+    if(!invariant_do_region_check || true){
         return 0;
     }
 
@@ -1638,6 +1651,253 @@ fail:
         stack_free(info.new_sub_regions);
     }
     return -1;
+}
+
+
+typedef struct drawmermaidvisitinfo {
+    // Nodes that have been seen before
+    stack* seen;
+
+    // The number max depth of subregions that should be drawn from
+    // this point on.
+    int reg_budget;
+    // The number max depth of immutable objects that should be drawn from
+    // this point on.
+    int imm_budget;
+    int obj_budget;
+    // The source object of the reference.
+    PyObject* src;
+
+    FILE *out;
+} drawmermaidvisitinfo;
+
+static int _draw_mermaid_visit(PyObject* target, void* info_void) {
+    drawmermaidvisitinfo *info = _Py_CAST(drawmermaidvisitinfo *, info_void);
+
+    // Self references don't look good in mermaid
+    if (target == info->src) {
+        return 0;
+    }
+
+    fprintf(info->out, "%p --> %p\n", info->src, target);
+
+    // Check if the target should be traversed
+    if (stack_contains(info->seen, target)) {
+        return 0;
+    }
+
+    // Mark the object as seen
+    if (stack_push(info->seen, target)) {
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    info->obj_budget -= 1;
+    if (info->obj_budget <= 0) {
+        fprintf(info->out, "%p:::maxdepth\n", target);
+        return 0;
+    }
+
+    // c functions can't be traversed
+    if (is_c_wrapper(target) || PyFunction_Check(target)) {
+        fprintf(info->out, "%p:::maxdepth\n", target);
+        return 0;
+    }
+
+    // Handle immutable objects
+    if (Py_IsImmutable(target)) {
+        if (info->imm_budget == 0) {
+            fprintf(info->out, "%p:::maxdepth\n", target);
+            return 0;
+        }
+
+        info->imm_budget -= 1;
+        PyObject *old_src = info->src;
+        info->src = target;
+        int result = !visit_object(target, (visitproc)_draw_mermaid_visit, info);
+        info->src = old_src;
+        info->imm_budget += 1;
+        return result;
+    }
+
+    // Don't traverse cowns
+    if (Py_IsCown(target)) {
+        return 0;
+    }
+
+    int same_region = Py_REGION_DATA(target) == Py_REGION_DATA(info->src);
+    if (!same_region) {
+        if (info->reg_budget == 0) {
+            fprintf(info->out, "%p:::maxdepth\n", target);
+            return 0;
+        }
+        info->reg_budget -= 1;
+    }
+
+    PyObject *old_src = info->src;
+    info->src = target;
+    int result = !visit_object(target, (visitproc)_draw_mermaid_visit, info);
+    info->src = old_src;
+
+    if (!same_region) {
+        info->reg_budget += 1;
+    }
+
+    return result;
+}
+
+static PyObject *draw_mermaid(PyObject *obj, int reg_depth, int imm_depth, int draw_limit) {
+    // This is definitly not optimized for speed
+    PyObject *result = NULL;
+    stack *pending = NULL;
+    FILE *out = fopen("mermaid.md", "w");
+    fprintf(out,"Note that only reachable objects are draw!\n");
+    fprintf(out,"<div style='background: #fff'>\n\n");
+    fprintf(out,"```mermaid\n");
+    fprintf(
+        out,
+        "%%%%{init: {'theme': 'neutral', 'themeVariables': { 'fontSize': '16px' }}}%%%%\n"
+    );
+    fprintf(out,"graph TD\n");
+
+    drawmermaidvisitinfo info = {
+        .seen = stack_new(),
+        .reg_budget = reg_depth,
+        .imm_budget = imm_depth - 1,
+        .obj_budget = draw_limit,
+        .src = obj,
+        .out = out,
+    };
+    if (info.seen == NULL) {
+        PyErr_NoMemory();
+        goto cleanup;
+    }
+
+    // Mark the object as seen
+    if (stack_push(info.seen, obj)) {
+        PyErr_NoMemory();
+        goto cleanup;
+    }
+
+    // Traverse objects
+    if (!visit_object(obj, (visitproc)_draw_mermaid_visit, &info)) {
+        goto cleanup;
+    }
+
+    // Draw regions and add text to objects
+    pending = stack_new();
+    if (pending == NULL) {
+        PyErr_NoMemory();
+        goto cleanup;
+    }
+    while (!stack_empty(info.seen)) {
+        Py_region_ptr_t current_region = Py_REGION(stack_peek(info.seen));
+
+        if (HAS_METADATA(current_region)) {
+            const regionmetadata *md = REGION_DATA_CAST(current_region);
+            fprintf(out, "style %p fill:#fcfbdd\n", md);
+            if (md->name) {
+                fprintf(
+                    out,
+                    "subgraph %p['%s']\n",
+                    md,
+                    get_region_name(stack_peek(info.seen))
+                );
+            } else {
+                fprintf(out, "subgraph %p['%p']\n", md, md->bridge);
+            }
+        }
+
+        while (!stack_empty(info.seen)) {
+            PyObject *item = stack_pop(info.seen);
+
+            // Skip objects from other regions
+            if (Py_REGION(item) != current_region) {
+                if (stack_push(pending, item)) {
+                    PyErr_NoMemory();
+                    goto cleanup;
+                }
+                continue;
+            }
+
+            const char *info_text = "";
+
+            if (is_c_wrapper(item)) {
+                info_text = "<br>#91;C-Wrapper#93;";
+            } else if (PyFunction_Check(item)) {
+                info_text = "<br>#91;PyFunction#93;";
+            } else if (Py_IsCown(item)) {
+                info_text = "<br>#91;Cown#93;";
+            } else if (PyType_Check(item)) {
+                info_text = "<br>#91;Type#93;";
+            } else if (PyTuple_Check(item)) {
+                info_text = "<br>#91;Tuple#93;";
+            } else if (PyDict_Check(item)) {
+                info_text = "<br>#91;Dictionary#93;";
+            }
+
+            // Set text
+            if (Py_IsNone(item)) {
+                fprintf(out, "  %p((None<br>%p<br>#40;immortal#41;))", item, item);
+            } else if (_Py_IsImmortal(item)) {
+                fprintf(out, "  %p[%p<br>#40;immortal#41;%s]", item, item, info_text);
+            } else if (Py_is_bridge_object(item)) {
+                fprintf(out, "  %p[\\%p<br>rc=%ld%s/]", item, item, Py_REFCNT(item), info_text);
+            } else {
+                fprintf(out, "  %p[%p<br>rc=%ld%s]", item, item, Py_REFCNT(item), info_text);
+            }
+
+            // Add color
+            if (IS_LOCAL_REGION(current_region)) {
+                fprintf(out, ":::local");
+            } else if (IS_IMMUTABLE_REGION(current_region)) {
+                fprintf(out, ":::immutable");
+            }
+            fprintf(out, "\n");
+        }
+
+        if (HAS_METADATA(current_region)) {
+            fprintf(out, "end\n");
+        }
+
+        stack *tmp = info.seen;
+        info.seen = pending;
+        pending = tmp;
+    }
+
+    result = Py_None;
+cleanup:
+    fprintf(out, "classDef local fill:#eefcdd\n");
+    fprintf(out, "classDef immutable fill:#94f7ff\n");
+    fprintf(out, "classDef maxdepth stroke-width:4px,stroke:#c00,stroke-dasharray: 10 5\n");
+    fprintf(out, "```\n");
+    fprintf(out, "</div>\n");
+
+    if (info.obj_budget <= 0) {
+        fprintf(out, "Stopped drawing after traversing %d objects\n", draw_limit);
+    }
+    fclose(out);
+    if (pending) {
+        stack_free(pending);
+    }
+    if (info.seen) {
+        stack_free(info.seen);
+    }
+    return result;
+}
+
+PyObject* _Py_Mermaid(PyObject *args, PyObject *kwargs) {
+    PyObject *obj = Py_None;
+    int reg_depth = 3; // The maximum region depth to draw
+    int imm_depth = 1; // The maximum depth of immutable objects to draw
+    int draw_limit = 50; // The maximum number of objects to traverse
+    static char *kwlist[] = {"object", "reg_depth", "imm_depth", "draw_limit", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|iii", kwlist, &obj, &reg_depth, &imm_depth, &draw_limit)) {
+        return NULL;
+    }
+
+    return draw_mermaid(obj, reg_depth, imm_depth, draw_limit);
 }
 
 static void PyRegion_dealloc(PyRegionObject *self) {
