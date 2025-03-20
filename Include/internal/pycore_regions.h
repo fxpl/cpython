@@ -44,6 +44,8 @@ static inline void _Py_SET_REGION(PyObject *ob, Py_region_ptr_t region) {
 PyObject* _Py_MakeImmutable(PyObject* obj);
 #define Py_MakeImmutable(op) _Py_MakeImmutable(_PyObject_CAST(op))
 
+PyObject* _Py_Mermaid(PyObject *args, PyObject *kwargs);
+
 PyObject* _Py_InvariantSrcFailure(void);
 #define Py_InvariantSrcFailure() _Py_InvariantSrcFailure()
 

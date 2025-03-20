@@ -1891,6 +1891,22 @@ default keyword-only argument specifies an object to return if\n\
 the provided iterable is empty.\n\
 With two or more arguments, return the largest argument.");
 
+/* AC: cannot convert yet, waiting for *args support */
+static PyObject *
+builtin_mermaid(PyObject *module, PyObject *args, PyObject *kwds)
+{
+    return _Py_Mermaid(args, kwds);
+}
+
+PyDoc_STRVAR(mermaid_docs,
+"mermaid(obj, *[, reg_depth=1, imm_depth=1, draw_limit=50]) -> value\n\
+\n\
+Generates a Mermaid diagram of all reachable objects. The output is\n\
+written to a new `mermaid.md` file in the current working directory.\n\
+Optional Arguments_\n\
+* reg_depth: The depth of regions to show\n\
+* imm_depth: The depth of immutable objects to show\n\
+* draw_limit: The number of objects to traverse");
 
 /*[clinic input]
 oct as builtin_oct
@@ -3118,6 +3134,7 @@ static PyMethodDef builtin_methods[] = {
     BUILTIN_MAKEIMMUTABLE_METHODDEF
     BUILTIN_INVARIANTSRCFAILURE_METHODDEF
     BUILTIN_INVARIANTTGTFAILURE_METHODDEF
+    {"mermaid", _PyCFunction_CAST(builtin_mermaid), METH_VARARGS | METH_KEYWORDS, mermaid_docs},
     BUILTIN_ITER_METHODDEF
     BUILTIN_AITER_METHODDEF
     BUILTIN_LEN_METHODDEF
