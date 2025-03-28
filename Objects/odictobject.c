@@ -1200,7 +1200,8 @@ static PyObject *
 odict_clear(PyObject *op, PyObject *Py_UNUSED(ignored))
 {
     register PyODictObject *od = _PyODictObject_CAST(op);
-    PyDict_Clear(op);
+    if (PyDict_Clear(op) == -1)
+        return NULL;
     _odict_clear_nodes(od);
     Py_RETURN_NONE;
 }
@@ -1457,7 +1458,8 @@ odict_tp_clear(PyObject *op)
 {
     PyODictObject *od = _PyODictObject_CAST(op);
     Py_CLEAR(od->od_inst_dict);
-    PyDict_Clear((PyObject *)od);
+    if (PyDict_Clear((PyObject *)od) == -1)
+        return -1;
     _odict_clear_nodes(od);
     return 0;
 }
