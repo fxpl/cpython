@@ -3282,13 +3282,15 @@ order (MRO) for bases """
         def cant(x, C):
             try:
                 x.__class__ = C
+            except NotWriteableError:
+                pass
             except TypeError:
                 pass
             else:
                 self.fail("shouldn't allow %r.__class__ = %r" % (x, C))
             try:
                 delattr(x, "__class__")
-            except (TypeError, AttributeError):
+            except (TypeError, AttributeError, NotWriteableError):
                 pass
             else:
                 self.fail("shouldn't allow del %r.__class__" % x)

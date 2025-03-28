@@ -60,7 +60,8 @@
             break; \
         } \
         _Py_DECREF_STAT_INC(); \
-        if (--op->ob_refcnt == 0) { \
+        op->ob_refcnt -= 1; \
+        if ((op->ob_refcnt & _Py_REFCNT_MASK) == 0) { \
             destructor dealloc = Py_TYPE(op)->tp_dealloc; \
             (*dealloc)(op); \
         } \
@@ -87,7 +88,8 @@
             break; \
         } \
         _Py_DECREF_STAT_INC(); \
-        if (--op->ob_refcnt == 0) { \
+        op->ob_refcnt -= 1; \
+        if ((op->ob_refcnt & _Py_REFCNT_MASK) == 0) { \
             destructor d = (destructor)(dealloc); \
             d(op); \
         } \
@@ -205,6 +207,7 @@ static PyObject * import_name(PyThreadState *, _PyInterpreterFrame *,
                               PyObject *, PyObject *, PyObject *);
 static PyObject * import_from(PyThreadState *, PyObject *, PyObject *);
 static void format_exc_check_arg(PyThreadState *, PyObject *, const char *, PyObject *);
+static void format_exc_notwriteable(PyThreadState *tstate, PyCodeObject *co, int oparg);
 static void format_exc_unbound(PyThreadState *tstate, PyCodeObject *co, int oparg);
 static int check_args_iterable(PyThreadState *, PyObject *func, PyObject *vararg);
 static int check_except_type_valid(PyThreadState *tstate, PyObject* right);
@@ -227,6 +230,8 @@ _PyEvalFrameClearAndPop(PyThreadState *tstate, _PyInterpreterFrame *frame);
 #define UNBOUNDFREE_ERROR_MSG \
     "cannot access free variable '%s' where it is not associated with a" \
     " value in enclosing scope"
+#define NOT_WRITEABLE_ERROR_MSG \
+    "cannot write to local variable '%s'"
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -2724,6 +2729,18 @@ format_exc_check_arg(PyThreadState *tstate, PyObject *exc,
         }
         PyErr_SetRaisedException(exc);
     }
+}
+
+static void
+format_exc_notwriteable(PyThreadState *tstate, PyCodeObject *co, int oparg)
+{
+    PyObject *name;
+    /* Don't stomp existing exception */
+    if (_PyErr_Occurred(tstate))
+        return;
+    name = PyTuple_GET_ITEM(co->co_localsplusnames, oparg);
+    format_exc_check_arg(tstate, PyExc_NotWriteableError,
+                         NOT_WRITEABLE_ERROR_MSG, name);
 }
 
 static void

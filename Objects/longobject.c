@@ -1775,6 +1775,7 @@ long_to_decimal_string_internal(PyObject *aa,
     }
     size_a = _PyLong_DigitCount(a);
     negative = _PyLong_IsNegative(a);
+    kind = 0;
 
     /* quick and dirty pre-check for overflowing the decimal digit limit,
        based on the inequality 10/3 >= log2(10)
@@ -2006,6 +2007,7 @@ long_format_binary(PyObject *aa, int base, int alternate,
     }
     size_a = _PyLong_DigitCount(a);
     negative = _PyLong_IsNegative(a);
+    kind = 0;
 
     /* Compute a rough upper bound for the length of the string */
     switch (base) {

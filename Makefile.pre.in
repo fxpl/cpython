@@ -395,6 +395,7 @@ PYTHON_OBJS=	\
 		Python/hashtable.o \
 		Python/import.o \
 		Python/importdl.o \
+		Python/immutability.o \
 		Python/initconfig.o \
 		Python/instrumentation.o \
 		Python/intrinsics.o \
