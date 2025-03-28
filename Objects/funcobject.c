@@ -920,6 +920,11 @@ static int
 function___annotations___set_impl(PyFunctionObject *self, PyObject *value)
 /*[clinic end generated code: output=a61795d4a95eede4 input=5302641f686f0463]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == Py_None)
         value = NULL;
     /* Legal to del f.func_annotations.

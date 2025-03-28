@@ -175,6 +175,7 @@ static const char* _Py_stdlib_module_names[] = {
 "http",
 "idlelib",
 "imaplib",
+"immutable",
 "importlib",
 "inspect",
 "io",

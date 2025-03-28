@@ -77,15 +77,24 @@
 #ifndef Py_GIL_DISABLED
 
 #undef Py_DECREF
+/// TODO(Immutable):  Should use IsImmortalOrImmutable() like below
 #define Py_DECREF(arg) \
     do { \
         PyObject *op = _PyObject_CAST(arg); \
-        if (_Py_IsImmortal(op)) { \
-            _Py_DECREF_IMMORTAL_STAT_INC(); \
+        if (_Py_IsImmortalOrImmutable(op)) { \
+            if (_Py_IsImmortal(op)) { \
+                _Py_DECREF_IMMORTAL_STAT_INC(); \
+                break; \
+            } \
+            if (_Py_DecRef_Immutable(op)) { \
+                _PyReftracerTrack(op, PyRefTracer_DESTROY); \
+                destructor dealloc = Py_TYPE(op)->tp_dealloc; \
+                (*dealloc)(op); \
+            } \
             break; \
         } \
         _Py_DECREF_STAT_INC(); \
-        if (--op->ob_refcnt == 0) { \
+        if ((--op->ob_refcnt) == 0) { \
             _PyReftracerTrack(op, PyRefTracer_DESTROY); \
             destructor dealloc = Py_TYPE(op)->tp_dealloc; \
             (*dealloc)(op); \
@@ -96,8 +105,16 @@
 #define _Py_DECREF_SPECIALIZED(arg, dealloc) \
     do { \
         PyObject *op = _PyObject_CAST(arg); \
-        if (_Py_IsImmortal(op)) { \
-            _Py_DECREF_IMMORTAL_STAT_INC(); \
+        if (_Py_IsImmortalOrImmutable(op)) { \
+            if (_Py_IsImmortal(op)) { \
+                _Py_DECREF_IMMORTAL_STAT_INC(); \
+                break; \
+            } \
+            if (_Py_DecRef_Immutable(op)) { \
+                _PyReftracerTrack(op, PyRefTracer_DESTROY); \
+                destructor d = (destructor)(dealloc); \
+                d(op); \
+            } \
             break; \
         } \
         _Py_DECREF_STAT_INC(); \
@@ -3354,6 +3371,18 @@ _PyEval_FormatExcCheckArg(PyThreadState *tstate, PyObject *exc,
         }
         PyErr_SetRaisedException(exc);
     }
+}
+
+void
+_PyEval_FormatExcNotWriteable(PyThreadState *tstate, PyCodeObject *co, int oparg)
+{
+    PyObject *name;
+    /* Don't stomp existing exception */
+    if (_PyErr_Occurred(tstate))
+        return;
+    name = PyTuple_GET_ITEM(co->co_localsplusnames, oparg);
+    _PyEval_FormatExcCheckArg(tstate, PyExc_TypeError,
+                         NOT_WRITEABLE_ERROR_MSG, name);
 }
 
 void

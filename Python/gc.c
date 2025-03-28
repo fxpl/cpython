@@ -1196,6 +1196,8 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
             inquiry clear;
             if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
                 Py_INCREF(op);
+                // TODO(Immutable): This is only required until we have the SCC support working.
+                _Py_CLEAR_IMMUTABLE(op);
                 (void) clear(op);
                 if (_PyErr_Occurred(tstate)) {
                     PyErr_FormatUnraisable("Exception ignored in tp_clear of %s",

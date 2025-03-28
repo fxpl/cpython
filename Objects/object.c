@@ -420,6 +420,8 @@ void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
     if (_Py_DecRefSharedIsDead(o, filename, lineno)) {
+        // TODO(Immutable): Should make mutable here?
+        _Py_CLEAR_IMMUTABLE(o);
         _Py_Dealloc(o);
     }
 }
@@ -437,6 +439,8 @@ _Py_MergeZeroLocalRefcount(PyObject *op)
 
     Py_ssize_t shared = _Py_atomic_load_ssize_acquire(&op->ob_ref_shared);
     if (shared == 0) {
+        // TODO(Immutable):  Clear the immutable flag here.
+        _Py_CLEAR_IMMUTABLE(op);
         // Fast-path: shared refcount is zero (including flags)
         _Py_Dealloc(op);
         return;
@@ -455,6 +459,8 @@ _Py_MergeZeroLocalRefcount(PyObject *op)
                                                 &shared, new_shared));
 
     if (new_shared == _Py_REF_MERGED) {
+        // TODO(Immutable):  Clear the immutable flag here.
+        _Py_CLEAR_IMMUTABLE(op);
         // i.e., the shared refcount is zero (only the flags are set) so we
         // deallocate the object.
         _Py_Dealloc(op);
@@ -1473,7 +1479,13 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
     _PyUnicode_InternMortal(tstate->interp, &name);
     if (tp->tp_setattro != NULL) {
-        err = (*tp->tp_setattro)(v, name, value);
+        if(Py_CHECKWRITE(v)){
+            err = (*tp->tp_setattro)(v, name, value);
+        }else{
+            PyErr_WriteToImmutable(v);
+            err = -1;
+        }
+
         Py_DECREF(name);
         return err;
     }
@@ -1483,7 +1495,14 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
             Py_DECREF(name);
             return -1;
         }
-        err = (*tp->tp_setattr)(v, (char *)name_str, value);
+
+        if(Py_CHECKWRITE(v)){
+            err = (*tp->tp_setattr)(v, (char *)name_str, value);
+        }else{
+            PyErr_WriteToImmutable(v);
+            err = -1;
+        }
+
         Py_DECREF(name);
         return err;
     }
@@ -1941,6 +1960,11 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
     }
 
     if (!_PyType_IsReady(tp) && PyType_Ready(tp) < 0) {
+        return -1;
+    }
+
+    if(!Py_CHECKWRITE(obj)){
+        PyErr_WriteToImmutable(obj);
         return -1;
     }
 
@@ -2686,16 +2710,19 @@ _Py_SetImmortalUntracked(PyObject *op)
     op->ob_ref_shared = 0;
     _Py_atomic_or_uint8(&op->ob_gc_bits, _PyGC_BITS_DEFERRED);
 #elif SIZEOF_VOID_P > 4
-    op->ob_flags = _Py_IMMORTAL_FLAGS;
+    // Preserve immutable flag
+    op->ob_flags = _Py_IMMORTAL_FLAGS | (op->ob_flags & _Py_IMMUTABLE_MASK);
     op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;
 #else
-    op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;
+    // Preserve immutable flag
+    op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT | (op->ob_refcnt & _Py_IMMUTABLE_FLAG);
 #endif
 }
 
 void
 _Py_SetImmortal(PyObject *op)
 {
+    // TODO(Immutable) This will need some care with SCC work.
     if (PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
         _PyObject_GC_UNTRACK(op);
     }
