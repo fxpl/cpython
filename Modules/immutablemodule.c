@@ -1,0 +1,198 @@
+/* immutable module */
+
+#ifndef Py_BUILD_CORE_BUILTIN
+#  define Py_BUILD_CORE_MODULE 1
+#endif
+
+#define MODULE_VERSION "1.0"
+
+#include "Python.h"
+#include <stdbool.h>
+#include "pycore_object.h"
+
+/*[clinic input]
+module immutable
+[clinic start generated code]*/
+/*[clinic end generated code: output=da39a3ee5e6b4b0d input=46b92e14e140418a]*/
+
+#include "clinic/immutablemodule.c.h"
+
+typedef struct {
+    PyObject *not_freezable_error_obj;
+} immutable_state;
+
+static struct PyModuleDef immutablemodule;
+
+static inline immutable_state*
+get_immutable_state(PyObject *module)
+{
+    void *state = PyModule_GetState(module);
+    assert(state != NULL);
+    return (immutable_state *)state;
+}
+
+static int
+immutable_clear(PyObject *module)
+{
+    immutable_state *module_state = PyModule_GetState(module);
+    Py_CLEAR(module_state->not_freezable_error_obj);
+    return 0;
+}
+
+static int
+immutable_traverse(PyObject *module, visitproc visit, void *arg)
+{
+    immutable_state *module_state = PyModule_GetState(module);
+    Py_VISIT(module_state->not_freezable_error_obj);
+    return 0;
+}
+
+static void
+immutable_free(void *module)
+{
+   immutable_clear((PyObject *)module);
+}
+
+/*[clinic input]
+immutable.register_freezable
+    obj: object
+    /
+
+Register a type as freezable.
+[clinic start generated code]*/
+
+static PyObject *
+immutable_register_freezable(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=1afbb9a860e2bde9 input=fbb7f42f02d27a88]*/
+{
+    if(!PyType_Check(obj)){
+        PyErr_SetString(PyExc_TypeError, "Expected a type");
+        return NULL;
+    }
+
+    if(_PyImmutability_RegisterFreezable((PyTypeObject *)obj) < 0){
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
+/*[clinic input]
+immutable.freeze
+    obj: object
+    /
+
+Freeze an object and its graph.
+[clinic start generated code]*/
+
+static PyObject *
+immutable_freeze(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=76b9e6c577ec3841 input=d7090b2d52afbb4b]*/
+{
+    if(_PyImmutability_Freeze(obj) < 0){
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
+/*[clinic input]
+immutable.isfrozen
+    obj: object
+    /
+
+Check if an object is frozen.
+[clinic start generated code]*/
+
+static PyObject *
+immutable_isfrozen(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=7c10bf6e5f8e4639 input=23d5da80f538c315]*/
+{
+    if(_Py_IsImmutable(obj)){
+        Py_RETURN_TRUE;
+    }
+
+    Py_RETURN_FALSE;
+}
+
+static PyType_Slot not_freezable_error_slots[] = {
+    {0, NULL},
+};
+
+PyType_Spec not_freezable_error_spec = {
+    .name = "immutable.NotFreezableError",
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .slots = not_freezable_error_slots,
+};
+
+/*
+ * MODULE
+ */
+
+
+PyDoc_STRVAR(immutable_module_doc, "");
+
+static struct PyMethodDef immutable_methods[] = {
+    IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
+    IMMUTABLE_FREEZE_METHODDEF
+    IMMUTABLE_ISFROZEN_METHODDEF
+    { NULL, NULL }
+};
+
+
+static int
+immutable_exec(PyObject *module) {
+    immutable_state *module_state = get_immutable_state(module);
+
+    /* Add version to the module. */
+    if (PyModule_AddStringConstant(module, "__version__",
+                                    MODULE_VERSION) == -1) {
+        return -1;
+    }
+
+    PyObject *bases = PyTuple_Pack(1, PyExc_TypeError);
+    if (bases == NULL) {
+        return -1;
+    }
+    module_state->not_freezable_error_obj = PyType_FromModuleAndSpec(module, &not_freezable_error_spec,
+                                                        bases);
+    Py_DECREF(bases);
+    if (module_state->not_freezable_error_obj == NULL) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, (PyTypeObject *)module_state->not_freezable_error_obj) != 0) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, &_PyNotFreezable_Type) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static PyModuleDef_Slot immutable_slots[] = {
+    {Py_mod_exec, immutable_exec},
+    {Py_mod_multiple_interpreters, Py_MOD_PER_INTERPRETER_GIL_SUPPORTED},
+    {Py_mod_gil, Py_MOD_GIL_NOT_USED}, // TODO(Immutable):  This is probably not true, just enabling to see what breaks.
+    {0, NULL}
+};
+
+static struct PyModuleDef immutablemodule = {
+    PyModuleDef_HEAD_INIT,
+    "immutable",
+    immutable_module_doc,
+    sizeof(immutable_state),
+    immutable_methods,
+    immutable_slots,
+    immutable_traverse,
+    immutable_clear,
+    immutable_free
+};
+
+PyMODINIT_FUNC
+PyInit_immutable(void)
+{
+    return PyModuleDef_Init(&immutablemodule);
+}

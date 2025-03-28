@@ -1223,6 +1223,10 @@ static PyObject *
 OrderedDict_clear_impl(PyODictObject *self)
 /*[clinic end generated code: output=a1a76d1322f556c5 input=08b12322e74c535c]*/
 {
+    if (!Py_CHECKWRITE(self)) {
+        PyErr_WriteToImmutable(self);
+        return NULL;
+    }
     _PyDict_Clear_LockHeld((PyObject *)self);
     _odict_clear_nodes(self);
     Py_RETURN_NONE;
@@ -1478,7 +1482,8 @@ odict_tp_clear(PyObject *op)
     PyODictObject *od = _PyODictObject_CAST(op);
     Py_CLEAR(od->od_inst_dict);
     // cannot use lock held variant as critical section is not held here
-    PyDict_Clear(op);
+    if (PyDict_Clear((PyObject *)od) == -1)
+        return -1;
     _odict_clear_nodes(od);
     return 0;
 }

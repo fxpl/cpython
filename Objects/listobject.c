@@ -456,6 +456,12 @@ PyList_SetItem(PyObject *op, Py_ssize_t i,
     int ret;
     PyListObject *self = ((PyListObject *)op);
     Py_BEGIN_CRITICAL_SECTION(self);
+    if(!Py_CHECKWRITE(op)){
+        Py_XDECREF(newitem);
+        PyErr_WriteToImmutable(op);
+        ret = -1;
+        goto end;
+    }
     if (!valid_index(i, Py_SIZE(self))) {
         Py_XDECREF(newitem);
         PyErr_SetString(PyExc_IndexError,
@@ -510,7 +516,13 @@ PyList_Insert(PyObject *op, Py_ssize_t where, PyObject *newitem)
     PyListObject *self = (PyListObject *)op;
     int err;
     Py_BEGIN_CRITICAL_SECTION(self);
+    if (!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        err = -1;
+        goto end;
+    }
     err = ins1(self, where, newitem);
+end:;
     Py_END_CRITICAL_SECTION();
     return err;
 }
@@ -532,6 +544,11 @@ _PyList_AppendTakeRefListResize(PyListObject *self, PyObject *newitem)
 int
 PyList_Append(PyObject *op, PyObject *newitem)
 {
+    if (!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        return -1;
+    }
+
     if (PyList_Check(op) && (newitem != NULL)) {
         int ret;
         Py_BEGIN_CRITICAL_SECTION(op);
@@ -1026,6 +1043,12 @@ PyList_SetSlice(PyObject *a, Py_ssize_t ilow, Py_ssize_t ihigh, PyObject *v)
         PyErr_BadInternalCall();
         return -1;
     }
+
+    if(!Py_CHECKWRITE(a)){
+        PyErr_WriteToImmutable(a);
+        return -1;
+    }
+
     return list_ass_slice((PyListObject *)a, ilow, ihigh, v);
 }
 
@@ -1046,6 +1069,13 @@ list_inplace_repeat_lock_held(PyListObject *self, Py_ssize_t n)
         PyErr_NoMemory();
         return -1;
     }
+
+    if(!Py_CHECKWRITE(self))
+    {
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     Py_ssize_t output_size = input_size * n;
 
     if (list_resize(self, output_size) < 0) {
@@ -1128,6 +1158,9 @@ static PyObject *
 list_insert_impl(PyListObject *self, Py_ssize_t index, PyObject *object)
 /*[clinic end generated code: output=7f35e32f60c8cb78 input=b1987ca998a4ae2d]*/
 {
+    if (!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
     if (ins1(self, index, object) == 0) {
         Py_RETURN_NONE;
     }
@@ -1145,6 +1178,11 @@ static PyObject *
 py_list_clear_impl(PyListObject *self)
 /*[clinic end generated code: output=83726743807e3518 input=e285b7f09051a9ba]*/
 {
+    // Note(Immutable): This is called under a critical section in list.clear -> py_list_clear.
+    if (!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     list_clear(self);
     Py_RETURN_NONE;
 }
@@ -1177,6 +1215,11 @@ static PyObject *
 list_append_impl(PyListObject *self, PyObject *object)
 /*[clinic end generated code: output=78423561d92ed405 input=122b0853de54004f]*/
 {
+    if (!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return NULL;
+    }
+
     if (_PyList_AppendTakeRef(self, Py_NewRef(object)) < 0) {
         return NULL;
     }
@@ -1190,6 +1233,11 @@ list_extend_fast(PyListObject *self, PyObject *iterable)
     if (n == 0) {
         /* short circuit when iterable is empty */
         return 0;
+    }
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
     }
 
     Py_ssize_t m = Py_SIZE(self);
@@ -1533,6 +1581,10 @@ list_pop_impl(PyListObject *self, Py_ssize_t index)
 {
     PyObject *v;
     int status;
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     if (Py_SIZE(self) == 0) {
         /* Special-case most common failure cause */
@@ -2910,6 +2962,10 @@ list_sort_impl(PyListObject *self, PyObject *keyfunc, int reverse)
     Py_ssize_t i;
     PyObject **keys;
 
+    if (!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     assert(self != NULL);
     assert(PyList_Check(self));
     if (keyfunc == Py_None)
@@ -3189,6 +3245,10 @@ static PyObject *
 list_reverse_impl(PyListObject *self)
 /*[clinic end generated code: output=482544fc451abea9 input=04ac8e0c6a66e4d9]*/
 {
+    if (!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (Py_SIZE(self) > 1)
         reverse_slice(self->ob_item, self->ob_item + Py_SIZE(self));
     Py_RETURN_NONE;
@@ -3203,12 +3263,21 @@ PyList_Reverse(PyObject *v)
         PyErr_BadInternalCall();
         return -1;
     }
+
+    int res = 0;
     Py_BEGIN_CRITICAL_SECTION(self);
-    if (Py_SIZE(self) > 1) {
-        reverse_slice(self->ob_item, self->ob_item + Py_SIZE(self));
+    if (!Py_CHECKWRITE(v)){
+        PyErr_WriteToImmutable(v);
+        res = -1;
+        goto end;
     }
+
+    if (Py_SIZE(self) > 1)
+        reverse_slice(self->ob_item, self->ob_item + Py_SIZE(self));
+end:;
     Py_END_CRITICAL_SECTION()
-    return 0;
+
+    return res;
 }
 
 PyObject *
@@ -3361,6 +3430,10 @@ static PyObject *
 list_remove_impl(PyListObject *self, PyObject *value)
 /*[clinic end generated code: output=b9b76a6633b18778 input=26c813dbb95aa93b]*/
 {
+    if (!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     Py_ssize_t i;
 
     for (i = 0; i < Py_SIZE(self); i++) {

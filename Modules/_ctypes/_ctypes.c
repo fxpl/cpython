@@ -1362,6 +1362,10 @@ PyCPointerType_set_type_impl(PyTypeObject *self, PyTypeObject *cls,
                              PyObject *type)
 /*[clinic end generated code: output=51459d8f429a70ac input=67e1e8df921f123e]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     ctypes_state *st = get_module_state_by_class(cls);
     StgInfo *info;
     if (PyStgInfo_FromType(st, (PyObject *)self, &info) < 0) {
@@ -1502,6 +1506,11 @@ _ctypes_PyCArrayType_Type_raw_set_impl(CDataObject *self, PyObject *value)
     Py_ssize_t size;
     Py_buffer view;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_AttributeError, "cannot delete attribute");
         return -1;
@@ -1571,6 +1580,11 @@ _ctypes_PyCArrayType_Type_value_set_impl(CDataObject *self, PyObject *value)
     const char *ptr;
     Py_ssize_t size;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "can't delete attribute");
@@ -1638,6 +1652,10 @@ WCharArray_set_value_lock_held(PyObject *op, PyObject *value)
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(op);
     CDataObject *self = _CDataObject_CAST(op);
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "can't delete attribute");
@@ -3320,6 +3338,14 @@ PyCData_FromBaseObj(ctypes_state *st,
         memcpy(cmem->b_ptr, adr, info->size);
         cmem->b_index = index;
     }
+
+    if(base && _Py_IsImmutable(base)) {
+        if(_PyImmutability_Freeze(_PyObject_CAST(cmem)) < 0){
+            Py_DECREF(cmem);
+            return NULL;
+        }
+    }
+
     return (PyObject *)cmem;
 }
 
@@ -3539,6 +3565,11 @@ PyCData_set(ctypes_state *st,
         return -1;
     }
 
+    if(!Py_CHECKWRITE(dst)){
+        PyErr_WriteToImmutable(dst);
+        return -1;
+    }
+
     result = _PyCData_set(st, mem, type, setfunc, value,
                         size, ptr);
     if (result == NULL)
@@ -3649,6 +3680,11 @@ static int
 _ctypes_CFuncPtr_errcheck_set_impl(PyCFuncPtrObject *self, PyObject *value)
 /*[clinic end generated code: output=6580cf1ffdf3b9fb input=84930bb16c490b33]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value && !PyCallable_Check(value)) {
         PyErr_SetString(PyExc_TypeError,
                         "the errcheck attribute must be callable");
@@ -3688,6 +3724,10 @@ _ctypes_CFuncPtr_restype_set_impl(PyCFuncPtrObject *self, PyObject *value)
 /*[clinic end generated code: output=0be0a086abbabf18 input=683c3bef4562ccc6]*/
 {
     PyObject *checker;
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
     if (value == NULL) {
         atomic_xsetref(&self->restype, NULL);
         atomic_xsetref(&self->checker, NULL);
@@ -3750,6 +3790,11 @@ static int
 _ctypes_CFuncPtr_argtypes_set_impl(PyCFuncPtrObject *self, PyObject *value)
 /*[clinic end generated code: output=596a36e2ae89d7d1 input=c4627573e980aa8b]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL || value == Py_None) {
         atomic_xsetref(&self->argtypes, NULL);
         atomic_xsetref(&self->converters, NULL);
@@ -5169,6 +5214,11 @@ Array_ass_item_lock_held(PyObject *myself, Py_ssize_t index, PyObject *value)
     Py_ssize_t size, offset;
     char *ptr;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "Array does not support item deletion");
@@ -5210,6 +5260,11 @@ static int
 Array_ass_subscript_lock_held(PyObject *myself, PyObject *item, PyObject *value)
 {
     CDataObject *self = _CDataObject_CAST(myself);
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -5399,6 +5454,10 @@ _ctypes_Simple_value_set_impl(CDataObject *self, PyObject *value)
 /*[clinic end generated code: output=f267186118939863 input=977af9dc9e71e857]*/
 {
     PyObject *result;
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -5603,6 +5662,11 @@ Pointer_ass_item_lock_held(PyObject *myself, Py_ssize_t index, PyObject *value)
     Py_ssize_t offset;
     PyObject *proto;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "Pointer does not support item deletion");
@@ -5688,6 +5752,11 @@ Pointer_set_contents_lock_held(PyObject *op, PyObject *value, void *closure)
     CDataObject *dst;
     PyObject *keep;
     CDataObject *self = _CDataObject_CAST(op);
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -5782,6 +5851,10 @@ copy_pointer_to_list_lock_held(PyObject *myself, PyObject *np, Py_ssize_t len,
                                Py_ssize_t start, Py_ssize_t step)
 {
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(myself);
+    if(!Py_CHECKWRITE(np)){
+        PyErr_WriteToImmutable(np);
+        return -1;
+    }
     Py_ssize_t i;
     size_t cur;
     for (cur = start, i = 0; i < len; cur += step, i++) {
@@ -6222,6 +6295,14 @@ _ctypes_add_types(PyObject *mod)
     if (PyType_Ready(TYPE) < 0) { \
         return -1; \
     }
+#define REGISTER_FREEZEABLE(TYPE_EXPR) \
+do { \
+    PyTypeObject *type = (TYPE_EXPR); \
+    if(_PyImmutability_RegisterFreezable(type) < 0){ \
+        return -1; \
+    } \
+} while (0)
+
 #define CREATE_TYPE(TP, SPEC, META, BASE) do {                      \
     PyObject *type = PyType_FromMetaclass(META, mod, SPEC,          \
                                           (PyObject *)BASE);        \
@@ -6269,6 +6350,14 @@ _ctypes_add_types(PyObject *mod)
     CREATE_TYPE(st->PyCFuncPtrType_Type, &pycfuncptr_type_spec,
                 NULL, st->PyCType_Type);
 
+    // Metaclasses are freezable.
+    REGISTER_FREEZEABLE(st->PyCStructType_Type);
+    REGISTER_FREEZEABLE(st->UnionType_Type);
+    REGISTER_FREEZEABLE(st->PyCPointerType_Type);
+    REGISTER_FREEZEABLE(st->PyCArrayType_Type);
+    REGISTER_FREEZEABLE(st->PyCSimpleType_Type);
+    REGISTER_FREEZEABLE(st->PyCFuncPtrType_Type);
+
     /*************************************************
      *
      * Classes using a custom metaclass
@@ -6293,6 +6382,7 @@ _ctypes_add_types(PyObject *mod)
      */
 
     MOD_ADD_TYPE(st->PyCField_Type, &cfield_spec, NULL, NULL);
+    REGISTER_FREEZEABLE(st->PyCField_Type);
 
     /*************************************************
      *

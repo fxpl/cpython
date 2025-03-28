@@ -47,8 +47,6 @@ _Py_CheckFunctionResult(PyThreadState *tstate, PyObject *callable,
     }
     else {
         if (_PyErr_Occurred(tstate)) {
-            Py_DECREF(result);
-
             if (callable) {
                 _PyErr_FormatFromCauseTstate(
                     tstate, PyExc_SystemError,
@@ -64,6 +62,7 @@ _Py_CheckFunctionResult(PyThreadState *tstate, PyObject *callable,
                Py_FatalError() logs the SystemError exception raised above. */
             Py_FatalError("a function returned a result with an exception set");
 #endif
+            Py_DECREF(result);
             return NULL;
         }
     }

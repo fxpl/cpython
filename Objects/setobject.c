@@ -722,6 +722,10 @@ set_pop_impl(PySetObject *so)
     setentry *limit = so->table + so->mask;
     PyObject *key;
 
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
+
     if (so->used == 0) {
         PyErr_SetString(PyExc_KeyError, "pop from an empty set");
         return NULL;
@@ -1120,6 +1124,9 @@ set_update_impl(PySetObject *so, PyObject * const *others,
 {
     Py_ssize_t i;
 
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
     for (i = 0; i < others_length; i++) {
         PyObject *other = others[i];
         if (set_update_internal(so, other))
@@ -1333,6 +1340,10 @@ static PyObject *
 set_clear_impl(PySetObject *so)
 /*[clinic end generated code: output=4e71d5a83904161a input=c6f831b366111950]*/
 {
+    if(!Py_CHECKWRITE((PyObject*)so)){
+        return PyErr_WriteToImmutable((PyObject*)so);
+    }
+
     set_clear_internal((PyObject*)so);
     Py_RETURN_NONE;
 }
@@ -2217,6 +2228,10 @@ static PyObject *
 set_add_impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=4cc4a937f1425c96 input=03baf62cb0e66514]*/
 {
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
+
     if (set_add_key(so, key))
         return NULL;
     Py_RETURN_NONE;
@@ -2327,6 +2342,10 @@ set_remove_impl(PySetObject *so, PyObject *key)
 {
     int rv;
 
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
+
     rv = set_discard_key(so, key);
     if (rv < 0) {
         if (!PySet_Check(key) || !PyErr_ExceptionMatches(PyExc_TypeError))
@@ -2366,6 +2385,10 @@ set_discard_impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=eec3b687bf32759e input=861cb7fb69b4def0]*/
 {
     int rv;
+
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
 
     rv = set_discard_key(so, key);
     if (rv < 0) {
@@ -2730,6 +2753,11 @@ PySet_Clear(PyObject *set)
         PyErr_BadInternalCall();
         return -1;
     }
+
+    if(!Py_CHECKWRITE(set)){
+        PyErr_WriteToImmutable(set);
+        return -1;
+    }
     (void)set_clear(set, NULL);
     return 0;
 }
@@ -2737,6 +2765,13 @@ PySet_Clear(PyObject *set)
 void
 _PySet_ClearInternal(PySetObject *so)
 {
+    // TODO(Immutable): Should this be inside the critical section?
+    if(!Py_CHECKWRITE(so)){
+        PyErr_WriteToImmutable(so);
+        // TODO(Immutable): Is this returning the error correctly?
+        return;
+    }
+
     (void)set_clear_internal((PyObject*)so);
 }
 
@@ -2763,6 +2798,12 @@ PySet_Discard(PyObject *set, PyObject *key)
         return -1;
     }
 
+    if(!Py_CHECKWRITE(set)){
+        // TODO(Immutable): Should this be inside the critical section?
+        PyErr_WriteToImmutable(set);
+        return -1;
+    }
+
     int rv;
     Py_BEGIN_CRITICAL_SECTION(set);
     rv = set_discard_key((PySetObject *)set, key);
@@ -2780,6 +2821,12 @@ PySet_Add(PyObject *anyset, PyObject *key)
     }
 
     int rv;
+    if(!Py_CHECKWRITE(anyset)){
+        // TODO(Immutable): Should this be inside the critical section?
+        PyErr_WriteToImmutable(anyset);
+        return -1;
+    }
+
     Py_BEGIN_CRITICAL_SECTION(anyset);
     rv = set_add_key((PySetObject *)anyset, key);
     Py_END_CRITICAL_SECTION();

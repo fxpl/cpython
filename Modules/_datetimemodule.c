@@ -7493,6 +7493,10 @@ _PyDateTime_InitTypes(PyInterpreterState *interp)
         if (_PyStaticType_InitForExtension(interp, type) < 0) {
             return _PyStatus_ERR("could not initialize static types");
         }
+
+        if(_PyImmutability_RegisterFreezable(capi_types[i]) < 0) {
+            return -1;
+        }
     }
 
 #define DATETIME_ADD_MACRO(dict, c, value_expr)         \

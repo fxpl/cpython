@@ -717,6 +717,11 @@ signaldict_setitem(PyObject *self, PyObject *key, PyObject *value)
     uint32_t flag;
     int x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (SdFlagAddr(self) == NULL) {
         return value_error_int(INVALID_SIGNALDICT_ERROR_MSG);
     }
@@ -952,6 +957,11 @@ context_setprec(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
     mpd_context_t *ctx;
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return -1;
@@ -972,6 +982,11 @@ context_setemin(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
     mpd_context_t *ctx;
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return -1;
@@ -991,6 +1006,11 @@ context_setemax(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
 {
     mpd_context_t *ctx;
     mpd_ssize_t x;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
@@ -1020,6 +1040,10 @@ _decimal_Context__unsafe_setprec_impl(PyObject *self, Py_ssize_t x)
 /*[clinic end generated code: output=dd838edf08e12dd9 input=23a1b19ceb1569be]*/
 {
     mpd_context_t *ctx = CTX(self);
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return NULL;
+    }
 
     if (x < 1 || x > 1070000000L) {
         return value_error_ptr(
@@ -1043,13 +1067,17 @@ _decimal_Context__unsafe_setemin_impl(PyObject *self, Py_ssize_t x)
 /*[clinic end generated code: output=0c49cafee8a65846 input=652f1ecacca7e0ce]*/
 {
     mpd_context_t *ctx = CTX(self);
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return NULL;
+    }
+
 
     if (x < -1070000000L || x > 0) {
         return value_error_ptr(
             "valid range for unsafe emin is [-1070000000, 0]");
     }
 
-    ctx->emin = x;
     Py_RETURN_NONE;
 }
 
@@ -1066,6 +1094,10 @@ _decimal_Context__unsafe_setemax_impl(PyObject *self, Py_ssize_t x)
 /*[clinic end generated code: output=776563e0377a00e8 input=b2a32a9a2750e7a8]*/
 {
     mpd_context_t *ctx = CTX(self);
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return NULL;
+    }
 
     if (x < 0 || x > 1070000000L) {
         return value_error_ptr(
@@ -1082,6 +1114,11 @@ context_setround(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
 {
     mpd_context_t *ctx;
     int x;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     decimal_state *state = get_module_state_from_ctx(self);
     x = getround(state, value);
@@ -1101,6 +1138,11 @@ static int
 context_setcapitals(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
 {
     mpd_ssize_t x;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
@@ -1123,6 +1165,11 @@ context_settraps(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
     mpd_context_t *ctx;
     uint32_t flags;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     flags = long_as_flags(value);
     if (flags & DEC_ERRORS) {
         return -1;
@@ -1142,6 +1189,11 @@ context_settraps_list(PyObject *self, PyObject *value)
 {
     mpd_context_t *ctx;
     uint32_t flags;
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     decimal_state *state = get_module_state_from_ctx(self);
     flags = list_as_flags(state, value);
     if (flags & DEC_ERRORS) {
@@ -1161,6 +1213,11 @@ context_settraps_dict(PyObject *self, PyObject *value)
 {
     mpd_context_t *ctx;
     uint32_t flags;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     decimal_state *state = get_module_state_from_ctx(self);
     if (PyDecSignalDict_Check(state, value)) {
@@ -1188,6 +1245,11 @@ context_setstatus(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
     mpd_context_t *ctx;
     uint32_t flags;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     flags = long_as_flags(value);
     if (flags & DEC_ERRORS) {
         return -1;
@@ -1209,6 +1271,11 @@ context_setstatus_list(PyObject *self, PyObject *value)
     uint32_t flags;
     decimal_state *state = get_module_state_from_ctx(self);
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     flags = list_as_flags(state, value);
     if (flags & DEC_ERRORS) {
         return -1;
@@ -1227,6 +1294,11 @@ context_setstatus_dict(PyObject *self, PyObject *value)
 {
     mpd_context_t *ctx;
     uint32_t flags;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     decimal_state *state = get_module_state_from_ctx(self);
     if (PyDecSignalDict_Check(state, value)) {
@@ -1253,6 +1325,11 @@ context_setclamp(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
     mpd_context_t *ctx;
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return -1;
@@ -1273,6 +1350,11 @@ context_setallcr(PyObject *self, PyObject *value, void *Py_UNUSED(closure))
 {
     mpd_context_t *ctx;
     mpd_ssize_t x;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
@@ -1400,6 +1482,10 @@ static PyObject *
 _decimal_Context_clear_traps_impl(PyObject *self)
 /*[clinic end generated code: output=b47cfa6e32407d40 input=3872e80637148035]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     CTX(self)->traps = 0;
     Py_RETURN_NONE;
 }
@@ -1414,6 +1500,10 @@ static PyObject *
 _decimal_Context_clear_flags_impl(PyObject *self)
 /*[clinic end generated code: output=c86719a70177d0b6 input=a06055e2f3e7edb1]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     CTX(self)->status = 0;
     Py_RETURN_NONE;
 }
@@ -7674,6 +7764,11 @@ _decimal_exec(PyObject *m)
     CHECK_INT(PyModule_AddType(m, state->PyDec_Type));
     CHECK_INT(PyModule_AddType(m, state->PyDecContext_Type));
     CHECK_INT(PyModule_AddType(m, state->DecimalTuple));
+
+    CHECK_INT(_PyImmutability_RegisterFreezable(state->PyDec_Type));
+    CHECK_INT(_PyImmutability_RegisterFreezable(state->PyDecContext_Type));
+    // TODO(Immutable): This was not needed in 3.12. Review!
+    CHECK_INT(_PyImmutability_RegisterFreezable(state->PyDecSignalDict_Type));
 
     /* Create top level exception */
     ASSIGN_PTR(state->DecimalException, PyErr_NewException(

@@ -123,6 +123,13 @@ PyTuple_SetItem(PyObject *op, Py_ssize_t i, PyObject *newitem)
         PyErr_BadInternalCall();
         return -1;
     }
+
+    if (!Py_CHECKWRITE(op)){
+        Py_XDECREF(newitem);
+        PyErr_WriteToImmutable(op);
+        return -1;
+    }
+
     if (i < 0 || i >= Py_SIZE(op)) {
         Py_XDECREF(newitem);
         PyErr_SetString(PyExc_IndexError,

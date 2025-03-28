@@ -1874,6 +1874,11 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
 
     ASSERT_DICT_LOCKED(mp);
 
+    if (!Py_CHECKWRITE(mp)){
+        PyErr_WriteToImmutable(mp);
+        goto Fail;
+    }
+
     if (DK_IS_UNICODE(mp->ma_keys) && !PyUnicode_CheckExact(key)) {
         if (insertion_resize(mp, 0) < 0)
             goto Fail;
@@ -1943,6 +1948,13 @@ insert_to_emptydict(PyInterpreterState *interp, PyDictObject *mp,
 {
     assert(mp->ma_keys == Py_EMPTY_KEYS);
     ASSERT_DICT_LOCKED(mp);
+
+    if (!Py_CHECKWRITE(mp)){
+        PyErr_WriteToImmutable(mp);
+        Py_DECREF(key);
+        Py_DECREF(value);
+        return -1;
+    }
 
     int unicode = PyUnicode_CheckExact(key);
     PyDictKeysObject *newkeys = new_keys_object(PyDict_LOG_MINSIZE, unicode);
@@ -2844,6 +2856,11 @@ _PyDict_DelItem_KnownHash_LockHeld(PyObject *op, PyObject *key, Py_hash_t hash)
         return -1;
     }
 
+    if(!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        return -1;
+    }
+
     PyInterpreterState *interp = _PyInterpreterState_GET();
     _PyDict_NotifyEvent(interp, PyDict_EVENT_DELETED, mp, key, NULL);
     delitem_common(mp, hash, ix, old_value);
@@ -2969,12 +2986,21 @@ _PyDict_Clear_LockHeld(PyObject *op) {
     clear_lock_held(op);
 }
 
-void
+int
 PyDict_Clear(PyObject *op)
 {
+    int res = 0;
     Py_BEGIN_CRITICAL_SECTION(op);
+    if(!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        res = -1;
+        goto end;
+    }
+
     clear_lock_held(op);
+end:;
     Py_END_CRITICAL_SECTION();
+    return res;
 }
 
 /* Internal version of PyDict_Next that returns a hash value in addition
@@ -3154,7 +3180,14 @@ PyDict_Pop(PyObject *op, PyObject *key, PyObject **result)
 {
     int err;
     Py_BEGIN_CRITICAL_SECTION(op);
+    if(!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        err = -1;
+        *result = NULL;
+        goto end;
+    }
     err = pop_lock_held(op, key, result);
+end:;
     Py_END_CRITICAL_SECTION();
 
     return err;
@@ -3739,6 +3772,10 @@ dict_update_common(PyObject *self, PyObject *args, PyObject *kwds,
 static PyObject *
 dict_update(PyObject *self, PyObject *args, PyObject *kwds)
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (dict_update_common(self, args, kwds, "update") != -1)
         Py_RETURN_NONE;
     return NULL;
@@ -4395,6 +4432,11 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
         return -1;
     }
 
+    if(!Py_CHECKWRITE(d)){
+        PyErr_WriteToImmutable(d);
+        goto error;
+    }
+
     if (mp->ma_keys == Py_EMPTY_KEYS) {
         if (insert_to_emptydict(interp, mp, Py_NewRef(key), hash,
                                 Py_NewRef(default_value)) < 0) {
@@ -4540,7 +4582,8 @@ static PyObject *
 dict_clear_impl(PyDictObject *self)
 /*[clinic end generated code: output=5139a830df00830a input=0bf729baba97a4c2]*/
 {
-    PyDict_Clear((PyObject *)self);
+    if (PyDict_Clear((PyObject *)self) == -1)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -4584,6 +4627,10 @@ dict_popitem_impl(PyDictObject *self)
     PyInterpreterState *interp = _PyInterpreterState_GET();
 
     ASSERT_DICT_LOCKED(self);
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     /* Allocate the result tuple before checking the size.  Believe it
      * or not, this allocation could trigger a garbage collection which
@@ -4697,8 +4744,7 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
 static int
 dict_tp_clear(PyObject *op)
 {
-    PyDict_Clear(op);
-    return 0;
+    return PyDict_Clear(op);
 }
 
 static PyObject *dictiter_new(PyDictObject *, PyTypeObject *);
@@ -6871,6 +6917,10 @@ _PyObject_MaterializeManagedDict_LockHeld(PyObject *obj)
     else {
         dict = (PyDictObject *)PyDict_New();
     }
+    if (_Py_IsImmutable(obj)) {
+        // TODO(Immutable): For subinterpreters this will probably also need a lock!
+        _PyImmutability_Freeze(_PyObject_CAST(dict));
+    }
     FT_ATOMIC_STORE_PTR_RELEASE(_PyObject_ManagedDictPointer(obj)->dict,
                                 dict);
     return dict;
@@ -6928,8 +6978,20 @@ store_instance_attr_lock_held(PyObject *obj, PyDictValues *values,
     assert(keys != NULL);
     assert(values != NULL);
     assert(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_INLINE_VALUES);
+
+    if(!Py_CHECKWRITE(obj)){
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
     Py_ssize_t ix = DKIX_EMPTY;
     PyDictObject *dict = _PyObject_GetManagedDict(obj);
+
+    if (dict != NULL && !Py_CHECKWRITE(dict)) {
+        // The dictionary is immutable, so this implicitly makes the object immutable.
+        PyErr_WriteToImmutable(dict);
+        return -1;
+    }
+
     assert(dict == NULL || ((PyDictObject *)dict)->ma_values == values);
     if (PyUnicode_CheckExact(name)) {
         Py_hash_t hash = unicode_get_hash(name);
@@ -7244,7 +7306,7 @@ PyObject_VisitManagedDict(PyObject *obj, visitproc visit, void *arg)
             for (Py_ssize_t i = 0; i < values->capacity; i++) {
                 Py_VISIT(values->values[i]);
             }
-            return 0;
+//            return 0;
         }
     }
     Py_VISIT(_PyObject_ManagedDictPointer(obj)->dict);
@@ -7570,6 +7632,10 @@ ensure_nonmanaged_dict(PyObject *obj, PyObject **dictptr)
         }
         else {
             dict = PyDict_New();
+        }
+        if (_Py_IsImmutable(obj)) {
+            // TODO(Immutable): For subinterpreters this will probably also need a lock!
+            _PyImmutability_Freeze(dict);
         }
         FT_ATOMIC_STORE_PTR_RELEASE(*dictptr, dict);
 #ifdef Py_GIL_DISABLED

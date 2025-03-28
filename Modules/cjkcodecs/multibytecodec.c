@@ -614,6 +614,12 @@ _multibytecodec_MultibyteCodec_encode_impl(MultibyteCodecObject *self,
     PyObject *errorcb, *r, *ucvt;
     Py_ssize_t datalen;
 
+    if(self->codec->encinit != NULL){
+        if(!Py_CHECKWRITE(self)){
+            return PyErr_WriteToImmutable(self);
+        }
+    }
+
     if (PyUnicode_Check(input))
         ucvt = NULL;
     else {
@@ -681,6 +687,12 @@ _multibytecodec_MultibyteCodec_decode_impl(MultibyteCodecObject *self,
     PyObject *errorcb, *res;
     const char *data;
     Py_ssize_t datalen;
+
+    if(self->codec->decinit != NULL){
+        if(!Py_CHECKWRITE(self)){
+            return PyErr_WriteToImmutable(self);
+        }
+    }
 
     data = input->buf;
     datalen = input->len;
