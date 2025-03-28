@@ -296,7 +296,6 @@ static inline int Py_IS_TYPE(PyObject *ob, PyTypeObject *type) {
 #  define Py_IS_TYPE(ob, type) Py_IS_TYPE(_PyObject_CAST(ob), (type))
 #endif
 
-
 static inline void Py_SET_TYPE(PyObject *ob, PyTypeObject *type) {
     ob->ob_type = type;
 }

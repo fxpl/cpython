@@ -7349,6 +7349,10 @@ init_static_types(PyInterpreterState *interp, int reloading)
         if (_PyStaticType_InitForExtension(interp, type) < 0) {
             return -1;
         }
+
+        if(_PyImmutability_RegisterFreezable(capi_types[i]) < 0) {
+            return -1;
+        }
     }
 
     return 0;

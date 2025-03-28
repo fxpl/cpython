@@ -205,11 +205,17 @@ static inline void _Py_SetMortal(PyObject *op, short refcnt)
     if (op) {
         assert(_Py_IsImmortal(op));
 #ifdef Py_GIL_DISABLED
+        // TODO(Immutable): Do we need to do something here?
         op->ob_tid = _Py_UNOWNED_TID;
         op->ob_ref_local = 0;
         op->ob_ref_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED);
 #else
+        // TODO(Immutable): Need to clear flag in other cases?
+        // note this also clears the _Py_IMMUTABLE_FLAG, if set in 32bit
         op->ob_refcnt = refcnt;
+#if SIZEOF_VOID_P > 4
+        op->ob_flags &= ~_Py_IMMORTAL_FLAGS;
+#endif
 #endif
     }
 }
@@ -229,18 +235,38 @@ static inline void _Py_ClearImmortal(PyObject *op)
     } while (0)
 
 #if !defined(Py_GIL_DISABLED)
+static inline void _Py_SetImmutable(PyObject *op)
+{
+if(op) {
+#if SIZEOF_VOID_P > 4
+        op->ob_flags |= _Py_IMMUTABLE_FLAG;
+#else
+        op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
+#endif
+    }
+}
+#define _Py_SetImmutable(op) _Py_SetImmutable(_PyObject_CAST(op))
+
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
-    if (_Py_IsImmortal(op)) {
-        _Py_DECREF_IMMORTAL_STAT_INC();
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            _Py_DECREF_IMMORTAL_STAT_INC();
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        if (_Py_DecRef_Immutable(op)) {
+            destruct(op);
+        }
         return;
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
     _Py_DEC_REFTOTAL(PyInterpreterState_Get());
 #endif
-    if (--op->ob_refcnt != 0) {
+    op->ob_refcnt -= 1;
+    if (_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) != 0) {
         assert(op->ob_refcnt > 0);
     }
     else {
@@ -255,8 +281,12 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 static inline void
 _Py_DECREF_NO_DEALLOC(PyObject *op)
 {
-    if (_Py_IsImmortal(op)) {
-        _Py_DECREF_IMMORTAL_STAT_INC();
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            _Py_DECREF_IMMORTAL_STAT_INC();
+            return;
+        }
+        _Py_DecRef_Immutable(op);
         return;
     }
     _Py_DECREF_STAT_INC();
@@ -272,6 +302,7 @@ _Py_DECREF_NO_DEALLOC(PyObject *op)
 }
 
 #else
+// TODO(Immutable): We need to do stuff in the NoGIL build
 // TODO: implement Py_DECREF specializations for Py_GIL_DISABLED build
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
@@ -476,6 +507,7 @@ static inline void _Py_DECREF_MORTAL_SPECIALIZED(const char *filename, int linen
 
 static inline void Py_DECREF_MORTAL(PyObject *op)
 {
+    // TODO(Immutable): Need to catch immutable things here
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
     if (--op->ob_refcnt == 0) {
@@ -486,6 +518,7 @@ static inline void Py_DECREF_MORTAL(PyObject *op)
 
 static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruct)
 {
+    // TODO(Immutable): Need to catch immutable things here
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
     if (--op->ob_refcnt == 0) {

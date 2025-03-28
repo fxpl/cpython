@@ -145,6 +145,7 @@
 #include "fileutils.h"
 #include "cpython/pyfpe.h"
 #include "cpython/tracemalloc.h"
+#include "immutability.h"
 
 // Restore warning filter
 #ifdef _MSC_VER
