@@ -783,6 +783,7 @@ class PyDictObjectPtr(PyObjectPtr):
         for i in safe_range(nentries):
             ep = entries[i]
             value_ptr = ep['_me_value'].reinterpret_cast(gdb.lookup_type('uintptr_t'))
+            # Clear the immutability flag
             pyop_value = PyObjectPtr.from_pyobject_ptr((value_ptr >> 1) << 1)
             if not pyop_value.is_null():
                 pyop_key = PyObjectPtr.from_pyobject_ptr(ep['me_key'])

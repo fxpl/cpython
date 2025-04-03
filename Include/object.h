@@ -87,15 +87,15 @@ system also uses the second-to-top bit for managing immutable graphs.
 
 #if SIZEOF_VOID_P > 4
 #define _Py_REFCNT_MASK 0xFFFFFFFF
-#define _Py_IMMUTABLE_MASK 0xC000000000
 #define _Py_IMMUTABLE_FLAG 0x4000000000
 #define _Py_IMMUTABLE_SCC_FLAG 0x8000000000
 #else
-#define _Py_REFCNT_MASK 0x3FFFFFFF
-#define _Py_IMMUTABLE_MASK 0xC0000000
-#define _Py_IMMUTABLE_FLAG 0x40000000
-#define _Py_IMMUTABLE_SCC_FLAG 0x80000000
+#define _Py_REFCNT_MASK 0x1FFFFFFF
+#define _Py_IMMUTABLE_FLAG 0x20000000
+#define _Py_IMMUTABLE_SCC_FLAG 0x40000000
 #endif
+
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_SCC_FLAG | _Py_IMMUTABLE_FLAG)
 
 /*
 Immortalization:
@@ -275,7 +275,7 @@ static inline int Py_IS_TYPE(PyObject *ob, PyTypeObject *type) {
 
 static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 {
-    return (op->ob_refcnt & _Py_IMMUTABLE_FLAG) > 0;
+    return (op->ob_refcnt & _Py_IMMUTABLE_MASK) > 0;
 }
 #define _Py_IsImmutable(op) _Py_IsImmutable(_PyObject_CAST(op))
 

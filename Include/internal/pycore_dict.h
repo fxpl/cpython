@@ -32,13 +32,16 @@ typedef struct {
     PyObject *_me_value; /* This field is only meaningful for combined tables */
 } PyDictUnicodeEntry;
 
-#define _PyDictEntry_IsImmutable(entry) (((uintptr_t)((entry)->_me_value)) & 0x1)
-#define _PyDictEntry_SetImmutable(entry) ((entry)->_me_value = (PyObject*)((uintptr_t)(entry)->_me_value | 0x1))
+#define _PyDictEntry_IMMUTABLE_FLAG 0x1
+#define _PyDictEntry_VALUE_MASK ~_PyDictEntry_IMMUTABLE_FLAG
+
+#define _PyDictEntry_IsImmutable(entry) (((uintptr_t)((entry)->_me_value)) & _PyDictEntry_IMMUTABLE_FLAG)
+#define _PyDictEntry_SetImmutable(entry) ((entry)->_me_value = (PyObject*)((uintptr_t)(entry)->_me_value | _PyDictEntry_IMMUTABLE_FLAG))
 #define _PyDictEntry_Hash(entry) ((entry)->me_hash)
 #define _PyDictEntry_Key(entry) ((entry)->me_key)
-#define _PyDictEntry_Value(entry) ((PyObject*)((((uintptr_t)((entry)->_me_value)) >> 1) << 1))
+#define _PyDictEntry_Value(entry) ((PyObject*)(((uintptr_t)((entry)->_me_value)) & _PyDictEntry_VALUE_MASK))
 #define _PyDictEntry_SetValue(entry, value) ((entry)->_me_value = value)
-#define _PyDictEntry_IsEmpty(entry) ((entry)->_me_value == NULL)
+#define _PyDictEntry_IsEmpty(entry) ((((uintptr_t)(entry)->_me_value) & _PyDictEntry_VALUE_MASK) == (uintptr_t)NULL)
 
 extern PyObject *_PyDict_IsKeyImmutable(PyObject* op, PyObject* key);
 

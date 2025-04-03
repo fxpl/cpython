@@ -19,11 +19,13 @@ static PyObject* pop(PyObject* s){
         return NULL;
     }
 
+    Py_INCREF(item);
+
     if(PyList_SetSlice(s, size - 1, size, NULL)){
+        Py_DECREF(item);
         return NULL;
     }
 
-    Py_INCREF(item);
     return item;
 }
 
@@ -44,12 +46,14 @@ static bool is_c_wrapper(PyObject* obj){
  * Special function for walking the reachable graph of a function object.
  *
  * This is necessary because the function object has a pointer to the global
- * object, and this is problematic because freezing any function will make the
- * global object immutable, which is not always the desired behaviour.
+ * dictionary, and this is problematic because freezing any function directly
+ * (as we do with other objects) would make all globals immutable.
  *
- * This function attempts to find the globals that a function will use, and freeze
- * just those, and prevent those keys from being updated in the global dictionary
- * from this point onwards.
+ * Instead, we walk the function and find any places where it references
+ * global variables or builtins, and then freeze just those objects. The globals
+ * and builtins dictionaries for the function are then replaced with frozen
+ * copies containing just those globals and builtins we were able to determine
+ * the function uses.
  */
 static PyObject* walk_function(PyObject* op, PyObject* frontier)
 {
@@ -129,7 +133,7 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
     }
 
     while(PyList_Size(f_stack) != 0){
-        f_ptr = pop(f_stack); // fp.rc = x + 1
+        f_ptr = pop(f_stack);
         _PyObject_ASSERT(f_ptr, PyCode_Check(f_ptr));
         f_code = (PyCodeObject*)f_ptr;
 
@@ -137,7 +141,7 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
         if (f_code->co_names != NULL)
           size = PySequence_Fast_GET_SIZE(f_code->co_names);
         for(Py_ssize_t i = 0; i < size; i++){
-            PyObject* name = PySequence_Fast_GET_ITEM(f_code->co_names, i); // name.rc = x
+            PyObject* name = PySequence_Fast_GET_ITEM(f_code->co_names, i);
 
             if(PyUnicode_CompareWithASCIIString(name, "globals") == 0){
                 // if the code calls the globals() builtin, then any
@@ -165,7 +169,7 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
                     return NULL;
                 }
             }else if(PyDict_Contains(module_dict, name)){
-                PyObject* value = PyDict_GetItem(module_dict, name); // value.rc = x
+                PyObject* value = PyDict_GetItem(module_dict, name);
 
                 _PyDict_SetKeyImmutable((PyDictObject*)module_dict, name);
 
@@ -179,7 +183,7 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
 
         size = PySequence_Fast_GET_SIZE(f_code->co_consts);
         for(Py_ssize_t i = 0; i < size; i++){
-            PyObject* value = PySequence_Fast_GET_ITEM(f_code->co_consts, i); // value.rc = x
+            PyObject* value = PySequence_Fast_GET_ITEM(f_code->co_consts, i);
             if(!_Py_IsImmutable(value)){
                 if(PyCode_Check(value)){
                     _Py_SetImmutable(value);
@@ -195,6 +199,11 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
             }
 
             if(check_globals && PyUnicode_Check(value)){
+                // if the code calls the globals() builtin, then any
+                // cellvar or const in the function could, potentially, refer to
+                // a global variable. As such, we need to check if the globals
+                // dictionary contains that key and then make it immutable
+                // from this point forwards.
                 PyObject* name = value;
                 if(PyDict_Contains(globals, name)){
                     value = PyDict_GetItem(globals, name);
@@ -212,13 +221,20 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
     Py_DECREF(f_stack);
 
     if(check_globals){
+        // if the code calls the globals() builtin, then any
+        // cellvar or const in the function could, potentially, refer to
+        // a global variable. As such, we need to check if the globals
+        // dictionary contains that key and then make it immutable
+        // from this point forwards.
+        // we need to check the closure for any cellvars that are not
+        // referenced in the code object, but are still used in the function
         size = 0;
         if(f->func_closure != NULL)
             size = PySequence_Fast_GET_SIZE(f->func_closure);
 
         for(Py_ssize_t i=0; i < size; ++i){
-            PyObject* cellvar = PySequence_Fast_GET_ITEM(f->func_closure, i); // cellvar.rc = x
-            PyObject* value = PyCell_GET(cellvar); // value.rc = x
+            PyObject* cellvar = PySequence_Fast_GET_ITEM(f->func_closure, i);
+            PyObject* value = PyCell_GET(cellvar);
 
             if(PyUnicode_Check(value)){
                 PyObject* name = value;
@@ -271,7 +287,7 @@ static int freeze_visit(PyObject* obj, void* frontier)
 
 PyObject* _Py_Freeze(PyObject* obj)
 {
-    if(_Py_IsImmutable(obj) && _Py_IsImmutable(Py_TYPE(obj))){
+    if(_Py_IsImmutable(obj)){
         Py_RETURN_NONE;
     }
 
@@ -309,7 +325,7 @@ PyObject* _Py_Freeze(PyObject* obj)
     Py_DECREF(frozen_importlib);
 
     while(PyList_Size(frontier) != 0){
-        PyObject* item = pop(frontier); // item.rc = x + 1
+        PyObject* item = pop(frontier);
 
         if(item == blocking_on ||
            item == module_locks){
@@ -323,11 +339,10 @@ PyObject* _Py_Freeze(PyObject* obj)
         PyObject* type_op = NULL;
 
         if(_Py_IsImmutable(item)){
-            goto handle_type;
+            continue;
         }
 
         _Py_SetImmutable(item);
-
 
         if(is_c_wrapper(item)) {
             // C functions are not mutable, so we can skip them.
@@ -342,20 +357,20 @@ PyObject* _Py_Freeze(PyObject* obj)
                 Py_DECREF(frontier);
                 return err;
             }
-            goto handle_type;
         }
-
-        traverse = type->tp_traverse;
-        if(traverse != NULL){
-            if(traverse(item, (visitproc)freeze_visit, frontier)){
-                Py_DECREF(blocking_on);
-                Py_DECREF(module_locks);
-                Py_DECREF(frontier);
-                return NULL;
+        else
+        {
+            traverse = type->tp_traverse;
+            if(traverse != NULL){
+                if(traverse(item, (visitproc)freeze_visit, frontier)){
+                    Py_DECREF(blocking_on);
+                    Py_DECREF(module_locks);
+                    Py_DECREF(frontier);
+                    return NULL;
+                }
             }
         }
 
-handle_type:
         type_op = _PyObject_CAST(item->ob_type);
         if (!_Py_IsImmutable(type_op)){
             if (PyList_Append(frontier, type_op))

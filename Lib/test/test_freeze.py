@@ -293,6 +293,8 @@ class TestFunctions(unittest.TestCase):
     def test_globals_copy(self):
         def f():
             global global0
+            ref_1 = global0
+            ref_2 = global0
             return global0
 
         expected = f()
