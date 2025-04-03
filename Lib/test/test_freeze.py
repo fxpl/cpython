@@ -1,4 +1,6 @@
 import unittest
+from collections import deque
+from array import array
 
 # This is a canary to check that global variables are not made immutable
 # when others are made immutable
@@ -92,6 +94,83 @@ class TestList(BaseObjectTest):
     def test_remove(self):
         with self.assertRaises(NotWriteableError):
             self.obj.remove(1)
+
+    def test_reverse(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.reverse()
+
+    def test_inplace_repeat(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj *= 2
+
+    def test_inplace_concat(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj += [TestList.C()]
+
+    def test_clear(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.clear()
+
+    def test_sort(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.sort()
+
+
+class TestDeque(BaseObjectTest):
+    class C:
+        pass
+
+    def __init__(self, *args, **kwargs):
+        obj = deque([self.C(), self.C(), 1, "two", None])
+        BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
+
+    def test_set_item(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj[0] = None
+
+    def test_set_slice(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj[1:3] = [None, None]
+
+    def test_append(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.append(TestList.C())
+
+    def test_appendleft(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.appendleft(TestList.C())
+
+    def test_extend(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.extend([TestList.C()])
+
+    def test_extendleft(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.extendleft([TestList.C()])
+
+    def test_insert(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.insert(0, TestList.C())
+
+    def test_pop(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.pop()
+
+    def test_popleft(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.popleft()
+
+    def test_remove(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.remove(1)
+
+    def test_inplace_repeat(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj *= 2
+
+    def test_inplace_concat(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj += [TestList.C()]
 
     def test_reverse(self):
         with self.assertRaises(NotWriteableError):

@@ -8,19 +8,32 @@
 #include "pycore_immutability.h"
 
 
+static int push(PyObject* s, PyObject* item){
+    if(item == NULL){
+        return 0;
+    }
+
+    if(!PyList_Check(s)){
+        PyErr_SetString(PyExc_TypeError, "Expected a list");
+        return -1;
+    }
+
+    return _PyList_AppendTakeRef(_PyList_CAST(s), item);
+}
+
 static PyObject* pop(PyObject* s){
+    PyObject* item;
     Py_ssize_t size = PyList_Size(s);
     if(size == 0){
         return NULL;
     }
 
-    PyObject* item = PyList_GetItem(s, size - 1);
+    item = PyList_GetItem(s, size - 1);
     if(item == NULL){
         return NULL;
     }
 
     Py_INCREF(item);
-
     if(PyList_SetSlice(s, size - 1, size, NULL)){
         Py_DECREF(item);
         return NULL;
@@ -35,7 +48,7 @@ static bool is_c_wrapper(PyObject* obj){
 
 #define _Py_VISIT_FUNC_ATTR(attr, frontier) do { \
     if(attr != NULL && !_Py_IsImmutable(attr)){ \
-        if(PyList_Append(frontier, attr)){ \
+        if(push((frontier), (attr))){ \
             return PyErr_NoMemory(); \
         } \
     } \
@@ -118,7 +131,7 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
     }
 
     f_ptr = f->func_code;
-    if(PyList_Append(f_stack, f_ptr)){
+    if(push(f_stack, f_ptr)){
         goto nomemory;
     }
 
@@ -174,7 +187,7 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
                 _PyDict_SetKeyImmutable((PyDictObject*)module_dict, name);
 
                 if(!_Py_IsImmutable(value)){
-                    if(PyList_Append(frontier, value)){
+                    if(push(frontier, value)){
                         goto nomemory;
                     }
                 }
@@ -188,11 +201,11 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
                 if(PyCode_Check(value)){
                     _Py_SetImmutable(value);
 
-                    if(PyList_Append(f_stack, value)){
+                    if(push(f_stack, value)){
                         goto nomemory;
                     }
                 }else{
-                    if(PyList_Append(frontier, value)){
+                    if(push(frontier, value)){
                         goto nomemory;
                     }
                 }
@@ -250,14 +263,14 @@ static PyObject* walk_function(PyObject* op, PyObject* frontier)
         }
     }
 
-    if(PyList_Append(frontier, frozen_globals)){
+    if(push(frontier, frozen_globals)){
         goto nomemory;
     }
 
     f->func_globals = frozen_globals;
     Py_DECREF(globals);
 
-    if(PyList_Append(frontier, frozen_builtins)){
+    if(push(frontier, frozen_builtins)){
         goto nomemory;
     }
 
@@ -276,7 +289,7 @@ nomemory:
 static int freeze_visit(PyObject* obj, void* frontier)
 {
     if(!_Py_IsImmutable(obj)){
-        if(PyList_Append((PyObject*)frontier, obj)){
+        if(push(frontier, obj)){
             PyErr_NoMemory();
             return -1;
         }
@@ -287,44 +300,49 @@ static int freeze_visit(PyObject* obj, void* frontier)
 
 PyObject* _Py_Freeze(PyObject* obj)
 {
+    PyObject* frontier = NULL;
+    PyObject* frozen_importlib = NULL;
+    PyObject* blocking_on = NULL;
+    PyObject* module_locks = NULL;
+    PyObject* result = Py_None;
+
     if(_Py_IsImmutable(obj)){
-        Py_RETURN_NONE;
+        return result;
     }
 
-    PyObject* frontier = PyList_New(0);
+    frontier = PyList_New(0);
     if(frontier == NULL){
-        return PyErr_NoMemory();
+        result = PyErr_NoMemory();
+        goto cleanup;
     }
 
-    if(PyList_Append(frontier, obj)){
-        Py_DECREF(frontier);
-        return PyErr_NoMemory();
+    if(push(frontier, obj)){
+        result = PyErr_NoMemory();
+        goto cleanup;
     }
 
-    PyObject* frozen_importlib = PyImport_ImportModule("_frozen_importlib");
+    frozen_importlib = PyImport_ImportModule("_frozen_importlib");
     if(frozen_importlib == NULL){
-        Py_DECREF(frontier);
-        return NULL;
+        result = NULL;
+        goto cleanup;
     }
 
-    PyObject* blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
+    blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
     if(blocking_on == NULL){
-        Py_DECREF(frozen_importlib);
-        Py_DECREF(frontier);
-        return NULL;
+        result = NULL;
+        goto cleanup;
     }
 
-    PyObject* module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
+    module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
     if(module_locks == NULL){
-        Py_DECREF(blocking_on);
-        Py_DECREF(frozen_importlib);
-        Py_DECREF(frontier);
-        return NULL;
+        result = NULL;
+        goto cleanup;
     }
-
-    Py_DECREF(frozen_importlib);
 
     while(PyList_Size(frontier) != 0){
+        PyTypeObject* type;
+        PyObject* type_op;
+        traverseproc traverse;
         PyObject* item = pop(frontier);
 
         if(item == blocking_on ||
@@ -334,9 +352,8 @@ PyObject* _Py_Freeze(PyObject* obj)
             continue;
         }
 
-        PyTypeObject* type = Py_TYPE(item);
-        traverseproc traverse;
-        PyObject* type_op = NULL;
+        type = Py_TYPE(item);
+        type_op = NULL;
 
         if(_Py_IsImmutable(item)){
             continue;
@@ -350,12 +367,9 @@ PyObject* _Py_Freeze(PyObject* obj)
         }
 
         if(PyFunction_Check(item)){
-            PyObject* err = walk_function(item, frontier);
-            if(!Py_IsNone(err)){
-                Py_DECREF(blocking_on);
-                Py_DECREF(module_locks);
-                Py_DECREF(frontier);
-                return err;
+            result = walk_function(item, frontier);
+            if(!Py_IsNone(result)){
+                goto cleanup;
             }
         }
         else
@@ -363,29 +377,27 @@ PyObject* _Py_Freeze(PyObject* obj)
             traverse = type->tp_traverse;
             if(traverse != NULL){
                 if(traverse(item, (visitproc)freeze_visit, frontier)){
-                    Py_DECREF(blocking_on);
-                    Py_DECREF(module_locks);
-                    Py_DECREF(frontier);
-                    return NULL;
+                    result = NULL;
+                    goto cleanup;
                 }
             }
         }
 
         type_op = _PyObject_CAST(item->ob_type);
         if (!_Py_IsImmutable(type_op)){
-            if (PyList_Append(frontier, type_op))
+            if(push(frontier, type_op))
             {
-                Py_DECREF(blocking_on);
-                Py_DECREF(module_locks);
-                Py_DECREF(frontier);
-                return PyErr_NoMemory();
+                result = PyErr_NoMemory();
+                goto cleanup;
             }
         }
     }
 
-    Py_DECREF(blocking_on);
-    Py_DECREF(module_locks);
-    Py_DECREF(frontier);
+cleanup:
+    Py_XDECREF(blocking_on);
+    Py_XDECREF(module_locks);
+    Py_XDECREF(frozen_importlib);
+    Py_XDECREF(frontier);
 
-    Py_RETURN_NONE;
+    return result;
 }

@@ -774,6 +774,12 @@ list_inplace_repeat(PyListObject *self, Py_ssize_t n)
     if (input_size > PY_SSIZE_T_MAX / n) {
         return PyErr_NoMemory();
     }
+
+    if(!Py_CHECKWRITE(self))
+    {
+        return PyErr_WriteToImmutable(self);
+    }
+
     Py_ssize_t output_size = input_size * n;
 
     if (list_resize(self, output_size) < 0)
