@@ -5251,9 +5251,14 @@ type_traverse(PyTypeObject *type, visitproc visit, void *arg)
     Py_VISIT(type->tp_mro);
     Py_VISIT(type->tp_bases);
     Py_VISIT(type->tp_base);
+
+    /*
+    TODO Do we need to visit the module? This can potentially freeze the entire
+    standard library. What do we gain?
     if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
         Py_VISIT(((PyHeapTypeObject *)type)->ht_module);
     }
+    */
 
     /* There's no need to visit others because they can't be involved
        in cycles:

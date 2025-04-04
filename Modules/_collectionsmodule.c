@@ -3,6 +3,7 @@
 #include "pycore_long.h"          // _PyLong_GetZero()
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_typeobject.h"    // _PyType_GetModuleState()
+#include "pycore_object.h"        // Py_CHECKWRITE
 #include "structmember.h"         // PyMemberDef
 #include <stddef.h>
 
@@ -224,6 +225,10 @@ deque_pop(dequeobject *deque, PyObject *unused)
     PyObject *item;
     block *prevblock;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     if (Py_SIZE(deque) == 0) {
         PyErr_SetString(PyExc_IndexError, "pop from an empty deque");
         return NULL;
@@ -260,6 +265,10 @@ deque_popleft(dequeobject *deque, PyObject *unused)
 {
     PyObject *item;
     block *prevblock;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     if (Py_SIZE(deque) == 0) {
         PyErr_SetString(PyExc_IndexError, "pop from an empty deque");
@@ -336,6 +345,10 @@ deque_append_internal(dequeobject *deque, PyObject *item, Py_ssize_t maxlen)
 static PyObject *
 deque_append(dequeobject *deque, PyObject *item)
 {
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     if (deque_append_internal(deque, Py_NewRef(item), deque->maxlen) < 0)
         return NULL;
     Py_RETURN_NONE;
@@ -372,6 +385,10 @@ deque_appendleft_internal(dequeobject *deque, PyObject *item, Py_ssize_t maxlen)
 static PyObject *
 deque_appendleft(dequeobject *deque, PyObject *item)
 {
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     if (deque_appendleft_internal(deque, Py_NewRef(item), deque->maxlen) < 0)
         return NULL;
     Py_RETURN_NONE;
@@ -415,6 +432,10 @@ deque_extend(dequeobject *deque, PyObject *iterable)
     PyObject *it, *item;
     PyObject *(*iternext)(PyObject *);
     Py_ssize_t maxlen = deque->maxlen;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     /* Handle case where id(deque) == id(iterable) */
     if ((PyObject *)deque == iterable) {
@@ -463,6 +484,10 @@ deque_extendleft(dequeobject *deque, PyObject *iterable)
     PyObject *(*iternext)(PyObject *);
     Py_ssize_t maxlen = deque->maxlen;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     /* Handle case where id(deque) == id(iterable) */
     if ((PyObject *)deque == iterable) {
         PyObject *result;
@@ -507,6 +532,10 @@ static PyObject *
 deque_inplace_concat(dequeobject *deque, PyObject *other)
 {
     PyObject *result;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     result = deque_extend(deque, other);
     if (result == NULL)
@@ -678,6 +707,10 @@ deque_clear(dequeobject *deque)
 static PyObject *
 deque_clearmethod(dequeobject *deque, PyObject *Py_UNUSED(ignored))
 {
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     deque_clear(deque);
     Py_RETURN_NONE;
 }
@@ -690,6 +723,10 @@ deque_inplace_repeat(dequeobject *deque, Py_ssize_t n)
     Py_ssize_t i, m, size;
     PyObject *seq;
     PyObject *rv;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     size = Py_SIZE(deque);
     if (size == 0 || n == 1) {
@@ -929,6 +966,10 @@ deque_rotate(dequeobject *deque, PyObject *const *args, Py_ssize_t nargs)
 {
     Py_ssize_t n=1;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     if (!_PyArg_CheckPositional("deque.rotate", nargs, 0, 1)) {
         return NULL;
     }
@@ -961,6 +1002,10 @@ deque_reverse(dequeobject *deque, PyObject *unused)
     Py_ssize_t rightindex = deque->rightindex;
     Py_ssize_t n = Py_SIZE(deque) >> 1;
     PyObject *tmp;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     while (--n >= 0) {
         /* Validate that pointers haven't met in the middle */
@@ -1157,6 +1202,10 @@ deque_insert(dequeobject *deque, PyObject *const *args, Py_ssize_t nargs)
     PyObject *value;
     PyObject *rv;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     if (!_PyArg_ParseStack(args, nargs, "nO:insert", &index, &value)) {
         return NULL;
     }
@@ -1261,6 +1310,10 @@ deque_remove(dequeobject *deque, PyObject *value)
     size_t start_state = deque->state;
     int cmp, rv;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     for (i = 0 ; i < n; i++) {
         item = Py_NewRef(b->data[index]);
         cmp = PyObject_RichCompareBool(item, value, Py_EQ);
@@ -1298,6 +1351,11 @@ deque_ass_item(dequeobject *deque, Py_ssize_t i, PyObject *v)
 {
     block *b;
     Py_ssize_t n, len=Py_SIZE(deque), halflen=(len+1)>>1, index=i;
+
+    if(!Py_CHECKWRITE(deque)){
+        PyErr_WriteToImmutable(deque);
+        return -1;
+    }
 
     if (!valid_index(i, len)) {
         PyErr_SetString(PyExc_IndexError, "deque index out of range");

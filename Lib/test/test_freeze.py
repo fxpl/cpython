@@ -95,6 +95,10 @@ class TestList(BaseObjectTest):
         with self.assertRaises(NotWriteableError):
             self.obj.remove(1)
 
+    def test_delete(self):
+        with self.assertRaises(NotWriteableError):
+            del self.obj[0]
+
     def test_reverse(self):
         with self.assertRaises(NotWriteableError):
             self.obj.reverse()
@@ -128,10 +132,6 @@ class TestDeque(BaseObjectTest):
         with self.assertRaises(NotWriteableError):
             self.obj[0] = None
 
-    def test_set_slice(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj[1:3] = [None, None]
-
     def test_append(self):
         with self.assertRaises(NotWriteableError):
             self.obj.append(TestList.C())
@@ -164,6 +164,10 @@ class TestDeque(BaseObjectTest):
         with self.assertRaises(NotWriteableError):
             self.obj.remove(1)
 
+    def test_delete(self):
+        with self.assertRaises(NotWriteableError):
+            del self.obj[0]
+
     def test_inplace_repeat(self):
         with self.assertRaises(NotWriteableError):
             self.obj *= 2
@@ -176,13 +180,13 @@ class TestDeque(BaseObjectTest):
         with self.assertRaises(NotWriteableError):
             self.obj.reverse()
 
+    def test_rotate(self):
+        with self.assertRaises(NotWriteableError):
+            self.obj.rotate(1)
+
     def test_clear(self):
         with self.assertRaises(NotWriteableError):
             self.obj.clear()
-
-    def test_sort(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.sort()
 
 
 class TestDict(BaseObjectTest):
