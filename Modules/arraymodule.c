@@ -11,6 +11,7 @@
 #include "Python.h"
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_bytesobject.h"   // _PyBytes_Repeat
+#include "pycore_object.h"        // Py_CHECKWRITE
 #include "structmember.h"         // PyMemberDef
 #include <stddef.h>               // offsetof()
 
@@ -1048,6 +1049,10 @@ array_inplace_concat(arrayobject *self, PyObject *bb)
 {
     array_state *state = find_array_state_by_type(Py_TYPE(self));
 
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (!array_Check(bb, state)) {
         PyErr_Format(PyExc_TypeError,
             "can only extend array with array (not \"%.200s\")",
@@ -1063,6 +1068,10 @@ static PyObject *
 array_inplace_repeat(arrayobject *self, Py_ssize_t n)
 {
     const Py_ssize_t array_size = Py_SIZE(self);
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     if (array_size > 0 && n != 1 ) {
         if (n < 0)
@@ -1087,6 +1096,10 @@ array_inplace_repeat(arrayobject *self, Py_ssize_t n)
 static PyObject *
 ins(arrayobject *self, Py_ssize_t where, PyObject *v)
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (ins1(self, where, v) != 0)
         return NULL;
     Py_RETURN_NONE;
@@ -1205,6 +1218,10 @@ array_array_remove(arrayobject *self, PyObject *v)
 {
     Py_ssize_t i;
 
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     for (i = 0; i < Py_SIZE(self); i++) {
         PyObject *selfi;
         int cmp;
@@ -1243,6 +1260,10 @@ array_array_pop_impl(arrayobject *self, Py_ssize_t i)
 {
     PyObject *v;
 
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (Py_SIZE(self) == 0) {
         /* Special-case most common failure cause */
         PyErr_SetString(PyExc_IndexError, "pop from empty array");
@@ -1278,6 +1299,10 @@ static PyObject *
 array_array_extend_impl(arrayobject *self, PyTypeObject *cls, PyObject *bb)
 /*[clinic end generated code: output=e65eb7588f0bc266 input=8eb6817ec4d2cb62]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     array_state *state = get_array_state_by_class(cls);
 
     if (array_do_extend(state, self, bb) == -1)
@@ -1351,6 +1376,10 @@ static PyObject *
 array_array_append(arrayobject *self, PyObject *v)
 /*[clinic end generated code: output=745a0669bf8db0e2 input=0b98d9d78e78f0fa]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     return ins(self, Py_SIZE(self), v);
 }
 
@@ -1369,6 +1398,10 @@ array_array_byteswap_impl(arrayobject *self)
 {
     char *p;
     Py_ssize_t i;
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     switch (self->ob_descr->itemsize) {
     case 1:
@@ -1430,6 +1463,10 @@ array_array_reverse_impl(arrayobject *self)
     char tmp[256];      /* 8 is probably enough -- but why skimp */
     assert((size_t)itemsize <= sizeof(tmp));
 
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (Py_SIZE(self) > 1) {
         for (p = self->ob_item,
              q = self->ob_item + (Py_SIZE(self) - 1)*itemsize;
@@ -1467,6 +1504,10 @@ array_array_fromfile_impl(arrayobject *self, PyTypeObject *cls, PyObject *f,
     Py_ssize_t itemsize = self->ob_descr->itemsize;
     Py_ssize_t nbytes;
     int not_enough_bytes;
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     if (n < 0) {
         PyErr_SetString(PyExc_ValueError, "negative count");
@@ -1575,6 +1616,10 @@ array_array_fromlist(arrayobject *self, PyObject *list)
 {
     Py_ssize_t n;
 
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (!PyList_Check(list)) {
         PyErr_SetString(PyExc_TypeError, "arg must be list");
         return NULL;
@@ -1636,6 +1681,11 @@ frombytes(arrayobject *self, Py_buffer *buffer)
 {
     int itemsize = self->ob_descr->itemsize;
     Py_ssize_t n;
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (buffer->itemsize != 1) {
         PyBuffer_Release(buffer);
         PyErr_SetString(PyExc_TypeError, "a bytes-like object is required");
@@ -1723,6 +1773,10 @@ array_array_fromunicode_impl(arrayobject *self, PyObject *ustr)
             "fromunicode() may only be called on "
             "unicode type arrays");
         return NULL;
+    }
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
     }
 
     Py_ssize_t ustr_length = PyUnicode_AsWideChar(ustr, NULL, 0);
@@ -2400,6 +2454,11 @@ array_ass_subscr(arrayobject* self, PyObject* item, PyObject* value)
     array_state* state = find_array_state_by_type(Py_TYPE(self));
     arrayobject* other;
     int itemsize;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (PyIndex_Check(item)) {
         Py_ssize_t i = PyNumber_AsSsize_t(item, PyExc_IndexError);
