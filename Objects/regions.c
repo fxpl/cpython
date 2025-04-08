@@ -44,7 +44,6 @@ static regiondata* regiondata_get_parent(regiondata* self);
 static PyObject *PyRegion_add_object(PyRegionObject *self, PyObject *args);
 static PyObject *PyRegion_remove_object(PyRegionObject *self, PyObject *args);
 static const char *get_region_name(PyObject* obj);
-static void _PyErr_Region(PyObject *src, PyObject *tgt, const char *msg);
 
 /**
  * Global status for performing the region check.
@@ -56,12 +55,6 @@ bool invariant_do_region_check = false;
 int Py_is_invariant_enabled(void) {
     return invariant_do_region_check;
 }
-
-// The src object for an edge that invalidated the invariant.
-PyObject* invariant_error_src = Py_None;
-
-// The tgt object for an edge that invalidated the invariant.
-PyObject* invariant_error_tgt = Py_None;
 
 // Once an error has occurred this is used to surpress further checking
 bool invariant_error_occurred = false;
@@ -604,11 +597,6 @@ PyObject* _Py_EnableInvariant(void)
     invariant_error_occurred = false;
     // Re-enable region check
     invariant_do_region_check = true;
-    // Reset the error state
-    Py_DecRef(invariant_error_src);
-    invariant_error_src = Py_None;
-    Py_DecRef(invariant_error_tgt);
-    invariant_error_tgt = Py_None;
     return Py_None;
 }
 
@@ -618,38 +606,26 @@ PyObject* _Py_EnableInvariant(void)
  */
 static void emit_invariant_error(PyObject* src, PyObject* tgt, const char* msg)
 {
-    Py_DecRef(invariant_error_src);
-    Py_IncRef(src);
-    invariant_error_src = src;
-    Py_DecRef(invariant_error_tgt);
-    Py_IncRef(tgt);
-    invariant_error_tgt = tgt;
+    const char *tgt_region_name = get_region_name(tgt);
+    const char *src_region_name = get_region_name(src);
+    PyObject *src_type_repr = PyObject_Repr(PyObject_Type(src));
+    const char *src_desc = src_type_repr ? PyUnicode_AsUTF8(src_type_repr) : "<>";
+    PyObject *tgt_type_repr = PyObject_Repr(PyObject_Type(tgt));
+    const char *tgt_desc = tgt_type_repr ? PyUnicode_AsUTF8(tgt_type_repr) : "<>";
+    PyObject* formatted = PyUnicode_FromFormat(
+        "Error: Invalid edge %p (%s in %s) -> %p (%s in %s) %s\n",
+        src, src_desc, src_region_name, tgt, tgt_desc, tgt_region_name, msg);
 
-    /* Don't stomp existing exception */
-    PyThreadState *tstate = _PyThreadState_GET();
-    assert(tstate && "_PyThreadState_GET documentation says it's not safe, when?");
-    if (_PyErr_Occurred(tstate)) {
+    // If the formatting failes, we have bigger problems
+    if (!formatted) {
         return;
     }
 
-    _PyErr_Region(src, tgt, msg);
+    const char* formatted_str = PyUnicode_AsUTF8(formatted);
+    throw_region_error(src, tgt, formatted_str, Py_None);
 
-    // We have discovered a failure.
-    // Disable region check, until the program switches it back on.
-    invariant_do_region_check = false;
-    invariant_error_occurred = true;
+    Py_DECREF(formatted);
 }
-
-PyObject* _Py_InvariantSrcFailure(void)
-{
-    return Py_NewRef(invariant_error_src);
-}
-
-PyObject* _Py_InvariantTgtFailure(void)
-{
-    return Py_NewRef(invariant_error_tgt);
-}
-
 
 // Lifted from gcmodule.c
 typedef struct _gc_runtime_state GCState;
@@ -1895,16 +1871,6 @@ PyTypeObject PyRegion_Type = {
     PyType_GenericNew,                       /* tp_new */
 };
 
-void _PyErr_Region(PyObject *src, PyObject *tgt, const char *msg) {
-    const char *tgt_region_name = get_region_name(tgt);
-    const char *src_region_name = get_region_name(src);
-    PyObject *src_type_repr = PyObject_Repr(PyObject_Type(src));
-    const char *src_desc = src_type_repr ? PyUnicode_AsUTF8(src_type_repr) : "<>";
-    PyObject *tgt_type_repr = PyObject_Repr(PyObject_Type(tgt));
-    const char *tgt_desc = tgt_type_repr ? PyUnicode_AsUTF8(tgt_type_repr) : "<>";
-    PyErr_Format(PyExc_RuntimeError, "Error: Invalid edge %p (%s in %s) -> %p (%s in %s) %s\n", src, src_desc, src_region_name, tgt, tgt_desc, tgt_region_name, msg);
-}
-
 static const char *get_region_name(PyObject* obj) {
     if (_Py_IsLocal(obj)) {
         return "Default";
@@ -2006,7 +1972,7 @@ void _Py_RegionRemoveReference(PyObject *src, PyObject *tgt) {
     regiondata* tgt_parent_md = REGION_DATA_CAST(Py_region_ptr(tgt_md->parent));
     if (tgt_parent_md != src_md) {
         // TODO: Could `dirty` mean this isn't an error?
-        _PyErr_Region(src, tgt, "(in WB/remove_ref)");
+        throw_region_error(src, tgt, "(in WB/remove_ref)", Py_None);
     }
 
     // Unparent the region.
