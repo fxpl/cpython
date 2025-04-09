@@ -394,6 +394,19 @@ class TestFunctions(unittest.TestCase):
         self.assertFalse(isimmutable(global_canary))
         self.assertRaises(NotWriteableError, d)
 
+    def test_hidden_global(self):
+        global global0
+        def hide_access():
+            global global0
+            global0 += 1
+            return global0
+        def d():
+            return hide_access()
+        global0 = 0
+        self.assertEqual(d(), 1)
+        freeze(d)
+        self.assertRaises(NotWriteableError, d)
+
     def test_builtins(self):
         def e():
             test = list(range(5))
@@ -607,6 +620,99 @@ class TestSubclass(unittest.TestCase):
         self.assertTrue(isinstance(d_obj, C))
         self.assertTrue(issubclass(D, C))
 
+class TestImport(unittest.TestCase):
+    def test_import(self):
+        def f():
+            import sys
+            pass
+
+        freeze(f)
+
+        # The following should not fail, but we
+        # have removed __import__ from globals
+        # during freeze
+        f()
+
+class TestFunctionAttributes(unittest.TestCase):
+    def test_function_attributes(self):
+        def f():
+            pass
+
+        freeze(f)
+
+        with self.assertRaises(NotWriteableError):
+            f.__annotations__ = {}
+
+        # The following should raise an exception,
+        # but doesn't as the __annotations__ gets
+        # replaced with a new dict that is not
+        # immutable.
+        with self.assertRaises(NotWriteableError):
+            f.__annotations__["foo"] = 2
+
+        with self.assertRaises(NotWriteableError):
+            f.__builtins__ = {}
+
+        with self.assertRaises(NotWriteableError):
+            f.__builtins__["foo"] = 2
+
+        with self.assertRaises(NotWriteableError):
+            def g():
+                pass
+            f.__code__ = g.__code__
+
+        with self.assertRaises(NotWriteableError):
+            f.__defaults__ = (1,2)
+
+        with self.assertRaises(NotWriteableError):
+            f.__dict__ = {}
+
+        with self.assertRaises(NotWriteableError):
+            f.__dict__["foo"] = {}
+
+        with self.assertRaises(NotWriteableError):
+            f.__doc__ = "foo"
+
+        with self.assertRaises(NotWriteableError):
+            f.__globals__ = {}
+
+        with self.assertRaises(NotWriteableError):
+            f.__globals__["foo"] = 2
+
+        with self.assertRaises(NotWriteableError):
+            f.__kwdefaults__ = {}
+
+        with self.assertRaises(NotWriteableError):
+            f.__module__ = "foo"
+
+        with self.assertRaises(NotWriteableError):
+            f.__name__ = "foo"
+
+        with self.assertRaises(NotWriteableError):
+            f.__qualname__ = "foo"
+
+        with self.assertRaises(NotWriteableError):
+            f.__type_params__ = (1,2)
+
+class TestFunctionDefaults(unittest.TestCase):
+    def test_function_defaults(self):
+        bdef = {}
+        def f(b=bdef):
+            return b
+
+        freeze(f)
+
+        self.assertTrue(isimmutable(bdef))
+
+    def test_function_kwdefaults(self):
+        bdef = {}
+        def f(a, **b):
+            return a, b
+        f.__kwdefaults__ = bdef
+
+        freeze(f)
+
+        self.assertTrue(isimmutable(bdef))
 
 if __name__ == '__main__':
     unittest.main()
