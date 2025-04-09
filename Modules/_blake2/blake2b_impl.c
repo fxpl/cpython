@@ -19,6 +19,7 @@
 
 #include "Python.h"
 #include "pycore_strhex.h"       // _Py_strhex()
+#include "pycore_object.h"       // Py_CHECKWRITE
 
 #include "../hashlib.h"
 #include "blake2module.h"
@@ -275,6 +276,10 @@ _blake2_blake2b_update(BLAKE2bObject *self, PyObject *data)
 /*[clinic end generated code: output=010dfcbe22654359 input=ffc4aa6a6a225d31]*/
 {
     Py_buffer buf;
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     GET_BUFFER_VIEW_OR_ERROUT(data, &buf);
 

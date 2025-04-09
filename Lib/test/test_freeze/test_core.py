@@ -1,6 +1,7 @@
 import unittest
-from collections import deque
-from array import array
+
+from . import BaseObjectTest
+
 
 # This is a canary to check that global variables are not made immutable
 # when others are made immutable
@@ -18,25 +19,6 @@ class MutableGlobalTest(unittest.TestCase):
     # Add initial test to confirm that global_canary is mutable
     def test_global_mutable(self):
         self.assertTrue(not isimmutable(global_canary))
-
-class BaseObjectTest(unittest.TestCase):
-    def __init__(self, *args, obj=None, **kwargs):
-        unittest.TestCase.__init__(self, *args, **kwargs)
-        self.obj = obj
-
-    def setUp(self):
-        freeze(self.obj)
-
-    def test_immutable(self):
-        self.assertTrue(isimmutable(self.obj))
-
-    def test_add_attribute(self):
-        freeze(self.obj)
-        with self.assertRaises(NotWriteableError):
-            self.obj.new_attribute = 'value'
-
-    def test_type_immutable(self):
-        self.assertTrue(isimmutable(type(self.obj)))
 
 
 class TestBasicObject(BaseObjectTest):
@@ -118,129 +100,6 @@ class TestList(BaseObjectTest):
     def test_sort(self):
         with self.assertRaises(NotWriteableError):
             self.obj.sort()
-
-
-class TestDeque(BaseObjectTest):
-    class C:
-        pass
-
-    def __init__(self, *args, **kwargs):
-        obj = deque([self.C(), self.C(), 1, "two", None])
-        BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
-
-    def test_set_item(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj[0] = None
-
-    def test_append(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.append(TestList.C())
-
-    def test_appendleft(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.appendleft(TestList.C())
-
-    def test_extend(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.extend([TestList.C()])
-
-    def test_extendleft(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.extendleft([TestList.C()])
-
-    def test_insert(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.insert(0, TestList.C())
-
-    def test_pop(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.pop()
-
-    def test_popleft(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.popleft()
-
-    def test_remove(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.remove(1)
-
-    def test_delete(self):
-        with self.assertRaises(NotWriteableError):
-            del self.obj[0]
-
-    def test_inplace_repeat(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj *= 2
-
-    def test_inplace_concat(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj += [TestList.C()]
-
-    def test_reverse(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.reverse()
-
-    def test_rotate(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.rotate(1)
-
-    def test_clear(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.clear()
-
-
-class TestArray(BaseObjectTest):
-    def __init__(self, *args, **kwargs):
-        obj = array('i', [1, 2, 3, 4])
-        BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
-
-    def test_set_item(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj[0] = 5
-
-    def test_set_slice(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj[1:3] = [6, 7]
-
-    def test_append(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.append(8)
-
-    def test_extend(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.extend(array('i', [9]))
-
-    def test_insert(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.insert(0, 10)
-
-    def test_pop(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.pop()
-
-    def test_remove(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.remove(1)
-
-    def test_delete(self):
-        with self.assertRaises(NotWriteableError):
-            del self.obj[0]
-
-    def test_reverse(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.reverse()
-
-    def test_inplace_repeat(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj *= 2
-
-    def test_inplace_concat(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj += array('i', [11])
-
-    def test_byteswap(self):
-        with self.assertRaises(NotWriteableError):
-            self.obj.byteswap()
 
 
 class TestDict(BaseObjectTest):
