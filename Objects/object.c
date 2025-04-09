@@ -1554,6 +1554,11 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
         return -1;
     }
 
+    if(!Py_CHECKWRITE(obj)){
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
+
     Py_INCREF(name);
     Py_INCREF(tp);
     descr = _PyType_Lookup(tp, name);

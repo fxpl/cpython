@@ -633,7 +633,12 @@ func_get_annotations(PyFunctionObject *op, void *Py_UNUSED(ignored))
         op->func_annotations = PyDict_New();
         if (op->func_annotations == NULL)
             return NULL;
+
+        if(!Py_CHECKWRITE(op)){
+            _Py_SetImmutable(op->func_annotations);
+        }
     }
+
     PyObject *d = func_get_annotation_dict(op);
     return Py_XNewRef(d);
 }
@@ -641,6 +646,11 @@ func_get_annotations(PyFunctionObject *op, void *Py_UNUSED(ignored))
 static int
 func_set_annotations(PyFunctionObject *op, PyObject *value, void *Py_UNUSED(ignored))
 {
+    if(!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        return -1;
+    }
+
     if (value == Py_None)
         value = NULL;
     /* Legal to del f.func_annotations.

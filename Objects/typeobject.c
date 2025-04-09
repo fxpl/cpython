@@ -1015,6 +1015,11 @@ type_set_name(PyTypeObject *type, PyObject *value, void *context)
     const char *tp_name;
     Py_ssize_t name_size;
 
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
+
     if (!check_set_special_type_attr(type, value, "__name__"))
         return -1;
     if (!PyUnicode_Check(value)) {
@@ -1043,6 +1048,11 @@ static int
 type_set_qualname(PyTypeObject *type, PyObject *value, void *context)
 {
     PyHeapTypeObject* et;
+
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
 
     if (!check_set_special_type_attr(type, value, "__qualname__"))
         return -1;
@@ -1092,6 +1102,11 @@ type_module(PyTypeObject *type, void *context)
 static int
 type_set_module(PyTypeObject *type, PyObject *value, void *context)
 {
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
+
     if (!check_set_special_type_attr(type, value, "__module__"))
         return -1;
 
@@ -1123,6 +1138,10 @@ type_abstractmethods(PyTypeObject *type, void *context)
 static int
 type_set_abstractmethods(PyTypeObject *type, PyObject *value, void *context)
 {
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
     /* __abstractmethods__ should only be set once on a type, in
        abc.ABCMeta.__new__, so this function doesn't do anything
        special to update subclasses.
@@ -1257,6 +1276,11 @@ mro_hierarchy(PyTypeObject *type, PyObject *temp)
 static int
 type_set_bases(PyTypeObject *type, PyObject *new_bases, void *context)
 {
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
+
     // Check arguments
     if (!check_set_special_type_attr(type, new_bases, "__bases__")) {
         return -1;
@@ -1433,6 +1457,11 @@ type_get_text_signature(PyTypeObject *type, void *context)
 static int
 type_set_doc(PyTypeObject *type, PyObject *value, void *context)
 {
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
+
     if (!check_set_special_type_attr(type, value, "__doc__"))
         return -1;
     PyType_Modified(type);
@@ -1477,6 +1506,11 @@ type_get_annotations(PyTypeObject *type, void *context)
 static int
 type_set_annotations(PyTypeObject *type, PyObject *value, void *context)
 {
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
+
     if (_PyType_HasFeature(type, Py_TPFLAGS_IMMUTABLETYPE)) {
         PyErr_Format(PyExc_TypeError,
                      "cannot set '__annotations__' attribute of immutable type '%s'",
@@ -1521,6 +1555,11 @@ type_get_type_params(PyTypeObject *type, void *context)
 static int
 type_set_type_params(PyTypeObject *type, PyObject *value, void *context)
 {
+    if(!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
+
     if (!check_set_special_type_attr(type, value, "__type_params__")) {
         return -1;
     }
@@ -3358,6 +3397,7 @@ static int
 type_new_set_name(const type_new_ctx *ctx, PyTypeObject *type)
 {
     Py_ssize_t name_size;
+
     type->tp_name = PyUnicode_AsUTF8AndSize(ctx->name, &name_size);
     if (!type->tp_name) {
         return -1;
@@ -4901,6 +4941,12 @@ type_setattro(PyTypeObject *type, PyObject *name, PyObject *value)
             name, type->tp_name);
         return -1;
     }
+
+    if (!Py_CHECKWRITE(type)){
+        PyErr_WriteToImmutable(type);
+        return -1;
+    }
+
     if (PyUnicode_Check(name)) {
         if (PyUnicode_CheckExact(name)) {
             if (PyUnicode_READY(name) == -1)
