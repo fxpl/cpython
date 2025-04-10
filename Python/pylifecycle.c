@@ -1497,7 +1497,6 @@ finalize_modules_clear_weaklist(PyInterpreterState *interp,
         if (verbose && PyUnicode_Check(name)) {
             PySys_FormatStderr("# cleanup[3] wiping %U\n", name);
         }
-
         _PyModule_Clear(mod);
         Py_DECREF(mod);
     }
@@ -1532,7 +1531,6 @@ finalize_modules(PyThreadState *tstate)
         // Already done
         return;
     }
-
     int verbose = _PyInterpreterState_GetConfig(interp)->verbose;
 
     // Delete some special builtins._ and sys attributes first.  These are
@@ -1861,7 +1859,6 @@ Py_FinalizeEx(void)
     PyGC_Collect();
 
     /* Destroy all modules */
-
     _PyImport_FiniExternal(tstate->interp);
     finalize_modules(tstate);
 

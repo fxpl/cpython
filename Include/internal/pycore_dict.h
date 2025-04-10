@@ -24,26 +24,13 @@ typedef struct {
     /* Cached hash code of me_key. */
     Py_hash_t me_hash;
     PyObject *me_key;
-    PyObject *_me_value; /* This field is only meaningful for combined tables */
+    PyObject *me_value; /* This field is only meaningful for combined tables */
 } PyDictKeyEntry;
 
 typedef struct {
     PyObject *me_key;   /* The key must be Unicode and have hash. */
-    PyObject *_me_value; /* This field is only meaningful for combined tables */
+    PyObject *me_value; /* This field is only meaningful for combined tables */
 } PyDictUnicodeEntry;
-
-#define _PyDictEntry_IMMUTABLE_FLAG 0x1
-#define _PyDictEntry_VALUE_MASK ~_PyDictEntry_IMMUTABLE_FLAG
-
-#define _PyDictEntry_IsImmutable(entry) (((uintptr_t)((entry)->_me_value)) & _PyDictEntry_IMMUTABLE_FLAG)
-#define _PyDictEntry_SetImmutable(entry) ((entry)->_me_value = (PyObject*)((uintptr_t)(entry)->_me_value | _PyDictEntry_IMMUTABLE_FLAG))
-#define _PyDictEntry_Hash(entry) ((entry)->me_hash)
-#define _PyDictEntry_Key(entry) ((entry)->me_key)
-#define _PyDictEntry_Value(entry) ((PyObject*)(((uintptr_t)((entry)->_me_value)) & _PyDictEntry_VALUE_MASK))
-#define _PyDictEntry_SetValue(entry, value) ((entry)->_me_value = value)
-#define _PyDictEntry_IsEmpty(entry) ((((uintptr_t)(entry)->_me_value) & _PyDictEntry_VALUE_MASK) == (uintptr_t)NULL)
-
-extern PyObject *_PyDict_IsKeyImmutable(PyObject* op, PyObject* key);
 
 extern PyDictKeysObject *_PyDict_NewKeysForClass(void);
 extern PyObject *_PyDict_FromKeys(PyObject *, PyObject *, PyObject *);
@@ -63,7 +50,6 @@ extern Py_ssize_t _Py_dict_lookup(PyDictObject *mp, PyObject *key, Py_hash_t has
 extern Py_ssize_t _PyDict_LookupIndex(PyDictObject *, PyObject *);
 extern Py_ssize_t _PyDictKeys_StringLookup(PyDictKeysObject* dictkeys, PyObject *key);
 extern PyObject *_PyDict_LoadGlobal(PyDictObject *, PyDictObject *, PyObject *);
-extern PyObject *_PyDict_SetKeyImmutable(PyDictObject *mp, PyObject *key);
 
 /* Consumes references to key and value */
 extern int _PyDict_SetItem_Take2(PyDictObject *op, PyObject *key, PyObject *value);

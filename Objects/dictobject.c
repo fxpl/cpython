@@ -497,11 +497,11 @@ dump_entries(PyDictKeysObject *dk)
     for (Py_ssize_t i = 0; i < dk->dk_nentries; i++) {
         if (DK_IS_UNICODE(dk)) {
             PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(dk)[i];
-            printf("key=%p value=%p\n", ep->me_key, _PyDictEntry_Value(ep));
+            printf("key=%p value=%p\n", ep->me_key, ep->me_value);
         }
         else {
             PyDictKeyEntry *ep = &DK_ENTRIES(dk)[i];
-            printf("key=%p hash=%lx value=%p\n", ep->me_key, ep->me_hash, _PyDictEntry_Value(ep));
+            printf("key=%p hash=%lx value=%p\n", ep->me_key, ep->me_hash, ep->me_value);
         }
     }
 }
@@ -551,7 +551,7 @@ _PyDict_CheckConsistency(PyObject *op, int check_content)
                 if (key != NULL) {
                     /* test_dict fails if PyObject_Hash() is called again */
                     CHECK(entry->me_hash != -1);
-                    CHECK(_PyDictEntry_Value(entry) != NULL);
+                    CHECK(entry->me_value != NULL);
 
                     if (PyUnicode_CheckExact(key)) {
                         Py_hash_t hash = unicode_get_hash(key);
@@ -571,12 +571,12 @@ _PyDict_CheckConsistency(PyObject *op, int check_content)
                     Py_hash_t hash = unicode_get_hash(key);
                     CHECK(hash != -1);
                     if (!splitted) {
-                        CHECK(_PyDictEntry_Value(entry) != NULL);
+                        CHECK(entry->me_value != NULL);
                     }
                 }
 
                 if (splitted) {
-                    CHECK(_PyDictEntry_Value(entry) == NULL);
+                    CHECK(entry->me_value == NULL);
                 }
             }
         }
@@ -670,7 +670,7 @@ free_keys_object(PyInterpreterState *interp, PyDictKeysObject *keys)
         Py_ssize_t i, n;
         for (i = 0, n = keys->dk_nentries; i < n; i++) {
             Py_XDECREF(entries[i].me_key);
-            Py_XDECREF(_PyDictEntry_Value(entries + i));
+            Py_XDECREF(entries[i].me_value);
         }
     }
     else {
@@ -678,7 +678,7 @@ free_keys_object(PyInterpreterState *interp, PyDictKeysObject *keys)
         Py_ssize_t i, n;
         for (i = 0, n = keys->dk_nentries; i < n; i++) {
             Py_XDECREF(entries[i].me_key);
-            Py_XDECREF(_PyDictEntry_Value(entries + i));
+            Py_XDECREF(entries[i].me_value);
         }
     }
 #if PyDict_MAXFREELIST > 0
@@ -812,19 +812,19 @@ clone_combined_dict_keys(PyDictObject *orig)
     if (DK_IS_UNICODE(orig->ma_keys)) {
         PyDictUnicodeEntry *ep0 = DK_UNICODE_ENTRIES(keys);
         pkey = &ep0->me_key;
-        pvalue = &ep0->_me_value;
+        pvalue = &ep0->me_value;
         offs = sizeof(PyDictUnicodeEntry) / sizeof(PyObject*);
     }
     else {
         PyDictKeyEntry *ep0 = DK_ENTRIES(keys);
         pkey = &ep0->me_key;
-        pvalue = &ep0->_me_value;
+        pvalue = &ep0->me_value;
         offs = sizeof(PyDictKeyEntry) / sizeof(PyObject*);
     }
 
     Py_ssize_t n = keys->dk_nentries;
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *value = (PyObject*)(((uintptr_t)*pvalue >> 1) << 1);
+        PyObject *value = *pvalue;
         if (value != NULL) {
             Py_INCREF(value);
             Py_INCREF(*pkey);
@@ -1075,7 +1075,7 @@ start:
                 *value_addr = mp->ma_values->values[ix];
             }
             else {
-                *value_addr = _PyDictEntry_Value(DK_UNICODE_ENTRIES(dk) + ix);
+                *value_addr = DK_UNICODE_ENTRIES(dk)[ix].me_value;
             }
         }
         else {
@@ -1088,7 +1088,7 @@ start:
             goto start;
         }
         if (ix >= 0) {
-            *value_addr = _PyDictEntry_Value(DK_ENTRIES(dk) + ix);
+            *value_addr = DK_ENTRIES(dk)[ix].me_value;
         }
         else {
             *value_addr = NULL;
@@ -1146,21 +1146,21 @@ _PyDict_MaybeUntrack(PyObject *op)
     }
     else {
         if (DK_IS_UNICODE(mp->ma_keys)) {
-            PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(mp->ma_keys);
-            for (i = 0; i < numentries; i++, ep++) {
-                if ((value = _PyDictEntry_Value(ep)) == NULL)
+            PyDictUnicodeEntry *ep0 = DK_UNICODE_ENTRIES(mp->ma_keys);
+            for (i = 0; i < numentries; i++) {
+                if ((value = ep0[i].me_value) == NULL)
                     continue;
                 if (_PyObject_GC_MAY_BE_TRACKED(value))
                     return;
             }
         }
         else {
-            PyDictKeyEntry *ep = DK_ENTRIES(mp->ma_keys);
-            for (i = 0; i < numentries; i++, ep++) {
-                if ((value = _PyDictEntry_Value(ep)) == NULL)
+            PyDictKeyEntry *ep0 = DK_ENTRIES(mp->ma_keys);
+            for (i = 0; i < numentries; i++) {
+                if ((value = ep0[i].me_value) == NULL)
                     continue;
                 if (_PyObject_GC_MAY_BE_TRACKED(value) ||
-                    _PyObject_GC_MAY_BE_TRACKED(_PyDictEntry_Key(ep)))
+                    _PyObject_GC_MAY_BE_TRACKED(ep0[i].me_key))
                     return;
             }
         }
@@ -1281,7 +1281,7 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
                 mp->ma_values->values[index] = value;
             }
             else {
-                _PyDictEntry_SetValue(ep, value);
+                ep->me_value = value;
             }
         }
         else {
@@ -1289,7 +1289,7 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
             ep = &DK_ENTRIES(mp->ma_keys)[mp->ma_keys->dk_nentries];
             ep->me_key = key;
             ep->me_hash = hash;
-            _PyDictEntry_SetValue(ep, value);
+            ep->me_value = value;
         }
         mp->ma_used++;
         mp->ma_version_tag = new_version;
@@ -1301,22 +1301,6 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     if (old_value != value) {
-        if(DK_IS_UNICODE(mp->ma_keys)){
-            PyDictUnicodeEntry *ep;
-            ep = &DK_UNICODE_ENTRIES(mp->ma_keys)[ix];
-            if(_PyDictEntry_IsImmutable(ep)){
-                PyErr_WriteToImmutableKey(_PyDictEntry_Key(ep));
-                goto Fail;
-            }
-        }else{
-            PyDictKeyEntry* ep;
-            ep = &DK_ENTRIES(mp->ma_keys)[ix];
-            if(_PyDictEntry_IsImmutable(ep)){
-                PyErr_WriteToImmutableKey(_PyDictEntry_Key(ep));
-                goto Fail;
-            }
-        }
-
         uint64_t new_version = _PyDict_NotifyEvent(
                 interp, PyDict_EVENT_MODIFIED, mp, key, value);
         if (_PyDict_HasSplitTable(mp)) {
@@ -1329,10 +1313,10 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
         else {
             assert(old_value != NULL);
             if (DK_IS_UNICODE(mp->ma_keys)) {
-                _PyDictEntry_SetValue(DK_UNICODE_ENTRIES(mp->ma_keys) + ix, value);
+                DK_UNICODE_ENTRIES(mp->ma_keys)[ix].me_value = value;
             }
             else {
-                _PyDictEntry_SetValue(DK_ENTRIES(mp->ma_keys) + ix, value);
+                DK_ENTRIES(mp->ma_keys)[ix].me_value = value;
             }
         }
         mp->ma_version_tag = new_version;
@@ -1385,13 +1369,13 @@ insert_to_emptydict(PyInterpreterState *interp, PyDictObject *mp,
     if (unicode) {
         PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(mp->ma_keys);
         ep->me_key = key;
-        _PyDictEntry_SetValue(ep, value);
+        ep->me_value = value;
     }
     else {
         PyDictKeyEntry *ep = DK_ENTRIES(mp->ma_keys);
         ep->me_key = key;
         ep->me_hash = hash;
-        _PyDictEntry_SetValue(ep, value);
+        ep->me_value = value;
     }
     mp->ma_used++;
     mp->ma_version_tag = new_version;
@@ -1492,34 +1476,26 @@ dictresize(PyInterpreterState *interp, PyDictObject *mp,
         if (mp->ma_keys->dk_kind == DICT_KEYS_GENERAL) {
             // split -> generic
             PyDictKeyEntry *newentries = DK_ENTRIES(mp->ma_keys);
-            PyDictKeyEntry *new_ep = newentries;
 
-            for (Py_ssize_t i = 0; i < numentries; i++, new_ep++) {
+            for (Py_ssize_t i = 0; i < numentries; i++) {
                 int index = get_index_from_order(mp, i);
                 PyDictUnicodeEntry *ep = &oldentries[index];
                 assert(oldvalues->values[index] != NULL);
-                new_ep->me_key = Py_NewRef(ep->me_key);
-                new_ep->me_hash = unicode_get_hash(ep->me_key);
-                _PyDictEntry_SetValue(new_ep, oldvalues->values[index]);
-                if(_PyDictEntry_IsImmutable(ep)){
-                    _PyDictEntry_SetImmutable(new_ep);
-                }
+                newentries[i].me_key = Py_NewRef(ep->me_key);
+                newentries[i].me_hash = unicode_get_hash(ep->me_key);
+                newentries[i].me_value = oldvalues->values[index];
             }
             build_indices_generic(mp->ma_keys, newentries, numentries);
         }
         else { // split -> combined unicode
             PyDictUnicodeEntry *newentries = DK_UNICODE_ENTRIES(mp->ma_keys);
-            PyDictUnicodeEntry *new_ep = newentries;
 
-            for (Py_ssize_t i = 0; i < numentries; i++, new_ep++) {
+            for (Py_ssize_t i = 0; i < numentries; i++) {
                 int index = get_index_from_order(mp, i);
                 PyDictUnicodeEntry *ep = &oldentries[index];
                 assert(oldvalues->values[index] != NULL);
-                new_ep->me_key = Py_NewRef(ep->me_key);
-                _PyDictEntry_SetValue(new_ep, oldvalues->values[index]);
-                if(_PyDictEntry_IsImmutable(ep)){
-                    _PyDictEntry_SetImmutable(new_ep);
-                }
+                newentries[i].me_key = Py_NewRef(ep->me_key);
+                newentries[i].me_value = oldvalues->values[index];
             }
             build_indices_unicode(mp->ma_keys, newentries, numentries);
         }
@@ -1539,7 +1515,7 @@ dictresize(PyInterpreterState *interp, PyDictObject *mp,
             else {
                 PyDictKeyEntry *ep = oldentries;
                 for (Py_ssize_t i = 0; i < numentries; i++) {
-                    while (_PyDictEntry_IsEmpty(ep))
+                    while (ep->me_value == NULL)
                         ep++;
                     newentries[i] = *ep++;
                 }
@@ -1556,7 +1532,7 @@ dictresize(PyInterpreterState *interp, PyDictObject *mp,
                 else {
                     PyDictUnicodeEntry *ep = oldentries;
                     for (Py_ssize_t i = 0; i < numentries; i++) {
-                        while (_PyDictEntry_IsEmpty(ep))
+                        while (ep->me_value == NULL)
                             ep++;
                         newentries[i] = *ep++;
                     }
@@ -1565,17 +1541,14 @@ dictresize(PyInterpreterState *interp, PyDictObject *mp,
             }
             else { // combined unicode -> generic
                 PyDictKeyEntry *newentries = DK_ENTRIES(mp->ma_keys);
-                PyDictKeyEntry *new_ep = newentries;
                 PyDictUnicodeEntry *ep = oldentries;
-                for (Py_ssize_t i = 0; i < numentries; i++, ep++, new_ep++) {
-                    while (_PyDictEntry_IsEmpty(ep))
+                for (Py_ssize_t i = 0; i < numentries; i++) {
+                    while (ep->me_value == NULL)
                         ep++;
-                    new_ep->me_key = ep->me_key;
-                    new_ep->me_hash = unicode_get_hash(ep->me_key);
-                    _PyDictEntry_SetValue(new_ep, _PyDictEntry_Value(ep));
-                    if(_PyDictEntry_IsImmutable(ep)){
-                        _PyDictEntry_SetImmutable(new_ep);
-                    }
+                    newentries[i].me_key = ep->me_key;
+                    newentries[i].me_hash = unicode_get_hash(ep->me_key);
+                    newentries[i].me_value = ep->me_value;
+                    ep++;
                 }
                 build_indices_generic(mp->ma_keys, newentries, numentries);
             }
@@ -1880,40 +1853,6 @@ _PyDict_LoadGlobal(PyDictObject *globals, PyDictObject *builtins, PyObject *key)
     return value;
 }
 
-PyObject *_PyDict_SetKeyImmutable(PyDictObject* dict, PyObject *key)
-{
-    Py_ssize_t ix;
-    Py_hash_t hash;
-    PyObject *value;
-
-    if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
-        hash = PyObject_Hash(key);
-        if (hash == -1)
-            return NULL;
-    }
-
-    /* namespace 1: globals */
-    ix = _Py_dict_lookup(dict, key, hash, &value);
-    if (ix == DKIX_ERROR){
-        return NULL;
-    }
-
-    if(ix == DKIX_EMPTY){
-        _PyErr_SetKeyError(key);
-        return NULL;
-    }
-
-    if(DK_IS_UNICODE(dict->ma_keys)){
-        PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(dict->ma_keys)[ix];
-        _PyDictEntry_SetImmutable(ep);
-    }else{
-        PyDictKeyEntry *ep = &DK_ENTRIES(dict->ma_keys)[ix];
-        _PyDictEntry_SetImmutable(ep);
-    }
-
-    return value;
-}
-
 /* Consumes references to key and value */
 int
 _PyDict_SetItem_Take2(PyDictObject *mp, PyObject *key, PyObject *value)
@@ -2020,25 +1959,15 @@ delitem_common(PyDictObject *mp, Py_hash_t hash, Py_ssize_t ix,
         dictkeys_set_index(mp->ma_keys, hashpos, DKIX_DUMMY);
         if (DK_IS_UNICODE(mp->ma_keys)) {
             PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(mp->ma_keys)[ix];
-            if(_PyDictEntry_IsImmutable(ep)){
-                PyErr_WriteToImmutableKey(ep->me_key);
-                return -1;
-            }
-
             old_key = ep->me_key;
             ep->me_key = NULL;
-            _PyDictEntry_SetValue(ep, NULL);
+            ep->me_value = NULL;
         }
         else {
             PyDictKeyEntry *ep = &DK_ENTRIES(mp->ma_keys)[ix];
-            if(_PyDictEntry_IsImmutable(ep)){
-                PyErr_WriteToImmutableKey(ep->me_key);
-                return -1;
-            }
-
             old_key = ep->me_key;
             ep->me_key = NULL;
-            _PyDictEntry_SetValue(ep, NULL);
+            ep->me_value = NULL;
             ep->me_hash = 0;
         }
         Py_DECREF(old_key);
@@ -2225,7 +2154,7 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
             return 0;
         if (DK_IS_UNICODE(mp->ma_keys)) {
             PyDictUnicodeEntry *entry_ptr = &DK_UNICODE_ENTRIES(mp->ma_keys)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
@@ -2233,11 +2162,11 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
                 return 0;
             key = entry_ptr->me_key;
             hash = unicode_get_hash(entry_ptr->me_key);
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
         else {
             PyDictKeyEntry *entry_ptr = &DK_ENTRIES(mp->ma_keys)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
@@ -2245,7 +2174,7 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
                 return 0;
             key = entry_ptr->me_key;
             hash = entry_ptr->me_hash;
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
     }
     *ppos = i+1;
@@ -3261,12 +3190,12 @@ dict_equal(PyDictObject *a, PyDictObject *b)
             if (a->ma_values)
                 aval = a->ma_values->values[i];
             else
-                aval = _PyDictEntry_Value(ep);
+                aval = ep->me_value;
         }
         else {
             PyDictKeyEntry *ep = &DK_ENTRIES(a->ma_keys)[i];
             key = ep->me_key;
-            aval = _PyDictEntry_Value(ep);
+            aval = ep->me_value;
             hash = ep->me_hash;
         }
         if (aval != NULL) {
@@ -3448,14 +3377,14 @@ PyDict_SetDefault(PyObject *d, PyObject *key, PyObject *defaultobj)
                 _PyDictValues_AddToInsertionOrder(mp->ma_values, index);
             }
             else {
-                _PyDictEntry_SetValue(ep, Py_NewRef(value));
+                ep->me_value = Py_NewRef(value);
             }
         }
         else {
             PyDictKeyEntry *ep = &DK_ENTRIES(mp->ma_keys)[mp->ma_keys->dk_nentries];
             ep->me_key = Py_NewRef(key);
             ep->me_hash = hash;
-            _PyDictEntry_SetValue(ep, Py_NewRef(value));
+            ep->me_value = Py_NewRef(value);
         }
         MAINTAIN_TRACKING(mp, key, value);
         mp->ma_used++;
@@ -3593,43 +3522,35 @@ dict_popitem_impl(PyDictObject *self)
     if (DK_IS_UNICODE(self->ma_keys)) {
         PyDictUnicodeEntry *ep0 = DK_UNICODE_ENTRIES(self->ma_keys);
         i = self->ma_keys->dk_nentries - 1;
-        while (i >= 0 && _PyDictEntry_IsEmpty(ep0 + i)) {
+        while (i >= 0 && ep0[i].me_value == NULL) {
             i--;
         }
         assert(i >= 0);
-
-        if(_PyDictEntry_IsImmutable(ep0 + i)){
-            return PyErr_WriteToImmutableKey(ep0[i].me_key);
-        }
 
         key = ep0[i].me_key;
         new_version = _PyDict_NotifyEvent(
                 interp, PyDict_EVENT_DELETED, self, key, NULL);
         hash = unicode_get_hash(key);
-        value = _PyDictEntry_Value(ep0 + i);
+        value = ep0[i].me_value;
         ep0[i].me_key = NULL;
-        _PyDictEntry_SetValue(ep0 + i, NULL);
+        ep0[i].me_value = NULL;
     }
     else {
         PyDictKeyEntry *ep0 = DK_ENTRIES(self->ma_keys);
         i = self->ma_keys->dk_nentries - 1;
-        while (i >= 0 && _PyDictEntry_IsEmpty(ep0 + i)) {
+        while (i >= 0 && ep0[i].me_value == NULL) {
             i--;
         }
         assert(i >= 0);
-
-        if(_PyDictEntry_IsImmutable(ep0 + i)){
-            return PyErr_WriteToImmutableKey(ep0[i].me_key);
-        }
 
         key = ep0[i].me_key;
         new_version = _PyDict_NotifyEvent(
                 interp, PyDict_EVENT_DELETED, self, key, NULL);
         hash = ep0[i].me_hash;
-        value = _PyDictEntry_Value(ep0 + i);
+        value = ep0[i].me_value;
         ep0[i].me_key = NULL;
         ep0[i].me_hash = -1;
-        _PyDictEntry_SetValue(ep0 + i, NULL);
+        ep0[i].me_value = NULL;
     }
 
     j = lookdict_index(self->ma_keys, hash, i);
@@ -3663,15 +3584,15 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
         else {
             PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
             for (i = 0; i < n; i++) {
-                Py_VISIT(_PyDictEntry_Value(entries + i));
+                Py_VISIT(entries[i].me_value);
             }
         }
     }
     else {
         PyDictKeyEntry *entries = DK_ENTRIES(keys);
         for (i = 0; i < n; i++) {
-            if (!_PyDictEntry_IsEmpty(entries + i)) {
-                Py_VISIT(_PyDictEntry_Value(entries + i));
+            if (entries[i].me_value != NULL) {
+                Py_VISIT(entries[i].me_value);
                 Py_VISIT(entries[i].me_key);
             }
         }
@@ -4190,7 +4111,7 @@ dictiter_iternextkey(dictiterobject *di)
         Py_ssize_t n = k->dk_nentries;
         if (DK_IS_UNICODE(k)) {
             PyDictUnicodeEntry *entry_ptr = &DK_UNICODE_ENTRIES(k)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
@@ -4200,7 +4121,7 @@ dictiter_iternextkey(dictiterobject *di)
         }
         else {
             PyDictKeyEntry *entry_ptr = &DK_ENTRIES(k)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
@@ -4289,23 +4210,23 @@ dictiter_iternextvalue(dictiterobject *di)
         Py_ssize_t n = d->ma_keys->dk_nentries;
         if (DK_IS_UNICODE(d->ma_keys)) {
             PyDictUnicodeEntry *entry_ptr = &DK_UNICODE_ENTRIES(d->ma_keys)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
             if (i >= n)
                 goto fail;
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
         else {
             PyDictKeyEntry *entry_ptr = &DK_ENTRIES(d->ma_keys)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
             if (i >= n)
                 goto fail;
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
     }
     // We found an element, but did not expect it
@@ -4389,25 +4310,25 @@ dictiter_iternextitem(dictiterobject *di)
         Py_ssize_t n = d->ma_keys->dk_nentries;
         if (DK_IS_UNICODE(d->ma_keys)) {
             PyDictUnicodeEntry *entry_ptr = &DK_UNICODE_ENTRIES(d->ma_keys)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
             if (i >= n)
                 goto fail;
             key = entry_ptr->me_key;
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
         else {
             PyDictKeyEntry *entry_ptr = &DK_ENTRIES(d->ma_keys)[i];
-            while (i < n && _PyDictEntry_IsEmpty(entry_ptr)) {
+            while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
             if (i >= n)
                 goto fail;
             key = entry_ptr->me_key;
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
     }
     // We found an element, but did not expect it
@@ -4517,25 +4438,25 @@ dictreviter_iternext(dictiterobject *di)
     else {
         if (DK_IS_UNICODE(k)) {
             PyDictUnicodeEntry *entry_ptr = &DK_UNICODE_ENTRIES(k)[i];
-            while (_PyDictEntry_IsEmpty(entry_ptr)) {
+            while (entry_ptr->me_value == NULL) {
                 if (--i < 0) {
                     goto fail;
                 }
                 entry_ptr--;
             }
             key = entry_ptr->me_key;
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
         else {
             PyDictKeyEntry *entry_ptr = &DK_ENTRIES(k)[i];
-            while (_PyDictEntry_IsEmpty(entry_ptr)) {
+            while (entry_ptr->me_value == NULL) {
                 if (--i < 0) {
                     goto fail;
                 }
                 entry_ptr--;
             }
             key = entry_ptr->me_key;
-            value = _PyDictEntry_Value(entry_ptr);
+            value = entry_ptr->me_value;
         }
     }
     di->di_pos = i-1;
@@ -5994,85 +5915,5 @@ _PyDict_SendEvent(int watcher_bits,
             }
         }
         watcher_bits >>= 1;
-    }
-}
-
-PyObject *
-_PyDict_IsKeyImmutable(PyObject* op, PyObject* key)
-{
-    PyDictKeysObject *dk;
-    DictKeysKind kind;
-    Py_ssize_t ix;
-    PyDictObject* mp;
-    Py_hash_t hash;
-    PyThreadState* tstate;
-    PyObject *exc;
-
-    if (!PyDict_Check(op)) {
-        return NULL;
-    }
-    mp = (PyDictObject *)op;
-
-    if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
-        hash = PyObject_Hash(key);
-        if (hash == -1) {
-            PyErr_Clear();
-            return NULL;
-        }
-    }
-
-    tstate = _PyThreadState_GET();
-#ifdef Py_DEBUG
-    // bpo-40839: Before Python 3.10, it was possible to call PyDict_GetItem()
-    // with the GIL released.
-    _Py_EnsureTstateNotNULL(tstate);
-#endif
-
-    /* Preserve the existing exception */
-    exc = _PyErr_GetRaisedException(tstate);
-
-start:
-    dk = mp->ma_keys;
-    kind = dk->dk_kind;
-
-    if (kind != DICT_KEYS_GENERAL) {
-        if (PyUnicode_CheckExact(key)) {
-            ix = unicodekeys_lookup_unicode(dk, key, hash);
-        }
-        else {
-            ix = unicodekeys_lookup_generic(mp, dk, key, hash);
-            if (ix == DKIX_KEY_CHANGED) {
-                goto start;
-            }
-        }
-    }
-    else {
-        ix = dictkeys_generic_lookup(mp, dk, key, hash);
-        if (ix == DKIX_KEY_CHANGED) {
-            goto start;
-        }
-    }
-
-    /* Ignore any exception raised by the lookup */
-    _PyErr_SetRaisedException(tstate, exc);
-
-    if (ix == DKIX_ERROR){
-        return NULL;
-    }
-
-    if (DK_IS_UNICODE(mp->ma_keys)) {
-        PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(mp->ma_keys) + ix;
-        if (_PyDictEntry_IsImmutable(ep)){
-            Py_RETURN_TRUE;
-        }else{
-            Py_RETURN_FALSE;
-        }
-    } else {
-        PyDictKeyEntry *ep = DK_ENTRIES(mp->ma_keys) + ix;
-        if(_PyDictEntry_IsImmutable(ep)){
-            Py_RETURN_TRUE;
-        }else{
-            Py_RETURN_FALSE;
-        }
     }
 }

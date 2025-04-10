@@ -1360,7 +1360,7 @@ dummy_func(
             DEOPT_IF(dict->ma_keys->dk_version != version, LOAD_GLOBAL);
             assert(DK_IS_UNICODE(dict->ma_keys));
             PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(dict->ma_keys);
-            res = _PyDictEntry_Value(entries + index);
+            res = entries[index].me_value;
             DEOPT_IF(res == NULL, LOAD_GLOBAL);
             Py_INCREF(res);
             STAT_INC(LOAD_GLOBAL, hit);
@@ -1377,7 +1377,7 @@ dummy_func(
             DEOPT_IF(bdict->ma_keys->dk_version != bltn_version, LOAD_GLOBAL);
             assert(DK_IS_UNICODE(bdict->ma_keys));
             PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(bdict->ma_keys);
-            res = _PyDictEntry_Value(entries + index);
+            res = entries[index].me_value;
             DEOPT_IF(res == NULL, LOAD_GLOBAL);
             Py_INCREF(res);
             STAT_INC(LOAD_GLOBAL, hit);
@@ -1838,7 +1838,7 @@ dummy_func(
             assert(dict->ma_keys->dk_kind == DICT_KEYS_UNICODE);
             assert(index < dict->ma_keys->dk_nentries);
             PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + index;
-            res = _PyDictEntry_Value(ep);
+            res = ep->me_value;
             DEOPT_IF(res == NULL, LOAD_ATTR);
             STAT_INC(LOAD_ATTR, hit);
             Py_INCREF(res);
@@ -1862,12 +1862,12 @@ dummy_func(
             if (DK_IS_UNICODE(dict->ma_keys)) {
                 PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
                 DEOPT_IF(ep->me_key != name, LOAD_ATTR);
-                res = _PyDictEntry_Value(ep);
+                res = ep->me_value;
             }
             else {
                 PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
                 DEOPT_IF(ep->me_key != name, LOAD_ATTR);
-                res = _PyDictEntry_Value(ep);
+                res = ep->me_value;
             }
             DEOPT_IF(res == NULL, LOAD_ATTR);
             STAT_INC(LOAD_ATTR, hit);
@@ -2005,26 +2005,18 @@ dummy_func(
             if (DK_IS_UNICODE(dict->ma_keys)) {
                 PyDictUnicodeEntry *ep = DK_UNICODE_ENTRIES(dict->ma_keys) + hint;
                 DEOPT_IF(ep->me_key != name, STORE_ATTR);
-                old_value = _PyDictEntry_Value(ep);
+                old_value = ep->me_value;
                 DEOPT_IF(old_value == NULL, STORE_ATTR);
                 new_version = _PyDict_NotifyEvent(tstate->interp, PyDict_EVENT_MODIFIED, dict, name, value);
-                if(_PyDictEntry_IsImmutable(ep)){
-                    format_exc_notwriteable(tstate, frame->f_code, oparg);
-                    goto error;
-                }
-                _PyDictEntry_SetValue(ep, value);
+                ep->me_value = value;
             }
             else {
                 PyDictKeyEntry *ep = DK_ENTRIES(dict->ma_keys) + hint;
                 DEOPT_IF(ep->me_key != name, STORE_ATTR);
-                old_value = _PyDictEntry_Value(ep);
+                old_value = ep->me_value;
                 DEOPT_IF(old_value == NULL, STORE_ATTR);
                 new_version = _PyDict_NotifyEvent(tstate->interp, PyDict_EVENT_MODIFIED, dict, name, value);
-                if(_PyDictEntry_IsImmutable(ep)){
-                    format_exc_notwriteable(tstate, frame->f_code, oparg);
-                    goto error;
-                }
-                _PyDictEntry_SetValue(ep, value);
+                ep->me_value = value;
             }
             Py_DECREF(old_value);
             STAT_INC(STORE_ATTR, hit);

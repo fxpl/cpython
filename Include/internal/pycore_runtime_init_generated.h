@@ -554,12 +554,10 @@ extern "C" {
     INIT_STR(json_decoder, "json.decoder"), \
     INIT_STR(kwdefaults, ".kwdefaults"), \
     INIT_STR(list_err, "list index out of range"), \
-    INIT_STR(namedtuple, "namedtuple"), \
     INIT_STR(newline, "\n"), \
     INIT_STR(open_br, "{"), \
     INIT_STR(percent, "%"), \
     INIT_STR(shim_name, "<shim>"), \
-    INIT_STR(startswith, "startswith"), \
     INIT_STR(type_params, ".type_params"), \
     INIT_STR(utf_8, "utf-8"), \
 }
