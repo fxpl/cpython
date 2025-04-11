@@ -11,7 +11,6 @@
 #include "Python.h"
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_bytesobject.h"   // _PyBytes_Repeat
-#include "pycore_object.h"        // Py_CHECKWRITE
 #include "structmember.h"         // PyMemberDef
 #include <stddef.h>               // offsetof()
 

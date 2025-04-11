@@ -111,6 +111,7 @@ bytes(cdata)
 
 #include "pycore_call.h"          // _PyObject_CallNoArgs()
 #include "pycore_ceval.h"         // _Py_EnterRecursiveCall()
+#include "pycore_object.h"        // _Py_SetImmutable()
 #include "structmember.h"         // PyMemberDef
 
 #include <ffi.h>
@@ -1158,6 +1159,9 @@ PyCPointerType_set_type(PyTypeObject *self, PyObject *type)
 {
     StgDictObject *dict;
 
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     dict = PyType_stgdict((PyObject *)self);
     if (!dict) {
@@ -1293,6 +1297,11 @@ CharArray_set_raw(CDataObject *self, PyObject *value, void *Py_UNUSED(ignored))
     Py_ssize_t size;
     Py_buffer view;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_AttributeError, "cannot delete attribute");
         return -1;
@@ -1338,6 +1347,11 @@ CharArray_set_value(CDataObject *self, PyObject *value, void *Py_UNUSED(ignored)
 {
     const char *ptr;
     Py_ssize_t size;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -1391,6 +1405,11 @@ WCharArray_get_value(CDataObject *self, void *Py_UNUSED(ignored))
 static int
 WCharArray_set_value(CDataObject *self, PyObject *value, void *Py_UNUSED(ignored))
 {
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "can't delete attribute");
@@ -2996,6 +3015,11 @@ PyCData_FromBaseObj(PyObject *type, PyObject *base, Py_ssize_t index, char *adr)
         memcpy(cmem->b_ptr, adr, dict->size);
         cmem->b_index = index;
     }
+
+    if(_Py_IsImmutable(base)) {
+        _Py_SetImmutable(cmem);
+    }
+
     return (PyObject *)cmem;
 }
 
@@ -3182,6 +3206,11 @@ PyCData_set(PyObject *dst, PyObject *type, SETFUNC setfunc, PyObject *value,
         return -1;
     }
 
+    if(!Py_CHECKWRITE(dst)){
+        PyErr_WriteToImmutable(dst);
+        return -1;
+    }
+
     result = _PyCData_set(mem, type, setfunc, value,
                         size, ptr);
     if (result == NULL)
@@ -3232,6 +3261,11 @@ GenericPyCData_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 static int
 PyCFuncPtr_set_errcheck(PyCFuncPtrObject *self, PyObject *ob, void *Py_UNUSED(ignored))
 {
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (ob && !PyCallable_Check(ob)) {
         PyErr_SetString(PyExc_TypeError,
                         "the errcheck attribute must be callable");
@@ -3255,6 +3289,12 @@ static int
 PyCFuncPtr_set_restype(PyCFuncPtrObject *self, PyObject *ob, void *Py_UNUSED(ignored))
 {
     PyObject *checker, *oldchecker;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (ob == NULL) {
         oldchecker = self->checker;
         self->checker = NULL;
@@ -3298,6 +3338,11 @@ static int
 PyCFuncPtr_set_argtypes(PyCFuncPtrObject *self, PyObject *ob, void *Py_UNUSED(ignored))
 {
     PyObject *converters;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (ob == NULL || ob == Py_None) {
         Py_CLEAR(self->converters);
@@ -4674,6 +4719,11 @@ Array_ass_item(PyObject *myself, Py_ssize_t index, PyObject *value)
     StgDictObject *stgdict;
     char *ptr;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "Array does not support item deletion");
@@ -4699,6 +4749,11 @@ static int
 Array_ass_subscript(PyObject *myself, PyObject *item, PyObject *value)
 {
     CDataObject *self = (CDataObject *)myself;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -4905,6 +4960,12 @@ static int
 Simple_set_value(CDataObject *self, PyObject *value, void *Py_UNUSED(ignored))
 {
     PyObject *result;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     StgDictObject *dict = PyObject_stgdict((PyObject *)self);
 
     if (value == NULL) {
@@ -5089,6 +5150,11 @@ Pointer_ass_item(PyObject *myself, Py_ssize_t index, PyObject *value)
     StgDictObject *stgdict, *itemdict;
     PyObject *proto;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "Pointer does not support item deletion");
@@ -5142,6 +5208,11 @@ Pointer_set_contents(CDataObject *self, PyObject *value, void *closure)
     StgDictObject *stgdict;
     CDataObject *dst;
     PyObject *keep;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,

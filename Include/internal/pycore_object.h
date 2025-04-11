@@ -100,11 +100,6 @@ static inline void _Py_SetImmutable(PyObject *op)
 }
 #define _Py_SetImmutable(op) _Py_SetImmutable(_PyObject_CAST(op))
 
-// Check whether an object is writeable.
-// This check will always succeed during runtime finalization.
-#define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || _Py_IsFinalizing()))
-#define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
-
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {

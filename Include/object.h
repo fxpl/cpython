@@ -279,6 +279,11 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 }
 #define _Py_IsImmutable(op) _Py_IsImmutable(_PyObject_CAST(op))
 
+// Check whether an object is writeable.
+// This check will always succeed during runtime finalization.
+#define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || _Py_IsFinalizing()))
+#define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
+
 static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     // This immortal check is for code that is unaware of immortal objects.
     // The runtime tracks these objects and we should avoid as much

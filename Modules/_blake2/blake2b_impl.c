@@ -19,7 +19,6 @@
 
 #include "Python.h"
 #include "pycore_strhex.h"       // _Py_strhex()
-#include "pycore_object.h"       // Py_CHECKWRITE
 
 #include "../hashlib.h"
 #include "blake2module.h"

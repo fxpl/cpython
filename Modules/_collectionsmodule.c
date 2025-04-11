@@ -3,7 +3,6 @@
 #include "pycore_long.h"          // _PyLong_GetZero()
 #include "pycore_moduleobject.h"  // _PyModule_GetState()
 #include "pycore_typeobject.h"    // _PyType_GetModuleState()
-#include "pycore_object.h"        // Py_CHECKWRITE
 #include "structmember.h"         // PyMemberDef
 #include <stddef.h>
 
