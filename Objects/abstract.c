@@ -611,6 +611,11 @@ PyBuffer_FromContiguous(const Py_buffer *view, const void *buf, Py_ssize_t len, 
     char *ptr;
     const char *src;
 
+    if(!Py_CHECKWRITE(view->obj)){
+        PyErr_WriteToImmutable(view->obj);
+        return -1;
+    }
+
     if (len > view->len) {
         len = view->len;
     }
@@ -667,6 +672,12 @@ int PyObject_CopyData(PyObject *dest, PyObject *src)
         PyErr_SetString(PyExc_TypeError,
                         "both destination and source must be "\
                         "bytes-like objects");
+        return -1;
+    }
+
+
+    if(!Py_CHECKWRITE(dest)){
+        PyErr_WriteToImmutable(dest);
         return -1;
     }
 

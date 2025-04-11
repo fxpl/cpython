@@ -180,6 +180,13 @@ static PyObject* shadow_function_globals(PyObject* op)
     f->func_builtins = shadow_builtins;
     Py_DECREF(builtins);
 
+    if(f->func_annotations == NULL){
+        f->func_annotations = PyDict_New();
+        if(f->func_annotations == NULL){
+            goto nomemory;
+        }
+    }
+
     Py_RETURN_NONE;
 
 nomemory:

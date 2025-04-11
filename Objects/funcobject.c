@@ -633,10 +633,6 @@ func_get_annotations(PyFunctionObject *op, void *Py_UNUSED(ignored))
         op->func_annotations = PyDict_New();
         if (op->func_annotations == NULL)
             return NULL;
-
-        if(!Py_CHECKWRITE(op)){
-            _Py_SetImmutable(op->func_annotations);
-        }
     }
 
     PyObject *d = func_get_annotation_dict(op);
