@@ -1,5 +1,4 @@
 import ctypes
-import unittest
 
 from . import BaseObjectTest
 
