@@ -39,7 +39,7 @@ immutable_error(void)
 {
     PyThreadState *tstate = _PyThreadState_GET();
     if (!_PyErr_Occurred(tstate)) {
-        _PyErr_SetString(tstate, PyExc_NotWriteableError,
+        _PyErr_SetString(tstate, PyExc_NotWritableError,
                          "cannot modify immutable instance");
     }
     return NULL;

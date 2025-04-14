@@ -1959,7 +1959,7 @@ _PyErr_WriteToImmutable(const char* filename, int lineno, PyObject* obj)
         string = PyUnicode_FromFormat("object of type %s is immutable at %s:%d",
                                       obj->ob_type->tp_name, filename, lineno);
         if (string != NULL) {
-            _PyErr_SetObject(tstate, PyExc_NotWriteableError, string);
+            _PyErr_SetObject(tstate, PyExc_NotWritableError, string);
             Py_DECREF(string);
         }
     }

@@ -2110,11 +2110,11 @@ class BufferedRWPairTest(unittest.TestCase):
         self.assertRaises(OSError, self.tp, NotReadable(), self.MockRawIO())
 
     def test_constructor_with_not_writeable(self):
-        class NotWriteable(MockRawIO):
+        class NotWritable(MockRawIO):
             def writable(self):
                 return False
 
-        self.assertRaises(OSError, self.tp, self.MockRawIO(), NotWriteable())
+        self.assertRaises(OSError, self.tp, self.MockRawIO(), NotWritable())
 
     def test_read(self):
         pair = self.tp(self.BytesIO(b"abcdef"), self.MockRawIO())

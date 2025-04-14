@@ -19,7 +19,7 @@ class BaseObjectTest(unittest.TestCase):
         self.assertTrue(isimmutable(self.obj))
 
     def test_add_attribute(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.new_attribute = 'value'
 
     def test_type_immutable(self):

@@ -137,7 +137,6 @@ PYTHON2_EXCEPTIONS = (
     "UnicodeWarning",
     "UserWarning",
     "ValueError",
-    "NotWriteableError",
     "Warning",
     "ZeroDivisionError",
 )
@@ -222,6 +221,7 @@ REVERSE_NAME_MAPPING.update({
     ('http.server', 'CGIHTTPRequestHandler'):
         ('CGIHTTPServer', 'CGIHTTPRequestHandler'),
     ('_socket', 'socket'): ('socket', '_socketobject'),
+    ('builtins', 'NotWritableError'): ('exceptions', 'StandardError'),
 })
 
 PYTHON3_OSERROR_EXCEPTIONS = (

@@ -50,55 +50,55 @@ class TestList(BaseObjectTest):
         BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
 
     def test_set_item(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj[0] = None
 
     def test_set_slice(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj[1:3] = [None, None]
 
     def test_append(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.append(TestList.C())
 
     def test_extend(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.extend([TestList.C()])
 
     def test_insert(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.insert(0, TestList.C())
 
     def test_pop(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.pop()
 
     def test_remove(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.remove(1)
 
     def test_delete(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             del self.obj[0]
 
     def test_reverse(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.reverse()
 
     def test_inplace_repeat(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj *= 2
 
     def test_inplace_concat(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj += [TestList.C()]
 
     def test_clear(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.clear()
 
     def test_sort(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.sort()
 
 
@@ -111,35 +111,35 @@ class TestDict(BaseObjectTest):
         BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
 
     def test_set_item_exists(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj[1] = None
 
     def test_set_item_new(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj["three"] = TestDict.C()
 
     def test_del_item(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             del self.obj[1]
 
     def test_clear(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.clear()
 
     def test_pop(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.pop(1)
 
     def test_popitem(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.popitem()
 
     def test_setdefault(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.setdefault("three", TestDict.C())
 
     def test_update(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.update({1: None})
 
 
@@ -149,27 +149,27 @@ class TestSet(BaseObjectTest):
         BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
 
     def test_add(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.add(1)
 
     def test_clear(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.clear()
 
     def test_discard(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.discard(1)
 
     def test_pop(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.pop()
 
     def test_remove(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.remove(1)
 
     def test_update(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.update([1, 2])
 
 
@@ -202,7 +202,7 @@ class TestMultiLevel(unittest.TestCase):
         self.assertTrue(isimmutable(self.obj.g["two"].i))
 
     def test_set_const(self):
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             self.obj.const = 1
 
     def test_type_immutable(self):
@@ -239,7 +239,7 @@ class TestFunctions(unittest.TestCase):
         self.assertEqual(test(), 1)
         self.assertEqual(test(), 2)
         freeze(test)
-        self.assertRaises(NotWriteableError, test)
+        self.assertRaises(NotWritableError, test)
 
     def test_global(self):
         def d():
@@ -251,7 +251,7 @@ class TestFunctions(unittest.TestCase):
         freeze(d)
         self.assertTrue(isimmutable(global0))
         self.assertFalse(isimmutable(global_canary))
-        self.assertRaises(NotWriteableError, d)
+        self.assertRaises(NotWritableError, d)
 
     def test_hidden_global(self):
         global global0
@@ -264,7 +264,7 @@ class TestFunctions(unittest.TestCase):
         global0 = 0
         self.assertEqual(d(), 1)
         freeze(d)
-        self.assertRaises(NotWriteableError, d)
+        self.assertRaises(NotWritableError, d)
 
     def test_builtins(self):
         def e():
@@ -297,7 +297,7 @@ class TestFunctions(unittest.TestCase):
         self.assertTrue(isimmutable(global1))
         self.assertTrue(isimmutable(global1_inc))
         self.assertFalse(isimmutable(global_canary))
-        self.assertRaises(NotWriteableError, d)
+        self.assertRaises(NotWritableError, d)
 
     def test_globals_copy(self):
         def f():
@@ -330,7 +330,7 @@ class TestMethods(unittest.TestCase):
         freeze(obj)
         self.assertTrue(isimmutable(TestMethods.C))
         self.assertTrue(isimmutable(pow))
-        self.assertRaises(NotWriteableError, obj.b, 1)
+        self.assertRaises(NotWritableError, obj.b, 1)
         self.assertEqual(obj.c(2), 4)
 
     def test_method(self):
@@ -340,9 +340,9 @@ class TestMethods(unittest.TestCase):
         self.assertTrue(isimmutable(obj))
         self.assertTrue(isimmutable(abs))
         self.assertTrue(isimmutable(obj.val))
-        self.assertRaises(NotWriteableError, obj.b, 1)
+        self.assertRaises(NotWritableError, obj.b, 1)
         # Second test as the byte code can be changed by the first call
-        self.assertRaises(NotWriteableError, obj.b, 1)
+        self.assertRaises(NotWritableError, obj.b, 1)
 
 
 class TestLocals(unittest.TestCase):
@@ -383,7 +383,7 @@ class TestDictMutation(unittest.TestCase):
         obj = TestDictMutation.C()
         freeze(obj)
         self.assertTrue(isimmutable(obj))
-        self.assertRaises(NotWriteableError, obj.set, 1)
+        self.assertRaises(NotWritableError, obj.set, 1)
         self.assertEqual(obj.get(), 0)
 
     def test_dict_mutation2(self):
@@ -393,7 +393,7 @@ class TestDictMutation(unittest.TestCase):
         freeze(obj)
         self.assertEqual(obj.get(), 1)
         self.assertTrue(isimmutable(obj))
-        self.assertRaises(NotWriteableError, obj.set, 1)
+        self.assertRaises(NotWritableError, obj.set, 1)
 
 class TestWeakRef(unittest.TestCase):
     class B:
@@ -443,7 +443,7 @@ class TestGlobalDictMutation(unittest.TestCase):
     def test_global_dict_mutation(self):
         f1 = TestGlobalDictMutation.g()
         self.assertTrue(isimmutable(f1))
-        self.assertRaises(NotWriteableError, f1)
+        self.assertRaises(NotWritableError, f1)
 
 
 class TestSubclass(unittest.TestCase):
@@ -499,58 +499,58 @@ class TestFunctionAttributes(unittest.TestCase):
 
         freeze(f)
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__annotations__ = {}
 
         # The following should raise an exception,
         # but doesn't as the __annotations__ gets
         # replaced with a new dict that is not
         # immutable.
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__annotations__["foo"] = 2
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__builtins__ = {}
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__builtins__["foo"] = 2
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             def g():
                 pass
             f.__code__ = g.__code__
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__defaults__ = (1,2)
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__dict__ = {}
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__dict__["foo"] = {}
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__doc__ = "foo"
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__globals__ = {}
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__globals__["foo"] = 2
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__kwdefaults__ = {}
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__module__ = "foo"
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__name__ = "foo"
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__qualname__ = "foo"
 
-        with self.assertRaises(NotWriteableError):
+        with self.assertRaises(NotWritableError):
             f.__type_params__ = (1,2)
 
 class TestFunctionDefaults(unittest.TestCase):

@@ -2739,7 +2739,7 @@ format_exc_notwriteable(PyThreadState *tstate, PyCodeObject *co, int oparg)
     if (_PyErr_Occurred(tstate))
         return;
     name = PyTuple_GET_ITEM(co->co_localsplusnames, oparg);
-    format_exc_check_arg(tstate, PyExc_NotWriteableError,
+    format_exc_check_arg(tstate, PyExc_NotWritableError,
                          NOT_WRITEABLE_ERROR_MSG, name);
 }
 
