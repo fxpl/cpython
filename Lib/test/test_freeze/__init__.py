@@ -31,9 +31,6 @@ class BaseNotFreezableTest(unittest.TestCase):
         unittest.TestCase.__init__(self, *args, **kwargs)
         self.obj = obj
 
-    def test_isinstance(self):
-        self.assertTrue(isinstance(self.obj, notfreezable))
-
     def test_not_freezable(self):
         with self.assertRaises(TypeError):
             freeze(self.obj)

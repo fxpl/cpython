@@ -2649,7 +2649,7 @@ static PyType_Spec connection_spec = {
 int
 pysqlite_connection_setup_types(PyObject *module)
 {
-    PyObject *type = PyType_FromModuleAndSpec(module, &connection_spec, NULL);
+    PyObject *type = PyType_FromModuleAndSpec(module, &connection_spec, (PyObject *)(&PyNotFreezable_Type));
     if (type == NULL) {
         return -1;
     }

@@ -1356,7 +1356,7 @@ static PyType_Spec cursor_spec = {
 int
 pysqlite_cursor_setup_types(PyObject *module)
 {
-    PyObject *type = PyType_FromModuleAndSpec(module, &cursor_spec, NULL);
+    PyObject *type = PyType_FromModuleAndSpec(module, &cursor_spec, (PyObject *)(&PyNotFreezable_Type));
     if (type == NULL) {
         return -1;
     }

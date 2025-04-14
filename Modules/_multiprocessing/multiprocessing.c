@@ -197,7 +197,7 @@ multiprocessing_exec(PyObject *module)
 #ifdef HAVE_MP_SEMAPHORE
 
     PyTypeObject *semlock_type = (PyTypeObject *)PyType_FromModuleAndSpec(
-                module, &_PyMp_SemLockType_spec, NULL);
+                module, &_PyMp_SemLockType_spec, (PyObject *)&PyNotFreezable_Type);
 
     if (semlock_type == NULL) {
         return -1;

@@ -607,7 +607,7 @@ static PyType_Spec blob_spec = {
 int
 pysqlite_blob_setup_types(PyObject *mod)
 {
-    PyObject *type = PyType_FromModuleAndSpec(mod, &blob_spec, NULL);
+    PyObject *type = PyType_FromModuleAndSpec(mod, &blob_spec, (PyObject *)(&PyNotFreezable_Type));
     if (type == NULL) {
         return -1;
     }
