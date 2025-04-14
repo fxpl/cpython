@@ -25,3 +25,13 @@ class BaseObjectTest(unittest.TestCase):
 
     def test_type_immutable(self):
         self.assertTrue(isimmutable(type(self.obj)))
+
+
+class BaseNotFreezableTest(unittest.TestCase):
+    def __init__(self, *args, obj=notfreezable(), **kwargs):
+        unittest.TestCase.__init__(self, *args, **kwargs)
+        self.obj = obj
+
+    def test_not_freezable(self):
+        with self.assertRaises(TypeError):
+            freeze(self.obj)

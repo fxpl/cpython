@@ -674,9 +674,9 @@ iomodule_exec(PyObject *m)
     }
 
     // Base classes
-    ADD_TYPE(m, state->PyIncrementalNewlineDecoder_Type, &nldecoder_spec, NULL);
-    ADD_TYPE(m, state->PyBytesIOBuffer_Type, &bytesiobuf_spec, NULL);
-    ADD_TYPE(m, state->PyIOBase_Type, &iobase_spec, NULL);
+    ADD_TYPE(m, state->PyIncrementalNewlineDecoder_Type, &nldecoder_spec, &PyNotFreezable_Type);
+    ADD_TYPE(m, state->PyBytesIOBuffer_Type, &bytesiobuf_spec, &PyNotFreezable_Type);
+    ADD_TYPE(m, state->PyIOBase_Type, &iobase_spec, &PyNotFreezable_Type);
 
     // PyIOBase_Type subclasses
     ADD_TYPE(m, state->PyTextIOBase_Type, &textiobase_spec,
