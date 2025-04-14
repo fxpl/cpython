@@ -3016,7 +3016,7 @@ PyCData_FromBaseObj(PyObject *type, PyObject *base, Py_ssize_t index, char *adr)
         cmem->b_index = index;
     }
 
-    if(_Py_IsImmutable(base)) {
+    if(base && _Py_IsImmutable(base)) {
         _Py_SetImmutable(cmem);
     }
 

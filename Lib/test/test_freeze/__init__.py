@@ -19,7 +19,6 @@ class BaseObjectTest(unittest.TestCase):
         self.assertTrue(isimmutable(self.obj))
 
     def test_add_attribute(self):
-        freeze(self.obj)
         with self.assertRaises(NotWriteableError):
             self.obj.new_attribute = 'value'
 
@@ -31,6 +30,9 @@ class BaseNotFreezableTest(unittest.TestCase):
     def __init__(self, *args, obj=notfreezable(), **kwargs):
         unittest.TestCase.__init__(self, *args, **kwargs)
         self.obj = obj
+
+    def test_isinstance(self):
+        self.assertTrue(isinstance(self.obj, notfreezable))
 
     def test_not_freezable(self):
         with self.assertRaises(TypeError):

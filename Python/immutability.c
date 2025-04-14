@@ -15,7 +15,7 @@ PyDoc_STRVAR(notfreezable_doc,
 
 PyTypeObject PyNotFreezable_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
-    .tp_name = "NotFreezable",
+    .tp_name = "notfreezable",
     .tp_doc = notfreezable_doc,
     .tp_basicsize = sizeof(PyObject),
     .tp_itemsize = 0,
@@ -265,9 +265,6 @@ PyObject* _Py_Freeze(PyObject* obj)
     }
 
     while(PyList_Size(frontier) != 0){
-        PyTypeObject* type;
-        PyObject* type_op;
-        traverseproc traverse;
         PyObject* item = pop(frontier);
 
         if(item == blocking_on ||
@@ -277,15 +274,13 @@ PyObject* _Py_Freeze(PyObject* obj)
             continue;
         }
 
-        type = Py_TYPE(item);
-
-        if(PyType_IsSubtype(type, &PyNotFreezable_Type)){
-            PyErr_SetString(PyExc_TypeError, "Cannot freeze a NotFreezable object");
+        if(PyObject_IsInstance(item, (PyObject*)&PyNotFreezable_Type)){
+            // the object is not freezable, so we can skip it
+            PyObject* error_msg = PyUnicode_FromFormat("Cannot freeze object of type %s", Py_TYPE(item)->tp_name);
+            PyErr_SetObject(PyExc_TypeError, error_msg);
             result = NULL;
             goto cleanup;
         }
-
-        type_op = NULL;
 
         if(_Py_IsImmutable(item)){
             continue;
@@ -294,7 +289,8 @@ PyObject* _Py_Freeze(PyObject* obj)
         _Py_SetImmutable(item);
 
         if(is_c_wrapper(item)) {
-            // C functions are not mutable, so we can skip them.
+            // C functions are not mutable
+            // Types are manually traversed
             continue;
         }
 
@@ -305,18 +301,40 @@ PyObject* _Py_Freeze(PyObject* obj)
             }
         }
 
-        traverse = type->tp_traverse;
-        if(traverse != NULL){
-            if(traverse(item, (visitproc)freeze_visit, frontier)){
-                result = NULL;
+        if(PyType_Check(item)){
+            PyTypeObject* type = (PyTypeObject*)item;
+            if(push(frontier, type->tp_dict))
+            {
+                result = PyErr_NoMemory();
+                goto cleanup;
+            }
+            if(push(frontier, type->tp_mro))
+            {
+                result = PyErr_NoMemory();
+                goto cleanup;
+            }
+            if(push(frontier, type->tp_bases))
+            {
+                result = PyErr_NoMemory();
+                goto cleanup;
+            }
+            if(push(frontier, _PyObject_CAST(type->tp_base)))
+            {
+                result = PyErr_NoMemory();
                 goto cleanup;
             }
         }
+        else
+        {
+            traverseproc traverse = Py_TYPE(item)->tp_traverse;
+            if(traverse != NULL){
+                if(traverse(item, (visitproc)freeze_visit, frontier)){
+                    result = NULL;
+                    goto cleanup;
+                }
+            }
 
-        type_op = _PyObject_CAST(item->ob_type);
-        if (!_Py_IsImmutable(type_op)){
-            if(push(frontier, type_op))
-            {
+            if(push(frontier, _PyObject_CAST(Py_TYPE(item)))){
                 result = PyErr_NoMemory();
                 goto cleanup;
             }

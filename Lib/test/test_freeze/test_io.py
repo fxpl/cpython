@@ -21,7 +21,7 @@ class StringIOTest(BaseNotFreezableTest):
 
 class TextWrapperTest(BaseNotFreezableTest):
     def __init__(self, *args, **kwargs):
-        handle = open('test_file.txt', 'w')
+        handle = open(__file__, 'r')
         super().__init__(*args, obj=handle, **kwargs)
 
     def tearDown(self):
@@ -30,7 +30,7 @@ class TextWrapperTest(BaseNotFreezableTest):
 
 class RawWrapperTest(BaseNotFreezableTest):
     def __init__(self, *args, **kwargs):
-        handle = open('test_file.txt', 'wb')
+        handle = open(__file__, 'rb')
         super().__init__(*args, obj=handle, **kwargs)
 
     def tearDown(self):
