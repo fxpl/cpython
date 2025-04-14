@@ -11,7 +11,6 @@
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_tuple.h"         // _PyTuple_FromArray()
 #include "pycore_ceval.h"         // _PyEval_Vector()
-#include "pycore_immutability.h"  // _PyFreeze()
 #include "pycore_dict.h"          // _PyDict_SetGlobalImmutable()
 
 #include "clinic/bltinmodule.c.h"
@@ -3164,6 +3163,7 @@ _PyBuiltin_Init(PyInterpreterState *interp)
     SETBUILTIN("filter",                &PyFilter_Type);
     SETBUILTIN("float",                 &PyFloat_Type);
     SETBUILTIN("frozenset",             &PyFrozenSet_Type);
+    SETBUILTIN("notfreezable",          &PyNotFreezable_Type);
     SETBUILTIN("property",              &PyProperty_Type);
     SETBUILTIN("int",                   &PyLong_Type);
     SETBUILTIN("list",                  &PyList_Type);

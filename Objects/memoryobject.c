@@ -99,6 +99,10 @@ _PyManagedBuffer_FromObject(PyObject *base, int flags)
         return NULL;
     }
 
+    if(_Py_IsImmutable(base)){
+        _Py_SetImmutable(mbuf);
+    }
+
     return (PyObject *)mbuf;
 }
 

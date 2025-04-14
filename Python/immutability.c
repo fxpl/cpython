@@ -5,7 +5,23 @@
 #include <stdio.h>
 #include "pycore_dict.h"
 #include "pycore_object.h"
-#include "pycore_immutability.h"
+
+
+PyDoc_STRVAR(notfreezable_doc,
+    "NotFreezable()\n\
+    \n\
+    Indicate that a type cannot be frozen.");
+
+
+PyTypeObject PyNotFreezable_Type = {
+    PyVarObject_HEAD_INIT(&PyType_Type, 0)
+    .tp_name = "NotFreezable",
+    .tp_doc = notfreezable_doc,
+    .tp_basicsize = sizeof(PyObject),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE | Py_TPFLAGS_BASETYPE,
+    .tp_new = PyType_GenericNew
+};
 
 
 static int push(PyObject* s, PyObject* item){
@@ -262,6 +278,13 @@ PyObject* _Py_Freeze(PyObject* obj)
         }
 
         type = Py_TYPE(item);
+
+        if(PyType_IsSubtype(type, &PyNotFreezable_Type)){
+            PyErr_SetString(PyExc_TypeError, "Cannot freeze a NotFreezable object");
+            result = NULL;
+            goto cleanup;
+        }
+
         type_op = NULL;
 
         if(_Py_IsImmutable(item)){
