@@ -3756,8 +3756,8 @@ module_exec(PyObject *mod)
     } while (0)
 
     CREATE_TYPE(mod, state->TaskStepMethWrapper_Type, &TaskStepMethWrapper_spec, NULL);
-    CREATE_TYPE(mod, state->FutureIterType, &FutureIter_spec, NULL);
-    CREATE_TYPE(mod, state->FutureType, &Future_spec, NULL);
+    CREATE_TYPE(mod, state->FutureIterType, &FutureIter_spec, &PyNotFreezable_Type);
+    CREATE_TYPE(mod, state->FutureType, &Future_spec, &PyNotFreezable_Type);
     CREATE_TYPE(mod, state->TaskType, &Task_spec, state->FutureType);
 
 #undef CREATE_TYPE
