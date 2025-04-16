@@ -482,15 +482,16 @@ class TestSubclass(unittest.TestCase):
 class TestImport(unittest.TestCase):
     def test_import(self):
         def f():
-            import sys
-            pass
+            # immutable objects are not allowed to import
+            # modules. This will result in an ImportError.
+            from . import mock
+            return mock.a
 
         freeze(f)
 
-        # The following should not fail, but we
-        # have removed __import__ from globals
-        # during freeze
-        f()
+        with self.assertRaises(ImportError):
+            f()
+
 
 class TestFunctionAttributes(unittest.TestCase):
     def test_function_attributes(self):
