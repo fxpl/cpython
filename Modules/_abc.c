@@ -542,6 +542,11 @@ _abc__abc_register_impl(PyObject *module, PyObject *self, PyObject *subclass)
     if (result < 0) {
         return NULL;
     }
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     _abc_data *impl = _get_impl(module, self);
     if (impl == NULL) {
         return NULL;
@@ -694,6 +699,11 @@ _abc__abc_subclasscheck_impl(PyObject *module, PyObject *self,
     state = get_abc_state(module);
     /* 2. Check negative cache; may have to invalidate. */
     if (impl->_abc_negative_cache_version < state->abc_invalidation_counter) {
+        if(!Py_CHECKWRITE(self)){
+            PyErr_WriteToImmutable(self);
+            goto end;
+        }
+
         /* Invalidate the negative cache. */
         if (impl->_abc_negative_cache != NULL &&
                 PySet_Clear(impl->_abc_negative_cache) < 0)
