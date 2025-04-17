@@ -2010,20 +2010,28 @@ zlib_exec(PyObject *mod)
 {
     zlibstate *state = get_zlib_state(mod);
 
+    // These types store a `z_stream` which is modified in basically
+    // every call. This prevents them from being immutable. However,
+    // it seems like some functions could be refactored to create the
+    // z_stream on demand, which would allow these types to be used
+    // even after being frozen.
+    //
+    // Removing the `PyNotFreezable_Type` type later shouldn't be a breaking
+    // change.
     state->Comptype = (PyTypeObject *)PyType_FromModuleAndSpec(
-        mod, &Comptype_spec, NULL);
+        mod, &Comptype_spec, (PyObject*)&PyNotFreezable_Type);
     if (state->Comptype == NULL) {
         return -1;
     }
 
     state->Decomptype = (PyTypeObject *)PyType_FromModuleAndSpec(
-        mod, &Decomptype_spec, NULL);
+        mod, &Decomptype_spec, (PyObject*)&PyNotFreezable_Type);
     if (state->Decomptype == NULL) {
         return -1;
     }
 
     state->ZlibDecompressorType = (PyTypeObject *)PyType_FromModuleAndSpec(
-        mod, &ZlibDecompressor_type_spec, NULL);
+        mod, &ZlibDecompressor_type_spec, (PyObject*)&PyNotFreezable_Type);
     if (state->ZlibDecompressorType == NULL) {
         return -1;
     }

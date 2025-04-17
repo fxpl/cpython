@@ -281,7 +281,11 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 
 // Check whether an object is writeable.
 // This check will always succeed during runtime finalization.
+#ifndef Py_LIMITED_API
 #define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || _Py_IsFinalizing()))
+#else
+#define Py_CHECKWRITE(op) ((op) && !_Py_IsImmutable(op))
+#endif
 #define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
 
 static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {

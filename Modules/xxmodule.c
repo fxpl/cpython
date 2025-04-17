@@ -79,6 +79,10 @@ Xxo_getattro(XxoObject *self, PyObject *name)
 static int
 Xxo_setattr(XxoObject *self, const char *name, PyObject *v)
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (self->x_attr == NULL) {
         self->x_attr = PyDict_New();
         if (self->x_attr == NULL)
