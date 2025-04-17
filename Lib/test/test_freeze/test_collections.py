@@ -1,6 +1,7 @@
-from collections import deque
+from collections import defaultdict, deque
 
 from . import BaseObjectTest
+
 
 class TestDeque(BaseObjectTest):
     class C:
@@ -69,3 +70,50 @@ class TestDeque(BaseObjectTest):
     def test_clear(self):
         with self.assertRaises(NotWritableError):
             self.obj.clear()
+
+    def test_iter(self):
+        it = iter(self.obj)
+        with self.assertRaises(TypeError):
+            freeze(it)
+
+    def test_reviter(self):
+        it = reversed(self.obj)
+        with self.assertRaises(TypeError):
+            freeze(it)
+
+
+class TestDefaultDict(BaseObjectTest):
+    def __init__(self, *args, **kwargs):
+        s = [('yellow', 1), ('blue', 2), ('yellow', 3), ('blue', 4), ('red', 1)]
+        obj = defaultdict(list)
+        for k, v in s:
+            obj[k].append(v)
+        BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
+
+    def test_set_item_exists(self):
+        with self.assertRaises(NotWritableError):
+            self.obj[1] = None
+
+    def test_set_item_new(self):
+        with self.assertRaises(NotWritableError):
+            self.obj["three"] = 5
+
+    def test_del_item(self):
+        with self.assertRaises(NotWritableError):
+            del self.obj[1]
+
+    def test_clear(self):
+        with self.assertRaises(NotWritableError):
+            self.obj.clear()
+
+    def test_pop(self):
+        with self.assertRaises(NotWritableError):
+            self.obj.pop(1)
+
+    def test_popitem(self):
+        with self.assertRaises(NotWritableError):
+            self.obj.popitem()
+
+    def test_update(self):
+        with self.assertRaises(NotWritableError):
+            self.obj.update({1: None})
