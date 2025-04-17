@@ -7,12 +7,8 @@ extern "C" {
 
 PyAPI_DATA(PyTypeObject) PyNotFreezable_Type;
 
-#ifndef Py_LIMITED_API
-#  define Py_CPYTHON_IMMUTABILITY_H
-#  include "cpython/immutability.h"
-#  undef Py_CPYTHON_IMMUTABILITY_H
-#endif
-
+PyAPI_FUNC(PyObject *) _Py_Freeze(PyObject*);
+#define Py_Freeze(op) _Py_Freeze(_PyObject_CAST(op))
 
 #ifdef __cplusplus
 }

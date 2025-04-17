@@ -5673,11 +5673,6 @@ _PyObject_ClearManagedDict(PyObject *obj)
 PyObject *
 PyObject_GenericGetDict(PyObject *obj, void *context)
 {
-    // TODO: Pyrona: This method does not change the representation in the frozen case.
-    // However, repeated calls to __dict__ on a frozen object will all create a new dict.
-    // Alternative designs
-    //  * Error on this case
-    //  * Introduce locking, and return the same dict.
     PyObject *dict;
     PyInterpreterState *interp = _PyInterpreterState_GET();
     PyTypeObject *tp = Py_TYPE(obj);
@@ -5690,7 +5685,9 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
                     interp, CACHED_KEYS(tp), values);
             if (dict != NULL) {
                 if (_Py_IsImmutable(obj)) {
-                    _Py_SetImmutable(dict);
+                    if(Py_Freeze(dict) == NULL){
+                        return NULL;
+                    }
                 }
                 else {
                     dorv_ptr->dict = dict;
@@ -5703,7 +5700,9 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
                 dictkeys_incref(CACHED_KEYS(tp));
                 dict = new_dict_with_shared_keys(interp, CACHED_KEYS(tp));
                 if (_Py_IsImmutable(obj)) {
-                    _Py_SetImmutable(dict);
+                    if(Py_Freeze(dict) == NULL){
+                        return NULL;
+                    }
                 }
                 else {
                     dorv_ptr->dict = dict;
@@ -5730,7 +5729,9 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
                 dict = PyDict_New();
             }
             if (_Py_IsImmutable(obj)) {
-                _Py_SetImmutable(dict);
+                if(Py_Freeze(dict) == NULL){
+                    return NULL;
+                }
             }
             else {
                 *dictptr = dict;

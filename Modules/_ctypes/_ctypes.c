@@ -111,7 +111,6 @@ bytes(cdata)
 
 #include "pycore_call.h"          // _PyObject_CallNoArgs()
 #include "pycore_ceval.h"         // _Py_EnterRecursiveCall()
-#include "pycore_object.h"        // _Py_SetImmutable()
 #include "structmember.h"         // PyMemberDef
 
 #include <ffi.h>
@@ -3017,7 +3016,10 @@ PyCData_FromBaseObj(PyObject *type, PyObject *base, Py_ssize_t index, char *adr)
     }
 
     if(base && _Py_IsImmutable(base)) {
-        _Py_SetImmutable(cmem);
+        if(Py_Freeze(cmem) == NULL){
+            Py_DECREF(cmem);
+            return NULL;
+        }
     }
 
     return (PyObject *)cmem;

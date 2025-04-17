@@ -100,7 +100,11 @@ _PyManagedBuffer_FromObject(PyObject *base, int flags)
     }
 
     if(_Py_IsImmutable(base)){
-        _Py_SetImmutable(mbuf);
+        if(Py_Freeze(mbuf) == NULL){
+            PyBuffer_Release(&mbuf->master);
+            Py_DECREF(mbuf);
+            return NULL;
+        }
     }
 
     return (PyObject *)mbuf;

@@ -104,6 +104,12 @@ static PyObject* shadow_function_globals(PyObject* op)
         goto nomemory;
     }
 
+    if(PyDict_SetItemString(shadow_globals, "__builtins__", shadow_builtins)){
+        Py_DECREF(shadow_builtins);
+        Py_DECREF(shadow_globals);
+        return NULL;
+    }
+
     _PyObject_ASSERT(f_ptr, PyCode_Check(f_ptr));
     f_code = (PyCodeObject*)f_ptr;
 
@@ -223,12 +229,106 @@ static int freeze_visit(PyObject* obj, void* frontier)
     return 0;
 }
 
+static PyObject* get_frozen_importlib(PyInterpreterState* interp)
+{
+    PyObject* frozen_importlib = NULL;
+    PyObject* interp_dict = PyInterpreterState_GetDict(interp);
+    if(interp_dict == NULL){
+        return NULL;
+    }
+
+    frozen_importlib = PyDict_GetItemString(interp_dict, "_frozen_importlib");
+    if(frozen_importlib != NULL){
+        return frozen_importlib;
+    }
+
+    frozen_importlib = PyImport_ImportModule("_frozen_importlib");
+    if(frozen_importlib == NULL){
+        return NULL;
+    }
+
+    if(PyDict_SetItemString(interp_dict, "_frozen_importlib", frozen_importlib)){
+        Py_DECREF(frozen_importlib);
+        return NULL;
+    }
+
+    Py_DECREF(frozen_importlib);
+    return frozen_importlib;
+}
+
+static PyObject* get_blocking_on(PyInterpreterState* interp)
+{
+    PyObject* frozen_importlib = NULL;
+    PyObject* blocking_on = NULL;
+    PyObject* interp_dict = PyInterpreterState_GetDict(interp);
+    if(interp_dict == NULL){
+        return NULL;
+    }
+
+    blocking_on = PyDict_GetItemString(interp_dict, "_blocking_on");
+    if(blocking_on != NULL){
+        return blocking_on;
+    }
+
+    frozen_importlib = get_frozen_importlib(interp);
+    if(frozen_importlib == NULL){
+        return NULL;
+    }
+
+    blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
+    if(blocking_on == NULL){
+        return NULL;
+    }
+
+    if(PyDict_SetItemString(interp_dict, "_blocking_on", blocking_on)){
+        Py_DECREF(blocking_on);
+        return NULL;
+    }
+
+    Py_DECREF(blocking_on);
+    return blocking_on;
+}
+
+static PyObject* get_module_locks(PyInterpreterState* interp)
+{
+    PyObject* frozen_importlib = NULL;
+    PyObject* module_locks = NULL;
+    PyObject* interp_dict = PyInterpreterState_GetDict(interp);
+    if(interp_dict == NULL){
+        return NULL;
+    }
+
+    module_locks = PyDict_GetItemString(interp_dict, "_module_locks");
+    if(module_locks != NULL){
+        return module_locks;
+    }
+
+    frozen_importlib = get_frozen_importlib(interp);
+    if(frozen_importlib == NULL){
+        return NULL;
+    }
+
+    module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
+    if(module_locks == NULL){
+        return NULL;
+    }
+
+    if(PyDict_SetItemString(interp_dict, "_module_locks", module_locks)){
+        Py_DECREF(module_locks);
+        return NULL;
+    }
+
+    Py_DECREF(module_locks);
+    return module_locks;
+}
+
+
 PyObject* _Py_Freeze(PyObject* obj)
 {
     PyObject* frontier = NULL;
-    PyObject* frozen_importlib = NULL;
     PyObject* blocking_on = NULL;
     PyObject* module_locks = NULL;
+    PyInterpreterState* interp = PyInterpreterState_Get();
     PyObject* result = Py_None;
 
     if(_Py_IsImmutable(obj)){
@@ -246,19 +346,13 @@ PyObject* _Py_Freeze(PyObject* obj)
         goto cleanup;
     }
 
-    frozen_importlib = PyImport_ImportModule("_frozen_importlib");
-    if(frozen_importlib == NULL){
-        result = NULL;
-        goto cleanup;
-    }
-
-    blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
+    blocking_on = get_blocking_on(interp);
     if(blocking_on == NULL){
         result = NULL;
         goto cleanup;
     }
 
-    module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
+    module_locks = get_module_locks(interp);
     if(module_locks == NULL){
         result = NULL;
         goto cleanup;
@@ -295,8 +389,7 @@ PyObject* _Py_Freeze(PyObject* obj)
         }
 
         if(PyFunction_Check(item)){
-            result = shadow_function_globals(item);
-            if(!Py_IsNone(result)){
+            if(shadow_function_globals(item) == NULL){
                 goto cleanup;
             }
         }
@@ -342,9 +435,6 @@ PyObject* _Py_Freeze(PyObject* obj)
     }
 
 cleanup:
-    Py_XDECREF(blocking_on);
-    Py_XDECREF(module_locks);
-    Py_XDECREF(frozen_importlib);
     Py_XDECREF(frontier);
 
     return result;
