@@ -540,7 +540,7 @@ _dbm_exec(PyObject *module)
 {
     _dbm_state *state = get_dbm_state(module);
     state->dbm_type = (PyTypeObject *)PyType_FromModuleAndSpec(module,
-                                                        &dbmtype_spec, NULL);
+                                                        &dbmtype_spec, (PyObject *)&PyNotFreezable_Type);
     if (state->dbm_type == NULL) {
         return -1;
     }

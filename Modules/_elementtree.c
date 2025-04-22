@@ -697,6 +697,16 @@ element_dealloc(ElementObject* self)
 
 /* -------------------------------------------------------------------- */
 
+/* macro for writable error checking */
+#define _CHECK_IS_WRITABLE(op)          \
+    if (!Py_CHECKWRITE(op)) {            \
+        PyErr_SetObject(                 \
+            PyExc_NotWritableError,      \
+            (PyObject *)(op));                       \
+        return NULL;                     \
+    }
+
+
 /*[clinic input]
 _elementtree.Element.append
 
@@ -711,6 +721,8 @@ _elementtree_Element_append_impl(ElementObject *self, PyTypeObject *cls,
                                  PyObject *subelement)
 /*[clinic end generated code: output=d00923711ea317fc input=8baf92679f9717b8]*/
 {
+    _CHECK_IS_WRITABLE(self);
+
     elementtreestate *st = get_elementtree_state_by_cls(cls);
     if (element_add_subelement(st, self, subelement) < 0)
         return NULL;
@@ -727,6 +739,8 @@ static PyObject *
 _elementtree_Element_clear_impl(ElementObject *self)
 /*[clinic end generated code: output=8bcd7a51f94cfff6 input=3c719ff94bf45dd6]*/
 {
+    _CHECK_IS_WRITABLE(self);
+    
     clear_extra(self);
 
     _set_joined_ptr(&self->text, Py_NewRef(Py_None));
@@ -995,6 +1009,7 @@ _elementtree_Element___getstate___impl(ElementObject *self)
                          PICKLED_TAIL, JOIN_OBJ(self->tail));
 }
 
+
 static PyObject *
 element_setstate_from_attributes(elementtreestate *st,
                                  ElementObject *self,
@@ -1006,6 +1021,8 @@ element_setstate_from_attributes(elementtreestate *st,
 {
     Py_ssize_t i, nchildren;
     ElementObjectExtra *oldextra = NULL;
+
+    _CHECK_IS_WRITABLE(self);
 
     if (!tag) {
         PyErr_SetString(PyExc_TypeError, "tag may not be NULL");
@@ -1095,6 +1112,8 @@ element_setstate_from_Python(elementtreestate *st, ElementObject *self,
     PyObject *args;
     PyObject *tag, *attrib, *text, *tail, *children;
     PyObject *retval;
+
+    _CHECK_IS_WRITABLE(self);
 
     tag = attrib = text = tail = children = NULL;
     args = PyTuple_New(0);
@@ -1209,6 +1228,8 @@ _elementtree_Element_extend_impl(ElementObject *self, PyTypeObject *cls,
 {
     PyObject* seq;
     Py_ssize_t i;
+
+    _CHECK_IS_WRITABLE(self);
 
     seq = PySequence_Fast(elements, "");
     if (!seq) {
@@ -1529,6 +1550,8 @@ _elementtree_Element_insert_impl(ElementObject *self, Py_ssize_t index,
 {
     Py_ssize_t i;
 
+    _CHECK_IS_WRITABLE(self);
+
     if (!self->extra) {
         if (create_extra(self, NULL) < 0)
             return NULL;
@@ -1639,6 +1662,8 @@ _elementtree_Element_remove_impl(ElementObject *self, PyObject *subelement)
     int rc;
     PyObject *found;
 
+    _CHECK_IS_WRITABLE(self);
+
     if (!self->extra) {
         /* element has no children, so raise exception */
         PyErr_SetString(
@@ -1715,6 +1740,8 @@ _elementtree_Element_set_impl(ElementObject *self, PyObject *key,
 {
     PyObject* attrib;
 
+    _CHECK_IS_WRITABLE(self);
+
     if (!self->extra) {
         if (create_extra(self, NULL) < 0)
             return NULL;
@@ -1730,12 +1757,23 @@ _elementtree_Element_set_impl(ElementObject *self, PyObject *key,
     Py_RETURN_NONE;
 }
 
+/* macro for writable validation */
+#define _VALIDATE_WRITABLE(op)          \
+    if (!Py_CHECKWRITE(op)) {            \
+        PyErr_SetObject(                 \
+            PyExc_NotWritableError,      \
+            (PyObject *)((op)));                       \
+        return -1;                     \
+    }
+
 static int
 element_setitem(PyObject* self_, Py_ssize_t index, PyObject* item)
 {
     ElementObject* self = (ElementObject*) self_;
     Py_ssize_t i;
     PyObject* old;
+
+    _VALIDATE_WRITABLE(self);
 
     if (!self->extra || index < 0 || index >= self->extra->length) {
         PyErr_SetString(
@@ -1821,6 +1859,8 @@ static int
 element_ass_subscr(PyObject* self_, PyObject* item, PyObject* value)
 {
     ElementObject* self = (ElementObject*) self_;
+
+    _VALIDATE_WRITABLE(self);
 
     if (PyIndex_Check(item)) {
         Py_ssize_t i = PyNumber_AsSsize_t(item, PyExc_IndexError);
@@ -2049,6 +2089,7 @@ element_attrib_getter(ElementObject *self, void *closure)
 static int
 element_tag_setter(ElementObject *self, PyObject *value, void *closure)
 {
+    _VALIDATE_WRITABLE(self);
     _VALIDATE_ATTR_VALUE(value);
     Py_SETREF(self->tag, Py_NewRef(value));
     return 0;
@@ -2057,6 +2098,7 @@ element_tag_setter(ElementObject *self, PyObject *value, void *closure)
 static int
 element_text_setter(ElementObject *self, PyObject *value, void *closure)
 {
+    _VALIDATE_WRITABLE(self);
     _VALIDATE_ATTR_VALUE(value);
     _set_joined_ptr(&self->text, Py_NewRef(value));
     return 0;
@@ -2065,6 +2107,7 @@ element_text_setter(ElementObject *self, PyObject *value, void *closure)
 static int
 element_tail_setter(ElementObject *self, PyObject *value, void *closure)
 {
+    _VALIDATE_WRITABLE(self);
     _VALIDATE_ATTR_VALUE(value);
     _set_joined_ptr(&self->tail, Py_NewRef(value));
     return 0;
@@ -2073,6 +2116,7 @@ element_tail_setter(ElementObject *self, PyObject *value, void *closure)
 static int
 element_attrib_setter(ElementObject *self, PyObject *value, void *closure)
 {
+    _VALIDATE_WRITABLE(self);
     _VALIDATE_ATTR_VALUE(value);
     if (!PyDict_Check(value)) {
         PyErr_Format(PyExc_TypeError,
@@ -2618,6 +2662,7 @@ treebuilder_flush_data(TreeBuilderObject* self)
     if (!self->data) {
         return 0;
     }
+
     elementtreestate *st = self->state;
     if (!self->last_for_tail) {
         PyObject *element = self->last;
@@ -4315,15 +4360,15 @@ static PyMethodDef _functions[] = {
     {NULL, NULL}
 };
 
-#define CREATE_TYPE(module, type, spec) \
-do {                                                                     \
-    if (type != NULL) {                                                  \
-        break;                                                           \
-    }                                                                    \
-    type = (PyTypeObject *)PyType_FromModuleAndSpec(module, spec, NULL); \
-    if (type == NULL) {                                                  \
-        goto error;                                                      \
-    }                                                                    \
+#define CREATE_TYPE(module, type, spec, base) \
+do {                                                                                  \
+    if (type != NULL) {                                                               \
+        break;                                                                        \
+    }                                                                                 \
+    type = (PyTypeObject *)PyType_FromModuleAndSpec(module, spec, (PyObject *)base);  \
+    if (type == NULL) {                                                               \
+        goto error;                                                                   \
+    }                                                                                 \
 } while (0)
 
 static int
@@ -4332,10 +4377,10 @@ module_exec(PyObject *m)
     elementtreestate *st = get_elementtree_state(m);
 
     /* Initialize object types */
-    CREATE_TYPE(m, st->ElementIter_Type, &elementiter_spec);
-    CREATE_TYPE(m, st->TreeBuilder_Type, &treebuilder_spec);
-    CREATE_TYPE(m, st->Element_Type, &element_spec);
-    CREATE_TYPE(m, st->XMLParser_Type, &xmlparser_spec);
+    CREATE_TYPE(m, st->ElementIter_Type, &elementiter_spec, &PyNotFreezable_Type);
+    CREATE_TYPE(m, st->TreeBuilder_Type, &treebuilder_spec, &PyNotFreezable_Type);
+    CREATE_TYPE(m, st->Element_Type, &element_spec, NULL);
+    CREATE_TYPE(m, st->XMLParser_Type, &xmlparser_spec, &PyNotFreezable_Type);
 
     st->deepcopy_obj = _PyImport_GetModuleAttrString("copy", "deepcopy");
     if (st->deepcopy_obj == NULL) {
