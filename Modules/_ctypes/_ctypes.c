@@ -3016,7 +3016,7 @@ PyCData_FromBaseObj(PyObject *type, PyObject *base, Py_ssize_t index, char *adr)
     }
 
     if(base && _Py_IsImmutable(base)) {
-        if(Py_Freeze(cmem) == NULL){
+        if(_PyImmutability_Freeze(_PyObject_CAST(cmem)) == NULL){
             Py_DECREF(cmem);
             return NULL;
         }

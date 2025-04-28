@@ -121,7 +121,6 @@ PyAPI_DATA(PyObject *) PyExc_UnicodeDecodeError;
 PyAPI_DATA(PyObject *) PyExc_UnicodeTranslateError;
 PyAPI_DATA(PyObject *) PyExc_ValueError;
 PyAPI_DATA(PyObject *) PyExc_ZeroDivisionError;
-PyAPI_DATA(PyObject *) PyExc_NotWritableError;
 
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x03030000
 PyAPI_DATA(PyObject *) PyExc_BlockingIOError;
@@ -169,6 +168,8 @@ PyAPI_DATA(PyObject *) PyExc_ResourceWarning;
 PyAPI_FUNC(int) PyErr_BadArgument(void);
 PyAPI_FUNC(PyObject *) PyErr_NoMemory(void);
 PyAPI_FUNC(PyObject *) PyErr_SetFromErrno(PyObject *);
+PyAPI_FUNC(PyObject *) _PyErr_WriteToImmutable(PyObject *);
+#define PyErr_WriteToImmutable(op) _PyErr_WriteToImmutable(_PyObject_CAST(op))
 PyAPI_FUNC(PyObject *) PyErr_SetFromErrnoWithFilenameObject(
     PyObject *, PyObject *);
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 >= 0x03040000

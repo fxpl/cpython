@@ -1,6 +1,7 @@
 import os
 from test.support import load_package_tests
 import unittest
+from immutable import freeze, isfrozen, NotFreezable
 
 
 def load_tests(*args):
@@ -16,18 +17,18 @@ class BaseObjectTest(unittest.TestCase):
         freeze(self.obj)
 
     def test_immutable(self):
-        self.assertTrue(isimmutable(self.obj))
+        self.assertTrue(isfrozen(self.obj))
 
     def test_add_attribute(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.new_attribute = 'value'
 
     def test_type_immutable(self):
-        self.assertTrue(isimmutable(type(self.obj)))
+        self.assertTrue(isfrozen(type(self.obj)))
 
 
 class BaseNotFreezableTest(unittest.TestCase):
-    def __init__(self, *args, obj=notfreezable(), **kwargs):
+    def __init__(self, *args, obj=NotFreezable(), **kwargs):
         unittest.TestCase.__init__(self, *args, **kwargs)
         self.obj = obj
 

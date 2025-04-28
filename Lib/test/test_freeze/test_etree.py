@@ -21,31 +21,31 @@ class TestElement(BaseObjectTest):
         super().__init__(*args, obj=obj, **kwargs)
 
     def test_set(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.set("key", "value")
 
     def test_setitem(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj["key"] = "value"
 
     def test_delitem(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             del self.obj["key"]
 
     def test_clear(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.clear()
 
     def test_append(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.append(Element("child"))
 
     def test_insert(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.insert(0, Element("child"))
 
     def test_remove(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.remove(Element("child"))
 
     def test_iter(self):

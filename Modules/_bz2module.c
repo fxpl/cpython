@@ -753,7 +753,7 @@ _bz2_exec(PyObject *module)
 {
     _bz2_state *state = get_module_state(module);
     state->bz2_compressor_type = (PyTypeObject *)PyType_FromModuleAndSpec(module,
-                                                            &bz2_compressor_type_spec, (PyObject *)&PyNotFreezable_Type);
+                                                            &bz2_compressor_type_spec, NULL);
     if (state->bz2_compressor_type == NULL) {
         return -1;
     }
@@ -762,7 +762,7 @@ _bz2_exec(PyObject *module)
     }
 
     state->bz2_decompressor_type = (PyTypeObject *)PyType_FromModuleAndSpec(module,
-                                                         &bz2_decompressor_type_spec, (PyObject *)&PyNotFreezable_Type);
+                                                         &bz2_decompressor_type_spec, NULL);
     if (state->bz2_decompressor_type == NULL) {
         return -1;
     }

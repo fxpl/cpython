@@ -34,6 +34,7 @@
 @MODULE__CONTEXTVARS_TRUE@_contextvars _contextvarsmodule.c
 @MODULE__CSV_TRUE@_csv _csv.c
 @MODULE__HEAPQ_TRUE@_heapq _heapqmodule.c
+@MODULE_IMMUTABLE_TRUE@immutable immutablemodule.c
 @MODULE__JSON_TRUE@_json _json.c
 @MODULE__LSPROF_TRUE@_lsprof _lsprof.c rotatingtree.c
 @MODULE__OPCODE_TRUE@_opcode _opcode.c

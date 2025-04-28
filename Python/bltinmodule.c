@@ -11,7 +11,6 @@
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_tuple.h"         // _PyTuple_FromArray()
 #include "pycore_ceval.h"         // _PyEval_Vector()
-#include "pycore_dict.h"          // _PyDict_SetGlobalImmutable()
 
 #include "clinic/bltinmodule.c.h"
 
@@ -2738,40 +2737,6 @@ builtin_issubclass_impl(PyObject *module, PyObject *cls,
     return PyBool_FromLong(retval);
 }
 
-/*[clinic input]
-isimmutable as builtin_isimmutable
-
-    obj: object
-    /
-
-Return whether 'obj' is immutable.
-[clinic start generated code]*/
-
-static PyObject *
-builtin_isimmutable(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=80c746a3bd7adb46 input=15c0c9d2da47bc15]*/
-{
-    return PyBool_FromLong(_Py_IsImmutable(obj));
-}
-
-
-/*[clinic input]
-freeze as builtin_freeze
-
-    obj: object
-    /
-
-Make 'obj' and its entire reachable object graph immutable.
-[clinic start generated code]*/
-
-static PyObject *
-builtin_freeze(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=c02caad61e252698 input=81af120172984a86]*/
-{
-    return Py_Freeze(obj);
-}
-
-
 typedef struct {
     PyObject_HEAD
     Py_ssize_t tuplesize;
@@ -3070,8 +3035,6 @@ static PyMethodDef builtin_methods[] = {
     BUILTIN_INPUT_METHODDEF
     BUILTIN_ISINSTANCE_METHODDEF
     BUILTIN_ISSUBCLASS_METHODDEF
-    BUILTIN_ISIMMUTABLE_METHODDEF
-    BUILTIN_FREEZE_METHODDEF
     BUILTIN_ITER_METHODDEF
     BUILTIN_AITER_METHODDEF
     BUILTIN_LEN_METHODDEF
@@ -3163,7 +3126,6 @@ _PyBuiltin_Init(PyInterpreterState *interp)
     SETBUILTIN("filter",                &PyFilter_Type);
     SETBUILTIN("float",                 &PyFloat_Type);
     SETBUILTIN("frozenset",             &PyFrozenSet_Type);
-    SETBUILTIN("notfreezable",          &PyNotFreezable_Type);
     SETBUILTIN("property",              &PyProperty_Type);
     SETBUILTIN("int",                   &PyLong_Type);
     SETBUILTIN("list",                  &PyList_Type);

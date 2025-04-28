@@ -5,10 +5,13 @@
 extern "C" {
 #endif
 
-PyAPI_DATA(PyTypeObject) PyNotFreezable_Type;
 
-PyAPI_FUNC(PyObject *) _Py_Freeze(PyObject*);
-#define Py_Freeze(op) _Py_Freeze(_PyObject_CAST(op))
+#ifndef Py_LIMITED_API
+#  define Py_CPYTHON_IMMUTABLE_H
+#  include "cpython/immutability.h"
+#  undef Py_CPYTHON_IMMUTABLE_H
+#endif
+
 
 #ifdef __cplusplus
 }

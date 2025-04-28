@@ -8,13 +8,13 @@ class TestCharArray(BaseObjectTest):
         super().__init__(*args, obj=ctypes.create_string_buffer(b"hello"), **kwargs)
 
     def test_raw(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.raw = b"world"
 
         self.assertEqual(self.obj.raw, b"hello\x00")
 
     def test_value(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.value = b"world"
 
         self.assertEqual(self.obj.value, b"hello")
@@ -25,7 +25,7 @@ class TestWCharArray(BaseObjectTest):
         super().__init__(*args, obj=ctypes.create_unicode_buffer("hello"), **kwargs)
 
     def test_value(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.value = "world"
 
         self.assertEqual(self.obj.value, "hello")
@@ -39,7 +39,7 @@ class TestStructure(BaseObjectTest):
         super().__init__(*args, obj=TestStructure.POINT(1, 2), **kwargs)
 
     def test_modify_field(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.x = 3
 
         self.assertEqual(self.obj.x, 1)
@@ -59,7 +59,7 @@ class TestPointer(BaseObjectTest):
 
     def test_set_contents(self):
         b = TestPointer.POINT(3, 4)
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.contents = b
 
         self.assertEqual(self.obj.contents.x, self.a.x)
@@ -79,19 +79,19 @@ class TestArray(BaseObjectTest):
         self.assertTrue(isimmutable(TestArray.POINT))
 
     def test_modify_item(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj[0].x = 1
 
         self.assertEqual(self.obj[0].x, 0)
 
     def test_ass_item(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj[0] = TestArray.POINT(1, 2)
 
     def test_ass_subscript(self):
         TwoPointsArrayType = TestArray.POINT * 2
         a = TwoPointsArrayType()
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj[:2] = a
 
 
@@ -110,19 +110,19 @@ class TestUnion(BaseObjectTest):
         super().__init__(*args, obj=a, **kwargs)
 
     def test_assign_part(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.parts.high = 0
 
         self.assertEqual(self.obj.parts.high, 0xFF)
 
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.parts.low = 0
 
         self.assertEqual(self.obj.parts.low, 0xFF)
         self.assertEqual(self.obj.value, 0x00FF00FF)
 
     def test_assign_value(self):
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.obj.value = 0x00FF00FF
 
         self.assertEqual(self.obj.value, 0x00FF00FF)

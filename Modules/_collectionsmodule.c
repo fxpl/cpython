@@ -2613,8 +2613,8 @@ collections_exec(PyObject *module) {
     collections_state *state = get_module_state(module);
     ADD_TYPE(module, &deque_spec, state->deque_type, NULL);
     ADD_TYPE(module, &defdict_spec, state->defdict_type, &PyDict_Type);
-    ADD_TYPE(module, &dequeiter_spec, state->dequeiter_type, &PyNotFreezable_Type);
-    ADD_TYPE(module, &dequereviter_spec, state->dequereviter_type, &PyNotFreezable_Type);
+    ADD_TYPE(module, &dequeiter_spec, state->dequeiter_type, NULL);
+    ADD_TYPE(module, &dequereviter_spec, state->dequereviter_type, NULL);
     ADD_TYPE(module, &tuplegetter_spec, state->tuplegetter_type, NULL);
 
     if (PyModule_AddType(module, &PyODict_Type) < 0) {

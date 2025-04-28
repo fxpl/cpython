@@ -25,6 +25,7 @@ extern "C" {
 #include "pycore_gc.h"            // struct _gc_runtime_state
 #include "pycore_global_objects.h"  // struct _Py_interp_static_objects
 #include "pycore_import.h"        // struct _import_state
+#include "pycore_immutability.h"    // struct _immutability_runtime_state
 #include "pycore_instruments.h"   // _PY_MONITORING_EVENTS
 #include "pycore_list.h"          // struct _Py_list_state
 #include "pycore_object_state.h"   // struct _py_object_state
@@ -176,6 +177,7 @@ struct _is {
     struct _Py_async_gen_state async_gen;
     struct _Py_context_state context;
     struct _Py_exc_state exc_state;
+    struct _Py_immutability_state immutability;
 
     struct ast_state ast;
     struct types_state types;

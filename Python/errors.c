@@ -1951,15 +1951,15 @@ PyErr_ProgramTextObject(PyObject *filename, int lineno)
 }
 
 PyObject *
-_PyErr_WriteToImmutable(const char* filename, int lineno, PyObject* obj)
+_PyErr_WriteToImmutable(PyObject* obj)
 {
     PyObject* string;
     PyThreadState *tstate = _PyThreadState_GET();
     if (!_PyErr_Occurred(tstate)) {
-        string = PyUnicode_FromFormat("object of type %s is immutable at %s:%d",
-                                      obj->ob_type->tp_name, filename, lineno);
+        string = PyUnicode_FromFormat("object of type %s is immutable",
+                                      obj->ob_type->tp_name);
         if (string != NULL) {
-            _PyErr_SetObject(tstate, PyExc_NotWritableError, string);
+            _PyErr_SetObject(tstate, PyExc_TypeError, string);
             Py_DECREF(string);
         }
     }

@@ -264,7 +264,6 @@ SYMBOL_NAMES = (
     "PyExc_NameError",
     "PyExc_NotADirectoryError",
     "PyExc_NotImplementedError",
-    "PyExc_NotWritableError",
     "PyExc_OSError",
     "PyExc_OverflowError",
     "PyExc_PendingDeprecationWarning",

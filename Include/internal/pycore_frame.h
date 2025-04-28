@@ -198,7 +198,7 @@ _PyFrame_MakeAndSetFrameObject(_PyInterpreterFrame *frame);
 
 /* Gets the PyFrameObject for this frame, lazily
  * creating it if necessary.
- * Returns a borrowed reference */
+ * Returns a borrowed referennce */
 static inline PyFrameObject *
 _PyFrame_GetFrameObject(_PyInterpreterFrame *frame)
 {

@@ -215,7 +215,6 @@ nitpick_ignore += [
     ('c:data', 'PyExc_UnicodeError'),
     ('c:data', 'PyExc_UnicodeTranslateError'),
     ('c:data', 'PyExc_ValueError'),
-    ('c:data', 'PyExc_NotWritableError'),
     ('c:data', 'PyExc_ZeroDivisionError'),
     # C API: Standard Python warning classes
     ('c:data', 'PyExc_BytesWarning'),

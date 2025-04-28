@@ -701,7 +701,7 @@ element_dealloc(ElementObject* self)
 #define _CHECK_IS_WRITABLE(op)          \
     if (!Py_CHECKWRITE(op)) {            \
         PyErr_SetObject(                 \
-            PyExc_NotWritableError,      \
+            PyExc_TypeError,      \
             (PyObject *)(op));                       \
         return NULL;                     \
     }
@@ -740,7 +740,7 @@ _elementtree_Element_clear_impl(ElementObject *self)
 /*[clinic end generated code: output=8bcd7a51f94cfff6 input=3c719ff94bf45dd6]*/
 {
     _CHECK_IS_WRITABLE(self);
-    
+
     clear_extra(self);
 
     _set_joined_ptr(&self->text, Py_NewRef(Py_None));
@@ -1761,7 +1761,7 @@ _elementtree_Element_set_impl(ElementObject *self, PyObject *key,
 #define _VALIDATE_WRITABLE(op)          \
     if (!Py_CHECKWRITE(op)) {            \
         PyErr_SetObject(                 \
-            PyExc_NotWritableError,      \
+            PyExc_TypeError,      \
             (PyObject *)((op)));                       \
         return -1;                     \
     }
@@ -4377,10 +4377,10 @@ module_exec(PyObject *m)
     elementtreestate *st = get_elementtree_state(m);
 
     /* Initialize object types */
-    CREATE_TYPE(m, st->ElementIter_Type, &elementiter_spec, &PyNotFreezable_Type);
-    CREATE_TYPE(m, st->TreeBuilder_Type, &treebuilder_spec, &PyNotFreezable_Type);
+    CREATE_TYPE(m, st->ElementIter_Type, &elementiter_spec, NULL);
+    CREATE_TYPE(m, st->TreeBuilder_Type, &treebuilder_spec, NULL);
     CREATE_TYPE(m, st->Element_Type, &element_spec, NULL);
-    CREATE_TYPE(m, st->XMLParser_Type, &xmlparser_spec, &PyNotFreezable_Type);
+    CREATE_TYPE(m, st->XMLParser_Type, &xmlparser_spec, NULL);
 
     st->deepcopy_obj = _PyImport_GetModuleAttrString("copy", "deepcopy");
     if (st->deepcopy_obj == NULL) {

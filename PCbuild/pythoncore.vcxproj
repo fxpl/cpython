@@ -235,6 +235,7 @@
     <ClInclude Include="..\Include\internal\pycore_hamt.h" />
     <ClInclude Include="..\Include\internal\pycore_hashtable.h" />
     <ClInclude Include="..\Include\internal\pycore_import.h" />
+    <ClInclude Include="..\Include\internal\pycore_immutability.h" />
     <ClInclude Include="..\Include\internal\pycore_initconfig.h" />
     <ClInclude Include="..\Include\internal\pycore_interp.h" />
     <ClInclude Include="..\Include\internal\pycore_intrinsics.h" />
@@ -408,6 +409,7 @@
     <ClCompile Include="..\Modules\faulthandler.c" />
     <ClCompile Include="..\Modules\gcmodule.c" />
     <ClCompile Include="..\Modules\getbuildinfo.c" />
+    <ClCompile Include="..\Modules\immutablemodule.c" />
     <ClCompile Include="..\Modules\itertoolsmodule.c" />
     <ClCompile Include="..\Modules\main.c" />
     <ClCompile Include="..\Modules\mathmodule.c" />

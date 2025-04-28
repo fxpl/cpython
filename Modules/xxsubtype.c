@@ -1,6 +1,5 @@
 #include "Python.h"
 #include "structmember.h"         // PyMemberDef
-#include "pyerrors.h"             // PyErr_WriteToImmutable
 
 PyDoc_STRVAR(xxsubtype__doc__,
 "xxsubtype is an example module showing how to subtype builtin types from C.\n"
@@ -36,10 +35,6 @@ static PyObject *
 spamlist_setstate(spamlistobject *self, PyObject *args)
 {
     int state;
-
-    if(!Py_CHECKWRITE(self)){
-        return PyErr_WriteToImmutable(self);
-    }
 
     if (!PyArg_ParseTuple(args, "i:setstate", &state))
         return NULL;
@@ -161,10 +156,6 @@ static PyObject *
 spamdict_setstate(spamdictobject *self, PyObject *args)
 {
     int state;
-
-    if(!Py_CHECKWRITE(self)){
-        return PyErr_WriteToImmutable(self);
-    }
 
     if (!PyArg_ParseTuple(args, "i:setstate", &state))
         return NULL;

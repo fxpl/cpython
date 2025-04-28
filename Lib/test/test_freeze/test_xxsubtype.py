@@ -11,14 +11,5 @@ class xxsubtypelib(unittest.TestCase):
 
         freeze(a)
 
-        with self.assertRaises(NotWritableError):
-            a.setstate(17)
-
-    def test_spamdict_setstate(self):
-        import xxsubtype as spam
-        a = spam.spamdict()
-
-        freeze(a)
-
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             a.setstate(17)

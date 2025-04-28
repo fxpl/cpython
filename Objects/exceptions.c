@@ -3430,11 +3430,6 @@ PyObject *PyExc_MemoryError = (PyObject *) &_PyExc_MemoryError;
  */
 SimpleExtendsException(PyExc_Exception, BufferError, "Buffer error.");
 
-/*
- *    NotWritableError extends Exception
- */
-SimpleExtendsException(PyExc_Exception, NotWritableError, "Object is not writeable.");
-
 
 /* Warning category docstrings */
 
@@ -3620,7 +3615,6 @@ static struct static_exception static_exceptions[] = {
     ITEM(SystemError),
     ITEM(TypeError),
     ITEM(ValueError),
-    ITEM(NotWritableError),
     ITEM(Warning),
 
     // Level 4: ArithmeticError(Exception) subclasses

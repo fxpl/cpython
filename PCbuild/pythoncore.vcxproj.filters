@@ -465,7 +465,7 @@
     <ClInclude Include="..\Include\cpython\genobject.h">
       <Filter>Include</Filter>
     </ClInclude>
-    <ClInclude Include="..\Include\cpython\immutability.h">
+      <ClInclude Include="..\Include\cpython\immutability.h">
       <Filter>Include\cpython</Filter>
     </ClInclude>
     <ClInclude Include="..\Include\cpython\interpreteridobject.h">
@@ -607,6 +607,9 @@
       <Filter>Include\internal</Filter>
     </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_import.h">
+      <Filter>Include\internal</Filter>
+    </ClInclude>
+    <ClInclude Include="..\Include\internal\pycore_immutability.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_initconfig.h">
@@ -864,6 +867,9 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\gcmodule.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Modules\immutablemodule.c" >
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\itertoolsmodule.c">

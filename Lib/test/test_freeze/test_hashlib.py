@@ -7,12 +7,12 @@ class TestHashlib(unittest.TestCase):
         h = blake2b(digest_size=32)
         h.update(b'Hello world')
         freeze(h)
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             h.update(b'!')
 
     def test_blake2s(self):
         h = blake2s(digest_size=32)
         h.update(b'Hello world')
         freeze(h)
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             h.update(b'!')

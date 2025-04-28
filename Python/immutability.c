@@ -3,8 +3,8 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include "pycore_dict.h"
 #include "pycore_object.h"
+#include "pycore_immutability.h"
 
 
 PyDoc_STRVAR(notfreezable_doc,
@@ -15,7 +15,7 @@ PyDoc_STRVAR(notfreezable_doc,
 
 PyTypeObject PyNotFreezable_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
-    .tp_name = "notfreezable",
+    .tp_name = "NotFreezable",
     .tp_doc = notfreezable_doc,
     .tp_basicsize = sizeof(PyObject),
     .tp_itemsize = 0,
@@ -229,107 +229,146 @@ static int freeze_visit(PyObject* obj, void* frontier)
     return 0;
 }
 
-static PyObject* get_frozen_importlib(PyInterpreterState* interp)
+static bool can_freeze(PyTypeObject* type, PyObject* freezable_types)
 {
-    PyObject* frozen_importlib = NULL;
-    PyObject* interp_dict = PyInterpreterState_GetDict(interp);
-    if(interp_dict == NULL){
-        return NULL;
+    PyObject* type_op = _PyObject_CAST(type);
+    if(_Py_IsImmutable(type_op)){
+        return true;
     }
 
-    frozen_importlib = PyDict_GetItemString(interp_dict, "_frozen_importlib");
-    if(frozen_importlib != NULL){
-        return frozen_importlib;
+    if(type == &PyType_Type ||
+       type == &PyBaseObject_Type ||
+       type == &PyFunction_Type ||
+       type == &_PyNone_Type ||
+       type == &PyBool_Type ||
+       type == &PyLong_Type ||
+       type == &PyFloat_Type ||
+       type == &PyComplex_Type ||
+       type == &PyBytes_Type ||
+       type == &PyUnicode_Type ||
+       type == &PyTuple_Type ||
+       type == &PyList_Type ||
+       type == &PyDict_Type ||
+       type == &PySet_Type ||
+       type == &PyMemoryView_Type ||
+       type == &PyByteArray_Type ||
+       type == &PyRange_Type ||
+       type == &PyGetSetDescr_Type ||
+       type == &PyMemberDescr_Type ||
+       type == &PyProperty_Type ||
+       type == &PyWrapperDescr_Type ||
+       type == &PyMethodDescr_Type ||
+       type == &PyMethod_Type ||
+       type == &PyCFunction_Type ||
+       type == &PyCapsule_Type ||
+       type == &PyCode_Type ||
+       type == &PyCell_Type ||
+       type == &PyFrame_Type ||
+       type == &_PyWeakref_RefType)
+    {
+        return true;
     }
+
+    if(type == &PyNotFreezable_Type || PyType_IsSubtype(type, &PyNotFreezable_Type)){
+        PyErr_SetString(PyExc_TypeError, "Cannot freeze NotFreezable type");
+        return false;
+    }
+
+    if(freezable_types == NULL){
+        return false;
+    }
+
+    type_op = _PyObject_CAST(type);
+    if (PySet_Contains(freezable_types, type_op) == 1) {
+        return true;
+    }
+
+    if(Py_IsFalse(_PyType_UsesDefaultSlots(type))){
+        return false;
+    }
+
+    return true;
+}
+
+
+static int init_state(struct _Py_immutability_state *state)
+{
+    PyObject* frozen_importlib = NULL;
 
     frozen_importlib = PyImport_ImportModule("_frozen_importlib");
     if(frozen_importlib == NULL){
-        return NULL;
+        return -1;
     }
 
-    if(PyDict_SetItemString(interp_dict, "_frozen_importlib", frozen_importlib)){
+    state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
+    if(state->module_locks == NULL){
         Py_DECREF(frozen_importlib);
-        return NULL;
+        return -1;
     }
 
-    Py_DECREF(frozen_importlib);
-    return frozen_importlib;
+    state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
+    if(state->blocking_on == NULL){
+        Py_DECREF(frozen_importlib);
+        return -1;
+    }
+
+    state->freezable_types = PySet_New(NULL);
+    if(state->freezable_types == NULL){
+        Py_DECREF(frozen_importlib);
+        return -1;
+    }
+
+    if(PyDict_SetItemString(PyModule_GetDict(frozen_importlib), "_freezable_types", state->freezable_types)){
+        Py_DECREF(frozen_importlib);
+        return -1;
+    }
+
+    return 0;
 }
 
-static PyObject* get_blocking_on(PyInterpreterState* interp)
+static struct _Py_immutability_state* get_immutable_state(PyObject* module)
 {
-    PyObject* frozen_importlib = NULL;
-    PyObject* blocking_on = NULL;
-    PyObject* interp_dict = PyInterpreterState_GetDict(interp);
-    if(interp_dict == NULL){
-        return NULL;
+    PyInterpreterState* interp = PyInterpreterState_Get();
+    struct _Py_immutability_state *state = &interp->immutability;
+    if(state->freezable_types == NULL){
+        if(init_state(state) == -1){
+            return NULL;
+        }
     }
 
-    blocking_on = PyDict_GetItemString(interp_dict, "_blocking_on");
-    if(blocking_on != NULL){
-        return blocking_on;
-    }
-
-    frozen_importlib = get_frozen_importlib(interp);
-    if(frozen_importlib == NULL){
-        return NULL;
-    }
-
-    blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
-    if(blocking_on == NULL){
-        return NULL;
-    }
-
-    if(PyDict_SetItemString(interp_dict, "_blocking_on", blocking_on)){
-        Py_DECREF(blocking_on);
-        return NULL;
-    }
-
-    Py_DECREF(blocking_on);
-    return blocking_on;
+    return state;
 }
 
-static PyObject* get_module_locks(PyInterpreterState* interp)
+PyObject* _PyImmutability_RegisterFreezable(PyObject* obj)
 {
-    PyObject* frozen_importlib = NULL;
-    PyObject* module_locks = NULL;
-    PyObject* interp_dict = PyInterpreterState_GetDict(interp);
-    if(interp_dict == NULL){
+    struct _Py_immutability_state *state = get_immutable_state(obj);
+    if(state == NULL){
+        PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
         return NULL;
     }
 
-    module_locks = PyDict_GetItemString(interp_dict, "_module_locks");
-    if(module_locks != NULL){
-        return module_locks;
-    }
-
-    frozen_importlib = get_frozen_importlib(interp);
-    if(frozen_importlib == NULL){
+    if(!PyType_Check(obj)){
+        PyErr_SetString(PyExc_TypeError, "Expected a type");
         return NULL;
     }
 
-    module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
-    if(module_locks == NULL){
+    if(PySet_Add(state->freezable_types, obj) == -1){
         return NULL;
     }
 
-    if(PyDict_SetItemString(interp_dict, "_module_locks", module_locks)){
-        Py_DECREF(module_locks);
-        return NULL;
-    }
-
-    Py_DECREF(module_locks);
-    return module_locks;
+    Py_RETURN_NONE;
 }
 
 
-PyObject* _Py_Freeze(PyObject* obj)
+PyObject* _PyImmutability_Freeze(PyObject* obj)
 {
     PyObject* frontier = NULL;
-    PyObject* blocking_on = NULL;
-    PyObject* module_locks = NULL;
-    PyInterpreterState* interp = PyInterpreterState_Get();
     PyObject* result = Py_None;
+    struct _Py_immutability_state* state = get_immutable_state(obj);
+    if(state == NULL){
+        PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
+        return NULL;
+    }
 
     if(_Py_IsImmutable(obj)){
         return result;
@@ -346,30 +385,15 @@ PyObject* _Py_Freeze(PyObject* obj)
         goto cleanup;
     }
 
-    blocking_on = get_blocking_on(interp);
-    if(blocking_on == NULL){
-        result = NULL;
-        goto cleanup;
-    }
-
-    module_locks = get_module_locks(interp);
-    if(module_locks == NULL){
-        result = NULL;
-        goto cleanup;
-    }
-
     while(PyList_Size(frontier) != 0){
         PyObject* item = pop(frontier);
 
-        if(item == blocking_on ||
-           item == module_locks){
-            // the module lock and blocking on dictionaries must remain mutable or else
-            // we will not be able to import modules
+        if(item == state->blocking_on ||
+           item == state->module_locks){
             continue;
         }
 
-        if(PyObject_IsInstance(item, (PyObject*)&PyNotFreezable_Type)){
-            // the object is not freezable, so we can skip it
+        if(!can_freeze(item->ob_type, state->freezable_types)){
             PyObject* error_msg = PyUnicode_FromFormat("Cannot freeze object of type %s", Py_TYPE(item)->tp_name);
             PyErr_SetObject(PyExc_TypeError, error_msg);
             result = NULL;
@@ -401,20 +425,14 @@ PyObject* _Py_Freeze(PyObject* obj)
                 result = PyErr_NoMemory();
                 goto cleanup;
             }
-            if(push(frontier, type->tp_mro))
-            {
-                result = PyErr_NoMemory();
-                goto cleanup;
-            }
-            if(push(frontier, type->tp_bases))
-            {
-                result = PyErr_NoMemory();
-                goto cleanup;
-            }
-            if(push(frontier, _PyObject_CAST(type->tp_base)))
-            {
-                result = PyErr_NoMemory();
-                goto cleanup;
+
+            if(PySet_Contains(state->freezable_types, item) != 1){
+                // type is not explicit freezable, so we need to check its bases
+                if(push(frontier, type->tp_mro))
+                {
+                    result = PyErr_NoMemory();
+                    goto cleanup;
+                }
             }
         }
         else

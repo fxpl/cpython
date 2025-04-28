@@ -1740,13 +1740,13 @@ csv_exec(PyObject *module) {
         return -1;
     }
 
-    temp = PyType_FromModuleAndSpec(module, &Reader_Type_spec, (PyObject *)&PyNotFreezable_Type);
+    temp = PyType_FromModuleAndSpec(module, &Reader_Type_spec, NULL);
     module_state->reader_type = (PyTypeObject *)temp;
     if (PyModule_AddObjectRef(module, "Reader", temp) < 0) {
         return -1;
     }
 
-    temp = PyType_FromModuleAndSpec(module, &Writer_Type_spec, (PyObject *)&PyNotFreezable_Type);
+    temp = PyType_FromModuleAndSpec(module, &Writer_Type_spec, NULL);
     module_state->writer_type = (PyTypeObject *)temp;
     if (PyModule_AddObjectRef(module, "Writer", temp) < 0) {
         return -1;

@@ -1688,6 +1688,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/cpython/funcobject.h \
 		$(srcdir)/Include/cpython/genobject.h \
 		$(srcdir)/Include/cpython/import.h \
+		$(srcdir)/Include/cpython/immutability.h \
 		$(srcdir)/Include/cpython/initconfig.h \
 		$(srcdir)/Include/cpython/interpreteridobject.h \
 		$(srcdir)/Include/cpython/listobject.h \

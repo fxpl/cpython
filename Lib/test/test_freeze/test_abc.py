@@ -27,7 +27,7 @@ class TestABC(BaseObjectTest):
             def bar(self):
                 pass
 
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             self.A.register(C)
 
     def test_invalid_cache(self):
@@ -52,7 +52,7 @@ class TestABC(BaseObjectTest):
         x = F()
         freeze(x)
         self.assertTrue(isimmutable(D))
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             # the caches are invalidated but cannot be updated
             # because the class is frozen
             isinstance(x, D)

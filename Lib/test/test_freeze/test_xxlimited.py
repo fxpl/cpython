@@ -13,7 +13,7 @@ class CommonTests:
 
         freeze(xxo)
 
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             xxo.foo = 1234
 
     def test_xxo_del_attribute(self):
@@ -21,7 +21,7 @@ class CommonTests:
 
         freeze(xxo)
 
-        with self.assertRaises(NotWritableError):
+        with self.assertRaises(TypeError):
             del xxo.foo
 
 

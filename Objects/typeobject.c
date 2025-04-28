@@ -3986,6 +3986,7 @@ type_vectorcall(PyObject *metatype, PyObject *const *args,
     return _PyObject_MakeTpCall(tstate, metatype, args, nargs, kwnames);
 }
 
+
 /* An array of type slot offsets corresponding to Py_tp_* constants,
   * for use in e.g. PyType_Spec and PyType_GetSlot.
   * Each entry has two offsets: "slot_offset" and "subslot_offset".
@@ -6612,6 +6613,92 @@ PyTypeObject PyBaseObject_Type = {
     object_new,                                 /* tp_new */
     PyObject_Del,                               /* tp_free */
 };
+
+
+PyObject *
+_PyType_UsesDefaultSlots(PyTypeObject *tp)
+{
+    PyNumberMethods *nb = tp->tp_as_number;
+    PySequenceMethods *sq = tp->tp_as_sequence;
+    PyMappingMethods *mp = tp->tp_as_mapping;
+    PyBufferProcs *bp = tp->tp_as_buffer;
+
+    if(!(nb == NULL ||
+        (nb->nb_index == NULL &&
+         nb->nb_int == NULL &&
+         nb->nb_float == NULL)))
+    {
+        printf("custom number slots\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(sq == NULL || sq->sq_item == NULL))
+    {
+        printf("custom sequence slots\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(mp == NULL || mp->mp_subscript == NULL))
+    {
+        printf("custom mapping slots\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(bp == NULL || bp->bf_getbuffer == NULL))
+    {
+        printf("custom buffer slots\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(tp->tp_getattr != NULL ||
+       tp->tp_setattr != NULL ||
+       tp->tp_methods != NULL)
+    {
+        printf("custom slots\n");
+        Py_RETURN_FALSE;
+    }
+
+    if (!(tp->tp_setattro == PyObject_GenericSetAttr || tp->tp_setattro == NULL)){
+        printf("custom setattro\n");
+        Py_RETURN_FALSE;
+    }
+
+    if (!(tp->tp_getattro == PyObject_GenericGetAttr || tp->tp_getattro == NULL)){
+        printf("custom getattro\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(tp->tp_getset == NULL ||
+         tp->tp_getset == subtype_getsets_full ||
+         tp->tp_getset == subtype_getsets_weakref_only ||
+         tp->tp_getset == subtype_getsets_dict_only))
+    {
+        printf("custom getset\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(tp->tp_str == NULL || tp->tp_str == object_str)){
+        printf("custom str\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(tp->tp_repr == NULL || tp->tp_repr == object_repr)){
+        printf("custom repr\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(tp->tp_hash == NULL || tp->tp_hash == (hashfunc)_Py_HashPointer)){
+        printf("custom hash\n");
+        Py_RETURN_FALSE;
+    }
+
+    if(!(tp->tp_richcompare == NULL || tp->tp_richcompare == object_richcompare)){
+        printf("custom richcompare\n");
+        Py_RETURN_FALSE;
+    }
+
+    Py_RETURN_TRUE;
+}
 
 
 static int

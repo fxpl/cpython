@@ -2102,7 +2102,6 @@ static PyTypeObject* static_types[] = {
     &PyMethod_Type,
     &PyModuleDef_Type,
     &PyModule_Type,
-    &PyNotFreezable_Type,
     &PyODictIter_Type,
     &PyPickleBuffer_Type,
     &PyProperty_Type,
