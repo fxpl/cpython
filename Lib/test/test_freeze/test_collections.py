@@ -1,6 +1,7 @@
 from collections import defaultdict, deque
+from immutable import freeze
 
-from . import BaseObjectTest
+from .test_common import BaseObjectTest
 
 
 class TestDeque(BaseObjectTest):

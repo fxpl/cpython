@@ -1,6 +1,6 @@
 import decimal
 
-from . import BaseObjectTest
+from .test_common import BaseObjectTest
 
 
 class TestContext(BaseObjectTest):

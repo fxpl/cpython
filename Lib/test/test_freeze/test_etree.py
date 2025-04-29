@@ -1,8 +1,9 @@
+from immutable import freeze
 from xml.etree.ElementTree import ElementTree, Element, XMLParser
 import unittest
 
 
-from . import BaseNotFreezableTest, BaseObjectTest
+from .test_common import BaseNotFreezableTest, BaseObjectTest
 
 
 class TestElementTree(BaseNotFreezableTest):
@@ -47,11 +48,6 @@ class TestElement(BaseObjectTest):
     def test_remove(self):
         with self.assertRaises(TypeError):
             self.obj.remove(Element("child"))
-
-    def test_iter(self):
-        it = self.obj.iter()
-        with self.assertRaises(TypeError):
-            freeze(it)
 
 
 if __name__ == '__main__':

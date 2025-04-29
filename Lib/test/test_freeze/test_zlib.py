@@ -1,6 +1,6 @@
 import zlib
 
-from . import BaseNotFreezableTest
+from .test_common import BaseNotFreezableTest
 
 class ZlibCompressTest(BaseNotFreezableTest):
     def __init__(self, *args, **kwargs):

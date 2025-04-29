@@ -1,7 +1,7 @@
 import unittest
 from immutable import freeze, isfrozen
 
-from . import BaseObjectTest
+from .test_common import BaseObjectTest
 
 
 # This is a canary to check that global variables are not made immutable
@@ -574,6 +574,7 @@ class TestFunctionDefaults(unittest.TestCase):
         freeze(f)
 
         self.assertTrue(isfrozen(bdef))
+
 
 if __name__ == '__main__':
     unittest.main()

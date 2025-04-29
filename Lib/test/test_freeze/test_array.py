@@ -1,5 +1,5 @@
 from array import array
-from . import BaseObjectTest
+from .test_common import BaseObjectTest
 
 
 class TestArray(BaseObjectTest):

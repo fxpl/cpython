@@ -4,7 +4,7 @@ import_helper.import_module('_sqlite3')
 
 import sqlite3
 
-from . import BaseNotFreezableTest
+from .test_common import BaseNotFreezableTest
 
 
 class TestConnection(BaseNotFreezableTest):

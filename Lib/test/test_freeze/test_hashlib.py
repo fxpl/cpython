@@ -1,4 +1,5 @@
 from hashlib import blake2b, blake2s
+from immutable import freeze
 import unittest
 
 

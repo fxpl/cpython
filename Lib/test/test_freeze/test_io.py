@@ -1,6 +1,6 @@
 import io
 
-from . import BaseNotFreezableTest
+from .test_common import BaseNotFreezableTest
 
 
 class BytesIOTest(BaseNotFreezableTest):

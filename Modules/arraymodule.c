@@ -3137,6 +3137,11 @@ array_modexec(PyObject *m)
         return -1;
     }
 
+    if(_PyImmutability_RegisterFreezable(state->ArrayType) < 0){
+        Py_DECREF((PyObject *)state->ArrayType);
+        return -1;
+    }
+
     PyObject *mutablesequence = _PyImport_GetModuleAttrString(
             "collections.abc", "MutableSequence");
     if (!mutablesequence) {

@@ -4382,6 +4382,17 @@ module_exec(PyObject *m)
     CREATE_TYPE(m, st->Element_Type, &element_spec, NULL);
     CREATE_TYPE(m, st->XMLParser_Type, &xmlparser_spec, NULL);
 
+    PyObject *register_freezable = _PyImport_GetModuleAttrString("immutable", "register_freezable");
+    if(register_freezable != NULL)
+    {
+        PyObject* result = PyObject_CallOneArg(register_freezable, (PyObject *)st->Element_Type);
+        if(result == NULL){
+            goto error;
+        }
+
+        Py_DECREF(register_freezable);
+    }
+
     st->deepcopy_obj = _PyImport_GetModuleAttrString("copy", "deepcopy");
     if (st->deepcopy_obj == NULL) {
         goto error;

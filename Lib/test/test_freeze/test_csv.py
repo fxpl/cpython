@@ -1,7 +1,7 @@
 import csv
 from io import BytesIO
 
-from . import BaseNotFreezableTest
+from .test_common import BaseNotFreezableTest
 
 
 class TestCSVReader(BaseNotFreezableTest):

@@ -6615,92 +6615,6 @@ PyTypeObject PyBaseObject_Type = {
 };
 
 
-PyObject *
-_PyType_UsesDefaultSlots(PyTypeObject *tp)
-{
-    PyNumberMethods *nb = tp->tp_as_number;
-    PySequenceMethods *sq = tp->tp_as_sequence;
-    PyMappingMethods *mp = tp->tp_as_mapping;
-    PyBufferProcs *bp = tp->tp_as_buffer;
-
-    if(!(nb == NULL ||
-        (nb->nb_index == NULL &&
-         nb->nb_int == NULL &&
-         nb->nb_float == NULL)))
-    {
-        printf("custom number slots\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(sq == NULL || sq->sq_item == NULL))
-    {
-        printf("custom sequence slots\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(mp == NULL || mp->mp_subscript == NULL))
-    {
-        printf("custom mapping slots\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(bp == NULL || bp->bf_getbuffer == NULL))
-    {
-        printf("custom buffer slots\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(tp->tp_getattr != NULL ||
-       tp->tp_setattr != NULL ||
-       tp->tp_methods != NULL)
-    {
-        printf("custom slots\n");
-        Py_RETURN_FALSE;
-    }
-
-    if (!(tp->tp_setattro == PyObject_GenericSetAttr || tp->tp_setattro == NULL)){
-        printf("custom setattro\n");
-        Py_RETURN_FALSE;
-    }
-
-    if (!(tp->tp_getattro == PyObject_GenericGetAttr || tp->tp_getattro == NULL)){
-        printf("custom getattro\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(tp->tp_getset == NULL ||
-         tp->tp_getset == subtype_getsets_full ||
-         tp->tp_getset == subtype_getsets_weakref_only ||
-         tp->tp_getset == subtype_getsets_dict_only))
-    {
-        printf("custom getset\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(tp->tp_str == NULL || tp->tp_str == object_str)){
-        printf("custom str\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(tp->tp_repr == NULL || tp->tp_repr == object_repr)){
-        printf("custom repr\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(tp->tp_hash == NULL || tp->tp_hash == (hashfunc)_Py_HashPointer)){
-        printf("custom hash\n");
-        Py_RETURN_FALSE;
-    }
-
-    if(!(tp->tp_richcompare == NULL || tp->tp_richcompare == object_richcompare)){
-        printf("custom richcompare\n");
-        Py_RETURN_FALSE;
-    }
-
-    Py_RETURN_TRUE;
-}
-
-
 static int
 type_add_method(PyTypeObject *type, PyMethodDef *meth)
 {
@@ -10768,3 +10682,406 @@ PyTypeObject PySuper_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = (vectorcallfunc)super_vectorcall,
 };
+
+
+int
+_PyType_HasExtensionSlots(PyTypeObject *tp)
+{
+    PyNumberMethods *nb = tp->tp_as_number;
+    PySequenceMethods *sq = tp->tp_as_sequence;
+    PyMappingMethods *mp = tp->tp_as_mapping;
+    PyAsyncMethods *am = tp->tp_as_async;
+    PyBufferProcs *bf = tp->tp_as_buffer;
+    Py_ssize_t mro_size = PyTuple_GET_SIZE(tp->tp_mro);
+
+    #define EXT_FLAG(PREFIX, NAME) bool NAME##_ext = PREFIX->PREFIX##_##NAME != NULL
+    #define SLOT_EXT_FLAG(PREFIX, NAME) bool NAME##_ext = !(PREFIX->PREFIX##_##NAME == NULL || PREFIX->PREFIX##_##NAME == slot_##PREFIX##_##NAME)
+    #define EXT_TEST(PREFIX, NAME) if(PREFIX->PREFIX##_##NAME == base_##PREFIX->PREFIX##_##NAME){NAME##_ext = false;}
+
+    if(!(nb == NULL ||
+        (nb->nb_index == NULL &&
+         nb->nb_int == NULL &&
+         nb->nb_float == NULL)))
+    {
+        SLOT_EXT_FLAG(nb, add);
+        SLOT_EXT_FLAG(nb, subtract);
+        SLOT_EXT_FLAG(nb, multiply);
+        SLOT_EXT_FLAG(nb, floor_divide);
+        SLOT_EXT_FLAG(nb, true_divide);
+        SLOT_EXT_FLAG(nb, remainder);
+        SLOT_EXT_FLAG(nb, divmod);
+        SLOT_EXT_FLAG(nb, power);
+        SLOT_EXT_FLAG(nb, lshift);
+        SLOT_EXT_FLAG(nb, rshift);
+        SLOT_EXT_FLAG(nb, and);
+        SLOT_EXT_FLAG(nb, xor);
+        SLOT_EXT_FLAG(nb, or);
+        SLOT_EXT_FLAG(nb, matrix_multiply);
+        SLOT_EXT_FLAG(nb, index);
+        SLOT_EXT_FLAG(nb, int);
+        SLOT_EXT_FLAG(nb, float);
+        SLOT_EXT_FLAG(nb, inplace_add);
+        SLOT_EXT_FLAG(nb, inplace_subtract);
+        SLOT_EXT_FLAG(nb, inplace_multiply);
+        SLOT_EXT_FLAG(nb, inplace_floor_divide);
+        SLOT_EXT_FLAG(nb, inplace_true_divide);
+        SLOT_EXT_FLAG(nb, inplace_remainder);
+        SLOT_EXT_FLAG(nb, inplace_power);
+        SLOT_EXT_FLAG(nb, inplace_lshift);
+        SLOT_EXT_FLAG(nb, inplace_rshift);
+        SLOT_EXT_FLAG(nb, inplace_and);
+        SLOT_EXT_FLAG(nb, inplace_xor);
+        SLOT_EXT_FLAG(nb, inplace_or);
+        SLOT_EXT_FLAG(nb, inplace_matrix_multiply);
+
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(base->tp_as_number != NULL)
+            {
+                PyNumberMethods *base_nb = base->tp_as_number;
+                EXT_TEST(nb, add);
+                EXT_TEST(nb, subtract);
+                EXT_TEST(nb, multiply);
+                EXT_TEST(nb, floor_divide);
+                EXT_TEST(nb, true_divide);
+                EXT_TEST(nb, remainder);
+                EXT_TEST(nb, divmod);
+                EXT_TEST(nb, power);
+                EXT_TEST(nb, lshift);
+                EXT_TEST(nb, rshift);
+                EXT_TEST(nb, and);
+                EXT_TEST(nb, xor);
+                EXT_TEST(nb, or);
+                EXT_TEST(nb, matrix_multiply);
+                EXT_TEST(nb, index);
+                EXT_TEST(nb, int);
+                EXT_TEST(nb, float);
+                EXT_TEST(nb, inplace_add);
+                EXT_TEST(nb, inplace_subtract);
+                EXT_TEST(nb, inplace_multiply);
+                EXT_TEST(nb, inplace_floor_divide);
+                EXT_TEST(nb, inplace_true_divide);
+                EXT_TEST(nb, inplace_remainder);
+                EXT_TEST(nb, inplace_power);
+                EXT_TEST(nb, inplace_lshift);
+                EXT_TEST(nb, inplace_rshift);
+                EXT_TEST(nb, inplace_and);
+                EXT_TEST(nb, inplace_xor);
+                EXT_TEST(nb, inplace_or);
+                EXT_TEST(nb, inplace_matrix_multiply);
+            }
+        }
+
+        if(add_ext ||
+           subtract_ext ||
+           multiply_ext ||
+           floor_divide_ext ||
+           true_divide_ext ||
+           remainder_ext ||
+           divmod_ext ||
+           power_ext ||
+           lshift_ext ||
+           rshift_ext ||
+           and_ext ||
+           xor_ext ||
+           or_ext ||
+           matrix_multiply_ext ||
+           index_ext ||
+           int_ext ||
+           float_ext ||
+           inplace_add_ext ||
+           inplace_subtract_ext ||
+           inplace_multiply_ext ||
+           inplace_floor_divide_ext ||
+           inplace_true_divide_ext ||
+           inplace_remainder_ext ||
+           inplace_power_ext ||
+           inplace_lshift_ext ||
+           inplace_rshift_ext ||
+           inplace_and_ext ||
+           inplace_xor_ext ||
+           inplace_or_ext ||
+           inplace_matrix_multiply_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(sq == NULL || sq->sq_item == NULL))
+    {
+        SLOT_EXT_FLAG(sq, length);
+        EXT_FLAG(sq, concat);
+        EXT_FLAG(sq, repeat);
+        SLOT_EXT_FLAG(sq, item);
+        SLOT_EXT_FLAG(sq, ass_item);
+        SLOT_EXT_FLAG(sq, contains);
+        EXT_FLAG(sq, inplace_concat);
+        EXT_FLAG(sq, inplace_repeat);
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(base->tp_as_sequence != NULL)
+            {
+                PySequenceMethods *base_sq = base->tp_as_sequence;
+                EXT_TEST(sq, length);
+                EXT_TEST(sq, concat);
+                EXT_TEST(sq, item);
+                EXT_TEST(sq, ass_item);
+                EXT_TEST(sq, contains);
+                EXT_TEST(sq, inplace_concat);
+                EXT_TEST(sq, inplace_repeat);
+            }
+        }
+
+        if(length_ext ||
+           concat_ext ||
+           repeat_ext ||
+           item_ext ||
+           ass_item_ext ||
+           contains_ext ||
+           inplace_concat_ext ||
+           inplace_repeat_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(mp == NULL || mp->mp_subscript == NULL))
+    {
+        SLOT_EXT_FLAG(mp, length);
+        SLOT_EXT_FLAG(mp, subscript);
+        SLOT_EXT_FLAG(mp, ass_subscript);
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(base->tp_as_mapping != NULL)
+            {
+                PyMappingMethods *base_mp = base->tp_as_mapping;
+                EXT_TEST(mp, length);
+                EXT_TEST(mp, subscript);
+                EXT_TEST(mp, ass_subscript);
+            }
+        }
+
+        if(length_ext ||
+           subscript_ext ||
+           ass_subscript_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(am == NULL || (am->am_await != NULL || am->am_aiter != NULL || am->am_anext != NULL || am->am_send != NULL)))
+    {
+        SLOT_EXT_FLAG(am, await);
+        SLOT_EXT_FLAG(am, aiter);
+        SLOT_EXT_FLAG(am, anext);
+        EXT_FLAG(am, send);
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(base->tp_as_async != NULL)
+            {
+                PyAsyncMethods *base_am = base->tp_as_async;
+                EXT_TEST(am, await);
+                EXT_TEST(am, aiter);
+                EXT_TEST(am, anext);
+                EXT_TEST(am, send);
+            }
+        }
+
+        if(await_ext ||
+           aiter_ext ||
+           anext_ext ||
+           send_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(bf == NULL || bf->bf_getbuffer == NULL))
+    {
+        SLOT_EXT_FLAG(bf, getbuffer);
+        SLOT_EXT_FLAG(bf, releasebuffer);
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(base->tp_as_buffer != NULL)
+            {
+                PyBufferProcs *base_bf = base->tp_as_buffer;
+                EXT_TEST(bf, getbuffer);
+                EXT_TEST(bf, releasebuffer);
+            }
+        }
+
+        if(getbuffer_ext ||
+           releasebuffer_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(tp->tp_getattr != NULL ||
+       tp->tp_setattr != NULL ||
+       tp->tp_methods != NULL)
+    {
+        bool getattr_ext = tp->tp_getattr != NULL;
+        bool setattr_ext = tp->tp_setattr != NULL;
+        bool methods_ext = tp->tp_methods != NULL;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_getattr == base->tp_getattr)
+            {
+                getattr_ext = false;
+            }
+            if(tp->tp_setattr == base->tp_setattr)
+            {
+                setattr_ext = false;
+            }
+            if(tp->tp_methods == base->tp_methods)
+            {
+                methods_ext = false;
+            }
+
+            if(!(getattr_ext || setattr_ext || methods_ext))
+            {
+                break;
+            }
+        }
+
+        if(getattr_ext || setattr_ext || methods_ext)
+        {
+            return 1;
+        }
+    }
+
+    if (!(tp->tp_setattro == PyObject_GenericSetAttr || tp->tp_setattro == NULL)){
+        bool setattro_ext = true;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_setattro == base->tp_setattro)
+            {
+                setattro_ext = false;
+                break;
+            }
+        }
+
+        if(setattro_ext)
+        {
+            return 1;
+        }
+    }
+
+    if (!(tp->tp_getattro == PyObject_GenericGetAttr || tp->tp_getattro == NULL)){
+        bool getattro_ext = true;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_getattro == base->tp_getattro)
+            {
+                getattro_ext = false;
+                break;
+            }
+        }
+
+        if(getattro_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(tp->tp_getset == NULL ||
+         tp->tp_getset == subtype_getsets_full ||
+         tp->tp_getset == subtype_getsets_weakref_only ||
+         tp->tp_getset == subtype_getsets_dict_only))
+    {
+        bool getset_ext = true;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_getset == base->tp_getset)
+            {
+                getset_ext = false;
+                break;
+            }
+        }
+
+        if(getset_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(tp->tp_str == NULL || tp->tp_str == object_str)){
+        bool str_ext = true;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_str == base->tp_str)
+            {
+                str_ext = false;
+                break;
+            }
+        }
+        if(str_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(tp->tp_repr == NULL || tp->tp_repr == object_repr)){
+        bool repr_ext = true;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_repr == base->tp_repr)
+            {
+                repr_ext = false;
+                break;
+            }
+        }
+        if(repr_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(tp->tp_richcompare == NULL || tp->tp_richcompare == object_richcompare)){
+        bool richcompare_ext = true;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_richcompare == base->tp_richcompare)
+            {
+                richcompare_ext = false;
+                break;
+            }
+        }
+        if(richcompare_ext)
+        {
+            return 1;
+        }
+    }
+
+    if(!(tp->tp_hash == NULL || tp->tp_hash == (hashfunc)_Py_HashPointer)){
+        bool hash_ext = true;
+        for(Py_ssize_t i=1; i < mro_size; i++)
+        {
+            PyTypeObject *base = (PyTypeObject *)PyTuple_GET_ITEM(tp->tp_mro, i);
+            if(tp->tp_hash == base->tp_hash)
+            {
+                hash_ext = false;
+                break;
+            }
+        }
+        if(hash_ext)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}

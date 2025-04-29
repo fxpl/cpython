@@ -1,6 +1,6 @@
 from _multiprocessing import SemLock
 
-from . import BaseNotFreezableTest
+from .test_common import BaseNotFreezableTest
 
 SEMAPHORE = 1
 SEM_VALUE_MAX = SemLock.SEM_VALUE_MAX

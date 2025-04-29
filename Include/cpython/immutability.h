@@ -2,7 +2,8 @@
 #  error "this header file must not be included directly"
 #endif
 
-PyAPI_DATA(PyTypeObject) PyNotFreezable_Type;
+PyAPI_DATA(PyTypeObject) _PyNotFreezable_Type;
 
-PyAPI_FUNC(PyObject *) _PyImmutability_Freeze(PyObject*);
-PyAPI_FUNC(PyObject *) _PyImmutability_RegisterFreezable(PyObject*);
+PyAPI_FUNC(int) _PyImmutability_Freeze(PyObject*);
+PyAPI_FUNC(int) _PyImmutability_RegisterFreezable(PyTypeObject*);
+PyAPI_FUNC(int) _PyImmutability_IsFreezable(PyObject*);

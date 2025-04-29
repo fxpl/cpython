@@ -5991,6 +5991,9 @@ PyInit__decimal(void)
     CHECK_INT(PyModule_AddObjectRef(m, "Context", (PyObject *)&PyDecContext_Type));
     CHECK_INT(PyModule_AddObjectRef(m, "DecimalTuple", (PyObject *)DecimalTuple));
 
+    CHECK_INT(_PyImmutability_RegisterFreezable(&PyDec_Type));
+    CHECK_INT(_PyImmutability_RegisterFreezable(&PyDecContext_Type));
+
     /* Create top level exception */
     ASSIGN_PTR(DecimalException, PyErr_NewException(
                                      "decimal.DecimalException",

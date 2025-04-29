@@ -89,6 +89,7 @@ blake2_exec(PyObject *m)
         return -1;
     }
 
+
     PyObject *d = st->blake2b_type->tp_dict;
     ADD_INT(d, "SALT_SIZE", BLAKE2B_SALTBYTES);
     ADD_INT(d, "PERSON_SIZE", BLAKE2B_PERSONALBYTES);
@@ -109,6 +110,23 @@ blake2_exec(PyObject *m)
 
     if (PyModule_AddType(m, st->blake2s_type) < 0) {
         return -1;
+    }
+
+    PyObject *register_freezable = _PyImport_GetModuleAttrString("immutable", "register_freezable");
+    if(register_freezable != NULL){
+        PyObject *result = PyObject_CallFunctionObjArgs(register_freezable, st->blake2b_type, NULL);
+        if(result == NULL){
+            Py_DECREF(register_freezable);
+            return -1;
+        }
+
+        result = PyObject_CallFunctionObjArgs(register_freezable, st->blake2s_type, NULL);
+        if(result == NULL){
+            Py_DECREF(register_freezable);
+            return -1;
+        }
+
+        Py_DECREF(register_freezable);
     }
 
     d = st->blake2s_type->tp_dict;

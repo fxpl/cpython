@@ -3016,7 +3016,7 @@ PyCData_FromBaseObj(PyObject *type, PyObject *base, Py_ssize_t index, char *adr)
     }
 
     if(base && _Py_IsImmutable(base)) {
-        if(_PyImmutability_Freeze(_PyObject_CAST(cmem)) == NULL){
+        if(_PyImmutability_Freeze(_PyObject_CAST(cmem)) < 0){
             Py_DECREF(cmem);
             return NULL;
         }
@@ -5718,6 +5718,9 @@ _ctypes_add_types(PyObject *mod)
         PyTypeObject *type = (TYPE_EXPR); \
         type->tp_base = (TP_BASE); \
         TYPE_READY(type); \
+        if(_PyImmutability_RegisterFreezable(type) < 0){ \
+            return -1; \
+        } \
     } while (0)
 
 #define MOD_ADD_TYPE(TYPE_EXPR, TP_TYPE, TP_BASE) \
@@ -5780,6 +5783,9 @@ _ctypes_add_types(PyObject *mod)
      */
 
     CREATE_TYPE(mod, st->PyCField_Type, &cfield_spec, NULL);
+    if(_PyImmutability_RegisterFreezable(st->PyCField_Type) < 0){
+        return -1;
+    }
 
     /*************************************************
      *

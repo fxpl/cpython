@@ -65,7 +65,16 @@ static PyObject *
 immutable_register_freezable(PyObject *module, PyObject *obj)
 /*[clinic end generated code: output=1afbb9a860e2bde9 input=fbb7f42f02d27a88]*/
 {
-    return _PyImmutability_RegisterFreezable(obj);
+    if(!PyType_Check(obj)){
+        PyErr_SetString(PyExc_TypeError, "Expected a type");
+        return NULL;
+    }
+
+    if(_PyImmutability_RegisterFreezable((PyTypeObject *)obj) < 0){
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
 }
 
 /*[clinic input]
@@ -80,7 +89,11 @@ static PyObject *
 immutable_freeze(PyObject *module, PyObject *obj)
 /*[clinic end generated code: output=76b9e6c577ec3841 input=d7090b2d52afbb4b]*/
 {
-    return _PyImmutability_Freeze(obj);
+    if(_PyImmutability_Freeze(obj) < 0){
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
 }
 
 /*[clinic input]
@@ -96,6 +109,30 @@ immutable_isfrozen(PyObject *module, PyObject *obj)
 /*[clinic end generated code: output=7c10bf6e5f8e4639 input=23d5da80f538c315]*/
 {
     if(_Py_IsImmutable(obj)){
+        Py_RETURN_TRUE;
+    }
+
+    Py_RETURN_FALSE;
+}
+
+/*[clinic input]
+immutable.isfreezable
+    obj: object
+    /
+
+Check if an object can be frozen.
+[clinic start generated code]*/
+
+static PyObject *
+immutable_isfreezable(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=ddc1a85bd9279882 input=9b06ae134ca053ea]*/
+{
+    int result = _PyImmutability_IsFreezable(obj);
+    if(result == -1){
+        return NULL;
+    }
+
+    if(result){
         Py_RETURN_TRUE;
     }
 
@@ -123,13 +160,13 @@ static struct PyMethodDef immutable_methods[] = {
     IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
     IMMUTABLE_FREEZE_METHODDEF
     IMMUTABLE_ISFROZEN_METHODDEF
+    IMMUTABLE_ISFREEZABLE_METHODDEF
     { NULL, NULL }
 };
 
 
 static int
 immutable_exec(PyObject *module) {
-    PyObject* frozen_importlib = NULL;
     immutable_state *module_state = get_immutable_state(module);
 
     /* Add version to the module. */
@@ -153,7 +190,7 @@ immutable_exec(PyObject *module) {
         return -1;
     }
 
-    if (PyModule_AddType(module, &PyNotFreezable_Type) != 0) {
+    if (PyModule_AddType(module, &_PyNotFreezable_Type) != 0) {
         return -1;
     }
 

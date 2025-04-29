@@ -5685,7 +5685,7 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
                     interp, CACHED_KEYS(tp), values);
             if (dict != NULL) {
                 if (_Py_IsImmutable(obj)) {
-                    if(_PyImmutability_Freeze(_PyObject_CAST(dict)) == NULL){
+                    if(_PyImmutability_Freeze(_PyObject_CAST(dict)) < 0){
                         return NULL;
                     }
                 }
@@ -5700,7 +5700,7 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
                 dictkeys_incref(CACHED_KEYS(tp));
                 dict = new_dict_with_shared_keys(interp, CACHED_KEYS(tp));
                 if (_Py_IsImmutable(obj)) {
-                    if(_PyImmutability_Freeze(_PyObject_CAST(dict)) == NULL){
+                    if(_PyImmutability_Freeze(_PyObject_CAST(dict)) < 0){
                         return NULL;
                     }
                 }
@@ -5729,7 +5729,7 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
                 dict = PyDict_New();
             }
             if (_Py_IsImmutable(obj)) {
-                if(_PyImmutability_Freeze(_PyObject_CAST(dict)) == NULL){
+                if(_PyImmutability_Freeze(_PyObject_CAST(dict)) < 0){
                     return NULL;
                 }
             }
