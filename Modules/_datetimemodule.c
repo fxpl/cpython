@@ -6732,6 +6732,10 @@ _datetime_exec(PyObject *module)
         if (PyModule_AddType(module, types[i]) < 0) {
             return -1;
         }
+
+        if(_PyImmutability_RegisterFreezable(types[i]) < 0) {
+            return -1;
+        }
     }
 
     if (PyType_Ready(&PyDateTime_IsoCalendarDateType) < 0) {
