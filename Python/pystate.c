@@ -860,6 +860,7 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
     Py_CLEAR(interp->immutability.module_locks);
     Py_CLEAR(interp->immutability.blocking_on);
     Py_CLEAR(interp->immutability.freezable_types);
+    Py_CLEAR(interp->immutability.destroy_cb);
 
     Py_CLEAR(interp->sysdict_copy);
     Py_CLEAR(interp->builtins_copy);

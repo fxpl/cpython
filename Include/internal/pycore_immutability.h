@@ -12,6 +12,7 @@ struct _Py_immutability_state {
     PyObject *module_locks;
     PyObject *blocking_on;
     PyObject *freezable_types;
+    PyObject *destroy_cb;
 };
 
 #ifdef __cplusplus

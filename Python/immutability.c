@@ -7,8 +7,38 @@
 #include "pycore_immutability.h"
 
 
+static PyObject *
+_destroy(PyObject* set, PyObject *objweakref)
+{
+    Py_INCREF(set);
+    if (PySet_Discard(set, objweakref) < 0) {
+        Py_DECREF(set);
+        return NULL;
+    }
+    Py_DECREF(set);
 
-static int init_state(struct _Py_immutability_state *state)
+    Py_RETURN_NONE;
+}
+
+static PyMethodDef _destroy_def = {
+    "_destroy", (PyCFunction) _destroy, METH_O
+};
+
+static PyObject *
+type_weakref(struct _Py_immutability_state *state, PyObject *obj)
+{
+    if(state->destroy_cb == NULL){
+        state->destroy_cb = PyCFunction_NewEx(&_destroy_def, state->freezable_types, NULL);
+        if (state->destroy_cb == NULL) {
+            return NULL;
+        }
+    }
+
+    return PyWeakref_NewRef(obj, state->destroy_cb);
+}
+
+static
+int init_state(struct _Py_immutability_state *state)
 {
     PyObject* frozen_importlib = NULL;
 
@@ -39,6 +69,8 @@ static int init_state(struct _Py_immutability_state *state)
         Py_DECREF(frozen_importlib);
         return -1;
     }
+
+    Py_DECREF(frozen_importlib);
 
     return 0;
 }
@@ -279,7 +311,8 @@ static int freeze_visit(PyObject* obj, void* frontier)
     return 0;
 }
 
-static bool is_freezable_builtin(PyTypeObject *type)
+static bool
+is_freezable_builtin(PyTypeObject *type)
 {
     if(type == &PyType_Type ||
         type == &PyBaseObject_Type ||
@@ -319,19 +352,39 @@ static bool is_freezable_builtin(PyTypeObject *type)
      return false;
 }
 
+static int
+is_explicitly_freezable(struct _Py_immutability_state *state, PyObject *obj)
+{
+    int result = 0;
+    PyObject *ref = type_weakref(state, (PyObject *)obj->ob_type);
+    if(ref == NULL){
+        return -1;
+    }
+
+    result = PySet_Contains(state->freezable_types, ref);
+    Py_DECREF(ref);
+    return result;
+}
 
 typedef enum {
     VALID_BUILTIN,
     VALID_EXPLICIT,
     VALID_IMPLICIT,
     INVALID_NOT_FREEZABLE,
-    INVALID_C_EXTENSIONS
+    INVALID_C_EXTENSIONS,
+    ERROR
 } FreezableCheck;
 
 
-static FreezableCheck check_freezable(PyObject* obj, PyObject* freezable_types)
+static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyObject* obj)
 {
-    if(PyObject_IsInstance(obj, (PyObject*)&_PyNotFreezable_Type)){
+    int result = 0;
+
+    result = PyObject_IsInstance(obj, (PyObject*)&_PyNotFreezable_Type);
+    if(result == -1){
+        return ERROR;
+    }
+    else if(result == 1){
         return INVALID_NOT_FREEZABLE;
     }
 
@@ -339,8 +392,11 @@ static FreezableCheck check_freezable(PyObject* obj, PyObject* freezable_types)
         return VALID_BUILTIN;
     }
 
-    PyObject* type = (PyObject*)obj->ob_type;
-    if(PySet_Contains(freezable_types, type) == 1){
+    result = is_explicitly_freezable(state, obj);
+    if(result == -1){
+        return ERROR;
+    }
+    else if(result == 1){
         return VALID_EXPLICIT;
     }
 
@@ -360,7 +416,7 @@ int _PyImmutability_IsFreezable(PyObject *obj)
         return 0;
     }
 
-    switch(check_freezable(obj, state->freezable_types))
+    switch(check_freezable(state, obj))
     {
         case VALID_BUILTIN:
         case VALID_EXPLICIT:
@@ -369,6 +425,8 @@ int _PyImmutability_IsFreezable(PyObject *obj)
         case INVALID_NOT_FREEZABLE:
         case INVALID_C_EXTENSIONS:
             return 0;
+        case ERROR:
+            return -1;
     }
 
     PyErr_SetString(PyExc_RuntimeError, "Unknown state");
@@ -377,17 +435,22 @@ int _PyImmutability_IsFreezable(PyObject *obj)
 
 int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
 {
+    PyObject *ref;
+    int result;
     struct _Py_immutability_state *state = get_immutable_state();
     if(state == NULL){
         PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
         return -1;
     }
 
-    if(PySet_Add(state->freezable_types, _PyObject_CAST(tp)) == -1){
+    ref = type_weakref(state, (PyObject*)tp);
+    if(ref == NULL){
         return -1;
     }
 
-    return 0;
+    result = PySet_Add(state->freezable_types, ref);
+    Py_DECREF(ref);
+    return result;
 }
 
 
@@ -424,7 +487,7 @@ int _PyImmutability_Freeze(PyObject* obj)
             continue;
         }
 
-        check = check_freezable(item, state->freezable_types);
+        check = check_freezable(state, item);
         switch(check){
             case INVALID_NOT_FREEZABLE:
                 PyErr_SetString(PyExc_TypeError, "Invalid freeze request: instance of NotFreezable");
@@ -441,6 +504,9 @@ int _PyImmutability_Freeze(PyObject* obj)
             case VALID_EXPLICIT:
             case VALID_IMPLICIT:
                 break;
+            
+            case ERROR:
+                goto error;
 
             default:
                 PyErr_SetString(PyExc_RuntimeError, "Unknown freezable check value");
