@@ -473,6 +473,26 @@ int _Py_DecRef_Immutable(PyObject *op)
     return true;
 }
 
+// Perform a decref on an immutable object
+// returns true if the object should be deallocated.
+int _Py_DecRef_Immutable(PyObject *op)
+{
+    // Decrement the reference count of an immutable object without
+    // deallocating it.
+    assert(_Py_IsImmutable(op));
+
+    // TODO(Immutable): This needs to be atomic.
+    op->ob_refcnt -= 1;
+    if ((op->ob_refcnt & _Py_REFCNT_MASK) != 0)
+        // Context does not to dealloc this object.
+        return false;
+
+    // Clear the immutable flag so that finalisers can run correctly.
+    assert((op->ob_refcnt & _Py_REFCNT_MASK) == 0);
+    op->ob_refcnt = 0;
+    return true;
+}
+
 
 int _PyImmutability_Freeze(PyObject* obj)
 {
