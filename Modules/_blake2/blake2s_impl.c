@@ -276,10 +276,6 @@ _blake2_blake2s_update(BLAKE2sObject *self, PyObject *data)
 {
     Py_buffer buf;
 
-    if(!Py_CHECKWRITE(self)){
-        return PyErr_WriteToImmutable(self);
-    }
-
     GET_BUFFER_VIEW_OR_ERROUT(data, &buf);
 
     if (self->lock == NULL && buf.len >= HASHLIB_GIL_MINSIZE)
