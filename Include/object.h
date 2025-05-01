@@ -288,12 +288,30 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 #endif
 #define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
 
+static inline Py_ALWAYS_INLINE int _Py_IsImmortalOrImmutable(PyObject *op)
+{
+    // TODO(Immutable): Does this work for both 32 and 64bit?
+    return op->ob_refcnt >= _Py_IMMORTAL_REFCNT;
+}
+#define _Py_IsImmortalOrImmutable(op) _Py_IsImmortalOrImmutable(_PyObject_CAST(op))
+
 static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     // This immortal check is for code that is unaware of immortal objects.
     // The runtime tracks these objects and we should avoid as much
     // as possible having extensions inadvertently change the refcnt
     // of an immortalized object.
-    if (_Py_IsImmortal(ob)) {
+    if (_Py_IsImmortalOrImmutable(ob))
+    {
+        if (_Py_IsImmortal(ob)) {
+            return;
+        }
+        assert(_Py_IsImmutable(ob));
+        // TODO(Immutable): It is dangerous to set the reference count of an
+        // immutable object. The majority of calls appear to be where the rc
+        // has reached 0 and a finalizer is running. This seems a reasonable
+        // place to allow the refcnt to be set to 1, and clear the immutable flag.
+        assert((ob->ob_refcnt & _Py_REFCNT_MASK) == 0);
+        ob->ob_refcnt = refcnt;
         return;
     }
     ob->ob_refcnt = (ob->ob_refcnt & _Py_IMMUTABLE_MASK) | (refcnt & _Py_REFCNT_MASK);
@@ -655,6 +673,8 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
+
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
 #if defined(Py_LIMITED_API) && (Py_LIMITED_API+0 >= 0x030c0000 || defined(Py_REF_DEBUG))
@@ -715,7 +735,15 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
     if (op->ob_refcnt <= 0) {
         _Py_NegativeRefcount(filename, lineno, op);
     }
-    if (_Py_IsImmortal(op)) {
+
+    if (_Py_IsImmortalOrImmutable(op))
+    {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        if (_Py_DecRef_Immutable(op))
+          _Py_Dealloc(op);
         return;
     }
     _Py_DECREF_STAT_INC();
@@ -732,7 +760,14 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
 {
     // Non-limited C API and limited C API for Python 3.9 and older access
     // directly PyObject.ob_refcnt.
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op))
+    {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        if (_Py_DecRef_Immutable(op))
+            _Py_Dealloc(op);
         return;
     }
     _Py_DECREF_STAT_INC();
