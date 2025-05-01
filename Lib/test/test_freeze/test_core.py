@@ -433,14 +433,13 @@ class TestWeakRef(unittest.TestCase):
         freeze(c)
         self.assertTrue(isfrozen(c))
         self.assertTrue(c.val() is obj)
-        # Following line is not true in the current implementation
-        # self.assertTrue(isfrozen(c.val()))
-        self.assertFalse(isfrozen(c.val()))
+        # The weakrefee should be frozen so we can't sneak
+        # in a mutation.
+        self.assertTrue(isfrozen(c.val()))
         obj = None
-        # Following line is not true in the current implementation
-        # this means me can get a race on weak references
-        # self.assertTrue(c.val() is obj)
-        self.assertIsNone(c.val())
+        # It is important to that the weakref persists once frozen
+        # so that we don't have data-races.
+        self.assertIsNotNone(c.val())
 
 class TestStackCapture(unittest.TestCase):
      def test_stack_capture(self):

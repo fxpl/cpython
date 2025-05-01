@@ -58,7 +58,12 @@ extern void _Py_DecRefTotal(PyInterpreterState *);
 // Increment reference count by n
 static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
 {
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        _Py_RefcntAdd_Immutable(op, n);
         return;
     }
 #ifdef Py_REF_DEBUG
@@ -82,6 +87,11 @@ static inline void _Py_ClearImmortal(PyObject *op)
     if (op) {
         assert((op->ob_refcnt & _Py_REFCNT_MASK) == _Py_IMMORTAL_REFCNT);
         // note this also clears the _Py_IMMUTABLE_FLAG, if set
+        if ((op->ob_refcnt & _Py_IMMUTABLE_FLAG) && (PyObject_IS_GC(op))) {
+            // We stole this state, and the GC is about to try to reuse it.
+            // Put it back to a good state.
+            _Py_AS_GC(op)->_gc_next = 0;
+        }
         op->ob_refcnt = 1;
         Py_DECREF(op);
     }
@@ -91,14 +101,6 @@ static inline void _Py_ClearImmortal(PyObject *op)
         _Py_ClearImmortal(_PyObject_CAST(op)); \
         op = NULL; \
     } while (0)
-
-static inline void _Py_SetImmutable(PyObject *op)
-{
-    if(op) {
-        op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
-    }
-}
-#define _Py_SetImmutable(op) _Py_SetImmutable(_PyObject_CAST(op))
 
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)

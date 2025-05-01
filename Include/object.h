@@ -96,6 +96,18 @@ system also uses the second-to-top bit for managing immutable graphs.
 #endif
 
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_SCC_FLAG | _Py_IMMUTABLE_FLAG)
+/*
+Immutable SCC algorithm requires three states
+1. Immutable:
+    a. Direct: The object is immutable and it has the reference count
+    b. Indirect: The object is immutable and is part of an SCC, and another
+       object in the SCC carries the reference count.
+2. Immutable pending: The object is currently being processed by the freeze
+   algorithm.
+*/
+#define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
+#define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
 
 /*
 Immortalization:
@@ -306,6 +318,9 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
         // immutable object. The majority of calls appear to be where the rc
         // has reached 0 and a finalizer is running. This seems a reasonable
         // place to allow the refcnt to be set to 1, and clear the immutable flag.
+        // TODO(Immutable): Care should be taken if this is an SCC, to first clear immutability
+        // for the whole SCC, and leave the RC as one on every other object
+        // except this one.
         assert((ob->ob_refcnt & _Py_REFCNT_MASK) == 0);
         ob->ob_refcnt = refcnt;
         return;
@@ -669,7 +684,9 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+// These need access to the GC Space currently.
 PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
+PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, int delta);
 
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
@@ -687,6 +704,15 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
     // Non-limited C API and limited C API for Python 3.9 and older access
     // directly PyObject.ob_refcnt.
 #if SIZEOF_VOID_P > 4
+    // Explicitly check immortality against the immortal value
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        _Py_RefcntAdd_Immutable(op, 1);
+        return;
+    }
     // Portable saturated add, branching on the carry flag and set low bits
     PY_UINT32_T cur_refcnt = op->ob_refcnt_split[PY_BIG_ENDIAN];
     PY_UINT32_T new_refcnt = cur_refcnt + 1;
@@ -696,7 +722,12 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
     op->ob_refcnt_split[PY_BIG_ENDIAN] = new_refcnt;
 #else
     // Explicitly check immortality against the immortal value
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        _Py_RefcntAdd_Immutable(op, 1);
         return;
     }
     op->ob_refcnt++;

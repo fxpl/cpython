@@ -56,7 +56,11 @@
 #define Py_DECREF(arg) \
     do { \
         PyObject *op = _PyObject_CAST(arg); \
-        if (_Py_IsImmortal(op)) { \
+        if (_Py_IsImmortalOrImmutable(op)) { \
+            if (_Py_IsImmortal(op)) { \
+                break; \
+            } \
+            _Py_RefcntAdd_Immutable(op, 1); \
             break; \
         } \
         _Py_DECREF_STAT_INC(); \
