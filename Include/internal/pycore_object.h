@@ -103,7 +103,14 @@ static inline void _Py_SetImmutable(PyObject *op)
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        if (_Py_DecRef_Immutable(op)) {
+            destruct(op);
+        }
         return;
     }
     _Py_DECREF_STAT_INC();
@@ -125,7 +132,11 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 static inline void
 _Py_DECREF_NO_DEALLOC(PyObject *op)
 {
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        _Py_DecRef_Immutable(op);
         return;
     }
     _Py_DECREF_STAT_INC();

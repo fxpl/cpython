@@ -84,7 +84,14 @@
 #define _Py_DECREF_SPECIALIZED(arg, dealloc) \
     do { \
         PyObject *op = _PyObject_CAST(arg); \
-        if (_Py_IsImmortal(op)) { \
+        if (_Py_IsImmortalOrImmutable(op)) { \
+            if (_Py_IsImmortal(op)) { \
+                break; \
+            } \
+            if (_Py_DecRef_Immutable(op)) { \
+                destructor d = (destructor)(dealloc); \
+                d(op); \
+            } \
             break; \
         } \
         _Py_DECREF_STAT_INC(); \

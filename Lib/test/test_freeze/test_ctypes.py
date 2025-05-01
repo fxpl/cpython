@@ -1,6 +1,6 @@
 import ctypes
 import unittest
-from immutable import freeze, isfrozen, isfrozen
+from immutable import isfrozen
 
 from .test_common import BaseObjectTest
 
