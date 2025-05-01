@@ -4386,11 +4386,10 @@ module_exec(PyObject *m)
     if(register_freezable != NULL)
     {
         PyObject* result = PyObject_CallOneArg(register_freezable, (PyObject *)st->Element_Type);
+        Py_DECREF(register_freezable);
         if(result == NULL){
             goto error;
         }
-
-        Py_DECREF(register_freezable);
     }
 
     st->deepcopy_obj = _PyImport_GetModuleAttrString("copy", "deepcopy");

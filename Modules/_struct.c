@@ -2503,6 +2503,9 @@ _structmodule_exec(PyObject *m)
     if (PyModule_AddType(m, (PyTypeObject *)state->PyStructType) < 0) {
         return -1;
     }
+    if (_PyImmutability_RegisterFreezable((PyTypeObject *)state->PyStructType) < 0){
+        return -1;
+    }
 
     state->unpackiter_type = PyType_FromModuleAndSpec(
         m, &unpackiter_type_spec, NULL);
