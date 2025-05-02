@@ -1,7 +1,7 @@
 import unittest
-from immutable import freeze, isfrozen
+from immutable import freeze, NotFreezable, isfrozen
 
-from .test_common import BaseObjectTest
+from .test_common import BaseNotFreezableTest, BaseObjectTest
 
 
 # This is a canary to check that global variables are not made immutable
@@ -593,6 +593,15 @@ class TestFunctionDefaults(unittest.TestCase):
         freeze(f)
 
         self.assertTrue(isfrozen(bdef))
+
+
+class TestNotFreezable(BaseNotFreezableTest):
+    class C(NotFreezable):
+        pass
+
+    def __init__(self, *args, **kwargs):
+        obj = self.C()
+        super().__init__(*args, obj=obj, **kwargs)
 
 
 if __name__ == '__main__':

@@ -115,30 +115,6 @@ immutable_isfrozen(PyObject *module, PyObject *obj)
     Py_RETURN_FALSE;
 }
 
-/*[clinic input]
-immutable.isfreezable
-    obj: object
-    /
-
-Check if an object can be frozen.
-[clinic start generated code]*/
-
-static PyObject *
-immutable_isfreezable(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=ddc1a85bd9279882 input=9b06ae134ca053ea]*/
-{
-    int result = _PyImmutability_IsFreezable(obj);
-    if(result == -1){
-        return NULL;
-    }
-
-    if(result){
-        Py_RETURN_TRUE;
-    }
-
-    Py_RETURN_FALSE;
-}
-
 static PyType_Slot not_freezable_error_slots[] = {
     {0, NULL},
 };
@@ -160,7 +136,6 @@ static struct PyMethodDef immutable_methods[] = {
     IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
     IMMUTABLE_FREEZE_METHODDEF
     IMMUTABLE_ISFROZEN_METHODDEF
-    IMMUTABLE_ISFREEZABLE_METHODDEF
     { NULL, NULL }
 };
 

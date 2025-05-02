@@ -390,7 +390,16 @@ static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyOb
 {
     int result = 0;
 
-    result = PyObject_IsInstance(obj, (PyObject*)&_PyNotFreezable_Type);
+    /*
+    Immutable(TODO)
+    This is technically all that is needed, but without the ability to back out
+    the immutability, the instance will still be frozen, which is why the alternative code
+    is used for now.
+    if(obj == (PyObject *)&_PyNotFreezable_Type){
+        return INVALID_NOT_FREEZABLE;
+    }
+    */
+    result = PyObject_IsInstance(obj, (PyObject *)&_PyNotFreezable_Type);
     if(result == -1){
         return ERROR;
     }
@@ -417,31 +426,6 @@ static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyOb
     return VALID_IMPLICIT;
 }
 
-
-int _PyImmutability_IsFreezable(PyObject *obj)
-{
-    struct _Py_immutability_state *state = get_immutable_state();
-    if(state == NULL){
-        PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
-        return 0;
-    }
-
-    switch(check_freezable(state, obj))
-    {
-        case VALID_BUILTIN:
-        case VALID_EXPLICIT:
-        case VALID_IMPLICIT:
-            return 1;
-        case INVALID_NOT_FREEZABLE:
-        case INVALID_C_EXTENSIONS:
-            return 0;
-        case ERROR:
-            return -1;
-    }
-
-    PyErr_SetString(PyExc_RuntimeError, "Unknown state");
-    return -1;
-}
 
 int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
 {
@@ -569,7 +553,7 @@ int _PyImmutability_Freeze(PyObject* obj)
                 goto error;
             }
 
-            if(check == VALID_IMPLICIT)
+            if(check != VALID_EXPLICIT)
             {
                 if(push(frontier, type->tp_mro))
                 {

@@ -1,5 +1,5 @@
 import unittest
-from immutable import freeze, isfrozen, isfreezable, NotFreezable
+from immutable import freeze, isfrozen, NotFreezable
 
 
 class BaseObjectTest(unittest.TestCase):
@@ -8,7 +8,6 @@ class BaseObjectTest(unittest.TestCase):
         self.obj = obj
 
     def setUp(self):
-        self.assertTrue(isfreezable(self.obj))
         freeze(self.obj)
 
     def test_immutable(self):
@@ -30,6 +29,11 @@ class BaseNotFreezableTest(unittest.TestCase):
     def test_not_freezable(self):
         with self.assertRaises(TypeError):
             freeze(self.obj)
+
+        # Immutability(TODO)
+        # this test currently fails due to the lack of a walk-back functionality
+        # for failed freeze attempts
+        #self.assertFalse(isfrozen(self.obj))
 
 
 if __name__ == '__main__':
