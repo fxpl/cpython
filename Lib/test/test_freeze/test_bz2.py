@@ -1,7 +1,10 @@
-from bz2 import BZ2Compressor, BZ2Decompressor
+from test.support import import_helper
 import unittest
 
 from .test_common import BaseNotFreezableTest
+
+bz2 = import_helper.import_module('bz2')
+from bz2 import BZ2Compressor, BZ2Decompressor
 
 
 class TestBZ2Compressor(BaseNotFreezableTest):
