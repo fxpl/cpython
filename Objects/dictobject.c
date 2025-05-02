@@ -2074,18 +2074,13 @@ _PyDict_DelItemIf(PyObject *op, PyObject *key,
 }
 
 
-void
-PyDict_Clear(PyObject *op)
+static void
+_dict_clear(PyObject *op)
 {
     PyDictObject *mp;
     PyDictKeysObject *oldkeys;
     PyDictValues *oldvalues;
     Py_ssize_t i, n;
-
-    if(!Py_CHECKWRITE(op)){
-        PyErr_WriteToImmutable(op);
-        return;
-    }
 
     if (!PyDict_Check(op))
         return;
@@ -2117,6 +2112,18 @@ PyDict_Clear(PyObject *op)
         dictkeys_decref(interp, oldkeys);
     }
     ASSERT_CONSISTENT(mp);
+}
+
+
+void
+PyDict_Clear(PyObject *op)
+{
+    if(!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        return;
+    }
+
+    _dict_clear(op);
 }
 
 /* Internal version of PyDict_Next that returns a hash value in addition
@@ -3603,7 +3610,7 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
 static int
 dict_tp_clear(PyObject *op)
 {
-    PyDict_Clear(op);
+    _dict_clear(op);
     return 0;
 }
 

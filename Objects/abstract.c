@@ -611,7 +611,7 @@ PyBuffer_FromContiguous(const Py_buffer *view, const void *buf, Py_ssize_t len, 
     char *ptr;
     const char *src;
 
-    if(!Py_CHECKWRITE(view->obj)){
+    if(view->obj && !Py_CHECKWRITE(view->obj)){
         PyErr_WriteToImmutable(view->obj);
         return -1;
     }

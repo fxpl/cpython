@@ -5337,10 +5337,7 @@ type_clear(PyTypeObject *type)
     */
 
     PyType_Modified(type);
-    PyObject *dict = lookup_tp_dict(type);
-    if (dict) {
-        PyDict_Clear(dict);
-    }
+    clear_tp_dict(type);
     Py_CLEAR(((PyHeapTypeObject *)type)->ht_module);
 
     Py_CLEAR(type->tp_mro);
