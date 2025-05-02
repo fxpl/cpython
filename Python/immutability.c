@@ -248,31 +248,41 @@ static PyObject* shadow_function_globals(PyObject* op)
         }
     }
 
-    if(check_globals){
-        // if the code calls the globals() builtin, then any
-        // cellvar or const in the function could, potentially, refer to
-        // a global variable. As such, we need to check if the globals
-        // dictionary contains that key and then make it immutable
-        // from this point forwards.
-        // we need to check the closure for any cellvars that are not
-        // referenced in the code object, but are still used in the function
-        size = 0;
-        if(f->func_closure != NULL)
-            size = PySequence_Fast_GET_SIZE(f->func_closure);
+    size = 0;
+    if(f->func_closure != NULL){
+        size = PyTuple_Size(f->func_closure);
+        if(size == -1){
+            Py_DECREF(shadow_builtins);
+            Py_DECREF(shadow_globals);
+            return NULL;
+        }
+    }
 
-        for(Py_ssize_t i=0; i < size; ++i){
-            PyObject* cellvar = PySequence_Fast_GET_ITEM(f->func_closure, i);
-            PyObject* value = PyCell_GET(cellvar);
+    for(Py_ssize_t i=0; i < size; ++i){
+        PyObject* cellvar = PyTuple_GET_ITEM(f->func_closure, i);
+        PyObject* value = PyCell_GET(cellvar);
 
-            if(PyUnicode_Check(value)){
-                PyObject* name = value;
-                if(PyDict_Contains(globals, name)){
-                    value = PyDict_GetItem(globals, name);
-                    if(PyDict_SetItem(shadow_globals, name, value)){
-                        Py_DECREF(shadow_builtins);
-                        Py_DECREF(shadow_globals);
-                        return NULL;
-                    }
+        PyObject* shadow_cellvar = PyCell_New(value);
+        if(PyTuple_SetItem(f->func_closure, i, shadow_cellvar) == -1){
+            Py_DECREF(shadow_cellvar);
+            Py_DECREF(shadow_builtins);
+            Py_DECREF(shadow_globals);
+            return NULL;
+        }
+
+        if(PyUnicode_Check(value) && check_globals){
+            // if the code calls the globals() builtin, then any
+            // cellvar or const in the function could, potentially, refer to
+            // a global variable. As such, we need to check if the globals
+            // dictionary contains that key and then make it immutable
+            // from this point forwards.
+            PyObject* name = value;
+            if(PyDict_Contains(globals, name)){
+                value = PyDict_GetItem(globals, name);
+                if(PyDict_SetItem(shadow_globals, name, value)){
+                    Py_DECREF(shadow_builtins);
+                    Py_DECREF(shadow_globals);
+                    return NULL;
                 }
             }
         }
@@ -524,7 +534,7 @@ int _PyImmutability_Freeze(PyObject* obj)
             case VALID_EXPLICIT:
             case VALID_IMPLICIT:
                 break;
-            
+
             case ERROR:
                 goto error;
 

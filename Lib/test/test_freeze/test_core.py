@@ -242,6 +242,25 @@ class TestFunctions(unittest.TestCase):
         freeze(test)
         self.assertRaises(TypeError, test)
 
+    def test_nonlocal_changed(self):
+        v = 0
+        def c():
+            nonlocal v
+            v += 1
+
+            def inc():
+                return v + 1
+
+            return inc
+
+        test = c()
+        self.assertEqual(test(), 2)
+        test = c()
+        self.assertEqual(test(), 3)
+        freeze(test)
+        v = 5
+        self.assertEqual(test(), 3)
+
     def test_global(self):
         def d():
             global global0
