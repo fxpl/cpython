@@ -442,16 +442,18 @@ PyObject* scc_next(PyObject* obj)
     return _Py_CAST(PyObject*, _Py_AS_GC(obj)->_gc_next);
 }
 
-PyObject* scc_find(PyObject* obj)
+void scc_init_cycle(PyObject* obj)
 {
     // Check if this not been part of an SCC yet.
     if (scc_next(obj) == NULL) {
         // Set up a new SCC with a single element.
         set_scc_rank(obj, 0);
         set_scc_next(obj, obj);
-        return obj;
     }
+}
 
+PyObject* scc_find(PyObject* obj)
+{
     if ((_Py_AS_GC(obj)->_gc_prev & SCC_RANK_FLAG) == SCC_RANK_FLAG) {
         return obj;
     }
@@ -473,6 +475,12 @@ void scc_init(PyObject* obj)
 
 bool scc_union(PyObject* a, PyObject* b)
 {
+    // We know a and b are definitely part of a cycle
+    // even if a and b are equal, then this represents
+    // a self edge.
+    scc_init_cycle(a);
+    scc_init_cycle(b);
+
     PyObject* a_root = scc_find(a);
     PyObject* b_root = scc_find(b);
 
@@ -512,7 +520,11 @@ static PyObject* scc_root(PyObject* obj)
     if ((obj->ob_refcnt & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_DIRECT)
         return obj;
 
-    return scc_parent(obj);
+    if ((obj->ob_refcnt & _Py_IMMUTABLE_MASK) != _Py_IMMUTABLE_PENDING) {
+        return scc_parent(obj);
+    }
+
+    return scc_find(obj);
 }
 
 void return_to_gc(PyObject* op)
@@ -608,7 +620,11 @@ static PyObject PostOrderMarkerStruct = {
 static PyObject* PostOrderMarker = &PostOrderMarkerStruct;
 
 
-static int unfreeze_visit(PyObject* obj, void* curr_root)
+// During the freeze, we removed the reference counts associated
+// with the internal edges of the SCC.  This visitor detects these
+// internal edges and re-adds the reference counts to the
+// objects in the SCC.
+static int scc_add_internal_refcount_visit(PyObject* obj, void* curr_root)
 {
     if (obj == NULL)
         return 0;
@@ -631,17 +647,27 @@ static int unfreeze_visit(PyObject* obj, void* curr_root)
     return 0;
 }
 
-static void unfreeze_and_finalize_scc(PyObject* obj)
+struct SCCDetails {
+    int has_weakreferences;
+    int has_legacy_finalizers;
+    int has_finalizers;
+};
+
+// This will restore the reference counts for the interior edges of the SCC.
+// It calculates some properites of the SCC, to decide how it might be
+// finalised.  Adds an RC to every element in the SCC.
+static void scc_add_internal_refcounts(PyObject* obj, struct SCCDetails* details)
 {
+    DebugSCC("Adding internal refcount for %s @ %p\n", Py_TYPE(obj)->tp_name, obj);
     assert(_Py_IsImmutable(obj));
     PyObject* root = scc_root(obj);
 
-    int has_weakreferences = 0;
-    int has_legacy_finalizers = 0;
-    int has_finalizers = 0;
+    details->has_weakreferences = 0;
+    details->has_legacy_finalizers = 0;
+    details->has_finalizers = 0;
 
     // Add back the reference counts for the interior edges.
-    PyObject* n = root;
+    PyObject* n = obj;
     do {
         DebugSCC("Unfreezing %s @ %p\n", Py_TYPE(n)->tp_name, n);
         PyObject* c = n;
@@ -652,12 +678,12 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
         // TODO (Immutable):  Special cases like type, and others?, are missing.
         traverseproc traverse = Py_TYPE(c)->tp_traverse;
         if (traverse != NULL) {
-            traverse(c, (visitproc)unfreeze_visit, root);
+            traverse(c, (visitproc)scc_add_internal_refcount_visit, root);
         }
         if (Py_TYPE(c)->tp_del != NULL)
-            has_legacy_finalizers++;
-        if (Py_TYPE(c)->tp_finalize != NULL)
-            has_finalizers++;
+          details->has_legacy_finalizers++;
+        if (Py_TYPE(c)->tp_finalize != NULL && !_PyGCHead_FINALIZED(_Py_AS_GC(c)))
+          details->has_finalizers++;
         if (PyWeakref_Check(c)) {
             // We followed weakreferences during freeze, so need to here as well.
             PyObject* wr = PyWeakref_GET_OBJECT(c);
@@ -665,51 +691,93 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
                 // This will increment the reference if it is in the same SCC
                 // and do nothing otherwise.  We are treating the weakref as
                 // a strong reference for the immutable state.
-                unfreeze_visit(wr, root);
+                scc_add_internal_refcount_visit(wr, root);
             }
-            has_weakreferences++;
+            details->has_weakreferences++;
         }
         if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(c)) &&
             _PyObject_GET_WEAKREFS_LISTPTR_FROM_OFFSET(c) != NULL) {
-            has_weakreferences++;
+          details->has_weakreferences++;
         }
-    } while (n != root);
+    } while (n != obj);
+}
+
+// This takes an SCC and turns it back to mutable.
+// Must be called after a call to 
+// scc_add_internal_refcount, so that the reference counts are correct.
+static void scc_make_mutable(PyObject* obj)
+{
+    PyObject* n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        c->ob_refcnt &= ~_Py_IMMUTABLE_MASK;
+        if (PyWeakref_Check(c)) {
+            PyObject* wr = PyWeakref_GET_OBJECT(c);
+            if (wr != NULL) {
+                // Turn back to weak reference. We made the weak references strong during freeze.
+                Py_DECREF(wr);
+            }
+        }
+    } while (n != obj);
+}
+
+// Returns all the objects in the SCC to the Python cycle detector.
+static void scc_return_to_gc(PyObject* obj)
+{
+    PyObject* n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        set_scc_next(c, NULL);
+        set_scc_parent(c, NULL);
+        return_to_gc(c);
+        Py_DECREF(c);
+    } while (n != obj);
+}
+
+static void unfreeze(PyObject* obj)
+{
+    if (scc_next(obj) == NULL)
+    {
+        // Clear Immutable flags
+        obj->ob_refcnt &= _Py_REFCNT_MASK;
+        // Return to the GC.
+        return_to_gc(obj);
+        return;
+    }
+    DebugSCC("Unfreezing %s @ %p\n", Py_TYPE(obj)->tp_name, obj);
+    // Note: We don't need the details of the SCC for a simple unfreeze.
+    struct SCCDetails scc_details;
+    scc_add_internal_refcounts(obj, &scc_details);
+    scc_make_mutable(obj);
+    scc_return_to_gc(obj);
+}
+
+static void unfreeze_and_finalize_scc(PyObject* obj)
+{
+    struct SCCDetails scc_details;
+
+    scc_add_internal_refcounts(obj, &scc_details);
 
     // These are cases that we don't handle.  Return the state as mutable to the
     // cycle detector to handle.
     // TODO(Immutable): Lift the weak references to be handled here.
-    if (has_weakreferences>0 || has_legacy_finalizers>0) {
+    if (scc_details.has_weakreferences>0 || scc_details.has_legacy_finalizers>0) {
         DebugSCC("There are weak references or legacy finalizers in the SCC.  Let cycle detector handle this case.\n");
-        DebugSCC("Weak references: %d, Legacy finalizers: %d\n", has_weakreferences, has_legacy_finalizers);
-        do {
-            PyObject* c = n;
-            n = scc_next(c);
-            c->ob_refcnt &= ~_Py_IMMUTABLE_MASK;
-            if (PyWeakref_Check(c)) {
-                PyObject* wr = PyWeakref_GET_OBJECT(c);
-                if (wr != NULL) {
-                    // Turn back to weak reference. We made the weak references strong during freeze.
-                    Py_DECREF(wr);
-                }
-            }
+        DebugSCC("Weak references: %d, Legacy finalizers: %d\n", scc_details.has_weakreferences, scc_details.has_legacy_finalizers);
 
-            return_to_gc(c);
-            Py_DECREF(c);
-        } while (n != root);
+        scc_make_mutable(obj);
+        scc_return_to_gc(obj);
         return;
     }
 
     // Make all objects mutable
-    n = root;
-    do {
-        PyObject* c = n;
-        n = scc_next(c);
-        // Make mutable
-        c->ob_refcnt &= ~_Py_IMMUTABLE_MASK;
-    } while (n != root);
+    // But leave cyclic list in place for the SCC.
+    scc_make_mutable(obj);
 
-
-    if (has_finalizers) {
+    PyObject* n = obj;
+    if (scc_details.has_finalizers) {
         // Call the finalizers for all objects in the SCC.
         do {
             PyObject* c = n;
@@ -723,12 +791,12 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
             finalize(c);
             // Mark so we don't finalize it again.
             _PyGCHead_SET_FINALIZED(_Py_AS_GC(c));
-        } while (n != root);
+        } while (n != obj);
     }
 
     // tp_clear all elements in the cycle, and drop reference counts on all the
     // elements of the SCC so that they can be reclaimed.
-    n = root;
+    n = obj;
     do {
         DebugSCC("Clearing %s @ %p\n", Py_TYPE(n)->tp_name, n);
         PyObject* c = n;
@@ -741,9 +809,9 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
             //                             (PyObject*)Py_TYPE(op));
             // }
         }
-        return_to_gc(c);
-        Py_DECREF(c);
-    } while (n != root);
+    } while (n != obj);
+
+    scc_return_to_gc(obj);
 }
 
 // Perform a decref on an immutable object
@@ -847,10 +915,6 @@ int _PyImmutability_Freeze(PyObject* obj)
         goto error;
     }
 
-    if(push(pending, obj)){
-        goto error;
-    }
-
     while(PyList_Size(frontier) != 0){
         PyObject* item = pop(frontier);
         FreezableCheck check;
@@ -866,7 +930,7 @@ int _PyImmutability_Freeze(PyObject* obj)
         switch(check){
             case INVALID_NOT_FREEZABLE:
                 PyErr_SetString(PyExc_TypeError, "Invalid freeze request: instance of NotFreezable");
-                goto error;
+                goto unfreeze;
 
             case INVALID_C_EXTENSIONS:
                 PyObject* error_msg = PyUnicode_FromFormat(
@@ -874,7 +938,7 @@ int _PyImmutability_Freeze(PyObject* obj)
                     (item->ob_type->tp_name));
                 PyErr_SetObject(PyExc_TypeError, error_msg);
                 Py_DECREF(error_msg);
-                goto error;
+                goto unfreeze;
 
             case VALID_BUILTIN:
             case VALID_EXPLICIT:
@@ -1046,6 +1110,15 @@ int _PyImmutability_Freeze(PyObject* obj)
     }
 
     goto finally;
+
+unfreeze:
+    while(PyList_Size(pending) != 0){
+        PyObject* item = pop(pending);
+        if(item == NULL){
+            goto error;
+        }
+        unfreeze(item);
+    }
 
 error:
     result = -1;
