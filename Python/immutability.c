@@ -559,6 +559,13 @@ int _PyImmutability_Freeze(PyObject* obj)
                 {
                     goto error;
                 }
+
+                // We need to freeze the tuple object, even though the types
+                // within will have been frozen already.
+                if(push(frontier, type->tp_bases))
+                {
+                    goto error;
+                }
             }
         }
         else
