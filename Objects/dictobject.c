@@ -5895,21 +5895,18 @@ _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
         if (dict == NULL) {
             dictkeys_incref(cached);
             dict = new_dict_with_shared_keys(interp, cached);
-            Py_REGIONADDREFERENCE(owner, dict);
             if (dict == NULL)
                 return -1;
+            Py_REGIONADDREFERENCE(owner, dict);
             *dictptr = dict;
         }
         if (value == NULL) {
+            // Pyrona: Remove reference is called by `DelItem`
             res = PyDict_DelItem(dict, key);
         }
         else {
-            if (Py_REGIONADDREFERENCES(dict, key, value)) {
-                res = PyDict_SetItem(dict, key, value);
-            } else {
-                // Error is set inside ADDREFERENCE
-                return -1;
-            }
+            // Pyrona: Add and remove reference is called by `SetItem`
+            res = PyDict_SetItem(dict, key, value);
         }
     } else {
         dict = *dictptr;
@@ -5921,8 +5918,10 @@ _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
             *dictptr = dict;
         }
         if (value == NULL) {
+            // Pyrona: Remove reference is called by `DelItem`
             res = PyDict_DelItem(dict, key);
         } else {
+            // Pyrona: Add and remove reference is called by `SetItem`
             res = PyDict_SetItem(dict, key, value);
         }
     }
