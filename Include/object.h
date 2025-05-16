@@ -62,7 +62,7 @@ whose size is determined when the object is allocated.
 #  error Py_LIMITED_API is incompatible with Py_TRACE_REFS
 #endif
 
-#ifdef Py_TRACE_REFS
+#ifdef Py_TRACE_REFS  //TODO
 /* Define pointers to support a doubly-linked list of all live heap objects. */
 #define _PyObject_HEAD_EXTRA            \
     PyObject *_ob_next;           \

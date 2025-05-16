@@ -694,9 +694,11 @@ static void scc_add_internal_refcounts(PyObject* obj, struct SCCDetails* details
                 scc_add_internal_refcount_visit(wr, root);
             }
             details->has_weakreferences++;
+            DebugSCC("Weakref %p to %p\n", c, wr);
         }
         if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(c)) &&
-            _PyObject_GET_WEAKREFS_LISTPTR_FROM_OFFSET(c) != NULL) {
+            *_PyObject_GET_WEAKREFS_LISTPTR_FROM_OFFSET(c) != NULL) {
+          DebugSCC("Weakref list %p\n", *_PyObject_GET_WEAKREFS_LISTPTR_FROM_OFFSET(c));
           details->has_weakreferences++;
         }
     } while (n != obj);
