@@ -10681,7 +10681,7 @@ PyTypeObject PySuper_Type = {
 };
 
 
-int
+long long
 _PyType_HasExtensionSlots(PyTypeObject *tp)
 {
     PyNumberMethods *nb = tp->tp_as_number;
@@ -10690,10 +10690,59 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
     PyAsyncMethods *am = tp->tp_as_async;
     PyBufferProcs *bf = tp->tp_as_buffer;
     Py_ssize_t mro_size = PyTuple_GET_SIZE(tp->tp_mro);
+    long long checked_flags = 0;
 
     #define EXT_FLAG(PREFIX, NAME) bool NAME##_ext = PREFIX->PREFIX##_##NAME != NULL
     #define SLOT_EXT_FLAG(PREFIX, NAME) bool NAME##_ext = !(PREFIX->PREFIX##_##NAME == NULL || PREFIX->PREFIX##_##NAME == slot_##PREFIX##_##NAME)
     #define EXT_TEST(PREFIX, NAME) if(PREFIX->PREFIX##_##NAME == base_##PREFIX->PREFIX##_##NAME){NAME##_ext = false;}
+    #define EXT_TEST_RET(PREFIX, NAME, VAL) if(PREFIX->PREFIX##_##NAME == base_##PREFIX->PREFIX##_##NAME){return VAL;}
+    #define IF_NAME_RET_NO(NAME, VAL) if(NAME) {return -(checked_flags | VAL);}
+    #define SET_ACCEPTED_FLAG(COND, BIT) if(COND) {checked_flags |= ((1ll << (BIT)) << 10); }
+
+    SET_ACCEPTED_FLAG(nb == NULL, 1);
+    if (nb != NULL) {
+        SET_ACCEPTED_FLAG(nb->nb_index == NULL, 2);
+        SET_ACCEPTED_FLAG(nb->nb_int == NULL, 3);
+        SET_ACCEPTED_FLAG(nb->nb_float == NULL, 4);
+    }
+    SET_ACCEPTED_FLAG(sq == NULL, 5);
+    if (sq != NULL) {
+        SET_ACCEPTED_FLAG(sq->sq_item == NULL, 6);
+    }
+    SET_ACCEPTED_FLAG(mp == NULL, 7);
+    if (mp != NULL) {
+        SET_ACCEPTED_FLAG(mp->mp_subscript == NULL, 8);
+    }
+    SET_ACCEPTED_FLAG(am == NULL, 9);
+    if (am != NULL) {
+        SET_ACCEPTED_FLAG(am->am_await == NULL, 10);
+        SET_ACCEPTED_FLAG(am->am_aiter == NULL, 11);
+        SET_ACCEPTED_FLAG(am->am_anext == NULL, 12);
+        SET_ACCEPTED_FLAG(am->am_send == NULL, 13);
+    }
+    SET_ACCEPTED_FLAG(bf == NULL, 14);
+    if (bf != NULL) {
+        SET_ACCEPTED_FLAG(bf->bf_getbuffer == NULL, 15);
+    }
+    SET_ACCEPTED_FLAG(tp->tp_getattr == NULL, 16);
+    SET_ACCEPTED_FLAG(tp->tp_setattr == NULL, 17);
+    SET_ACCEPTED_FLAG(tp->tp_methods == NULL, 18);
+    SET_ACCEPTED_FLAG(tp->tp_setattro == PyObject_GenericSetAttr, 19);
+    SET_ACCEPTED_FLAG(tp->tp_setattro == NULL, 20);
+    SET_ACCEPTED_FLAG(tp->tp_getattro == PyObject_GenericGetAttr, 21);
+    SET_ACCEPTED_FLAG(tp->tp_getattro == NULL, 22);
+    SET_ACCEPTED_FLAG(tp->tp_getset == NULL, 23);
+    SET_ACCEPTED_FLAG(tp->tp_getset == subtype_getsets_full, 24);
+    SET_ACCEPTED_FLAG(tp->tp_getset == subtype_getsets_weakref_only, 25);
+    SET_ACCEPTED_FLAG(tp->tp_getset == subtype_getsets_dict_only, 26);
+    SET_ACCEPTED_FLAG(tp->tp_str == NULL, 27);
+    SET_ACCEPTED_FLAG(tp->tp_str == object_str, 28);
+    SET_ACCEPTED_FLAG(tp->tp_repr == NULL, 29);
+    SET_ACCEPTED_FLAG(tp->tp_repr == object_repr, 30);
+    SET_ACCEPTED_FLAG(tp->tp_richcompare == NULL, 31);
+    SET_ACCEPTED_FLAG(tp->tp_richcompare == object_richcompare, 32);
+    SET_ACCEPTED_FLAG(tp->tp_hash == NULL, 33);
+    SET_ACCEPTED_FLAG(tp->tp_hash == (hashfunc)_Py_HashPointer, 34);
 
     if(!(nb == NULL ||
         (nb->nb_index == NULL &&
@@ -10770,39 +10819,36 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(add_ext ||
-           subtract_ext ||
-           multiply_ext ||
-           floor_divide_ext ||
-           true_divide_ext ||
-           remainder_ext ||
-           divmod_ext ||
-           power_ext ||
-           lshift_ext ||
-           rshift_ext ||
-           and_ext ||
-           xor_ext ||
-           or_ext ||
-           matrix_multiply_ext ||
-           index_ext ||
-           int_ext ||
-           float_ext ||
-           inplace_add_ext ||
-           inplace_subtract_ext ||
-           inplace_multiply_ext ||
-           inplace_floor_divide_ext ||
-           inplace_true_divide_ext ||
-           inplace_remainder_ext ||
-           inplace_power_ext ||
-           inplace_lshift_ext ||
-           inplace_rshift_ext ||
-           inplace_and_ext ||
-           inplace_xor_ext ||
-           inplace_or_ext ||
-           inplace_matrix_multiply_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(add_ext, 101);
+        IF_NAME_RET_NO(subtract_ext, 102);
+        IF_NAME_RET_NO(multiply_ext, 103);
+        IF_NAME_RET_NO(floor_divide_ext, 104);
+        IF_NAME_RET_NO(true_divide_ext, 105);
+        IF_NAME_RET_NO(remainder_ext, 106);
+        IF_NAME_RET_NO(divmod_ext, 107);
+        IF_NAME_RET_NO(power_ext, 108);
+        IF_NAME_RET_NO(lshift_ext, 109);
+        IF_NAME_RET_NO(rshift_ext, 110);
+        IF_NAME_RET_NO(and_ext, 111);
+        IF_NAME_RET_NO(xor_ext, 112);
+        IF_NAME_RET_NO(or_ext, 113);
+        IF_NAME_RET_NO(matrix_multiply_ext, 114);
+        IF_NAME_RET_NO(index_ext, 115);
+        IF_NAME_RET_NO(int_ext, 116);
+        IF_NAME_RET_NO(float_ext, 117);
+        IF_NAME_RET_NO(inplace_add_ext, 118);
+        IF_NAME_RET_NO(inplace_subtract_ext, 119);
+        IF_NAME_RET_NO(inplace_multiply_ext, 120);
+        IF_NAME_RET_NO(inplace_floor_divide_ext, 121);
+        IF_NAME_RET_NO(inplace_true_divide_ext, 122);
+        IF_NAME_RET_NO(inplace_remainder_ext, 123);
+        IF_NAME_RET_NO(inplace_power_ext, 124);
+        IF_NAME_RET_NO(inplace_lshift_ext, 125);
+        IF_NAME_RET_NO(inplace_rshift_ext, 126);
+        IF_NAME_RET_NO(inplace_and_ext, 127);
+        IF_NAME_RET_NO(inplace_xor_ext, 128);
+        IF_NAME_RET_NO(inplace_or_ext, 129);
+        IF_NAME_RET_NO(inplace_matrix_multiply_ext, 130);
     }
 
     if(!(sq == NULL || sq->sq_item == NULL))
@@ -10831,17 +10877,15 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(length_ext ||
-           concat_ext ||
-           repeat_ext ||
-           item_ext ||
-           ass_item_ext ||
-           contains_ext ||
-           inplace_concat_ext ||
-           inplace_repeat_ext)
-        {
-            return 1;
-        }
+        
+        IF_NAME_RET_NO(length_ext, 201);
+        IF_NAME_RET_NO(concat_ext, 202);
+        IF_NAME_RET_NO(repeat_ext, 203);
+        IF_NAME_RET_NO(item_ext, 204);
+        IF_NAME_RET_NO(ass_item_ext, 205);
+        IF_NAME_RET_NO(contains_ext, 206);
+        IF_NAME_RET_NO(inplace_concat_ext, 207);
+        IF_NAME_RET_NO(inplace_repeat_ext, 208);
     }
 
     if(!(mp == NULL || mp->mp_subscript == NULL))
@@ -10861,12 +10905,9 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(length_ext ||
-           subscript_ext ||
-           ass_subscript_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(length_ext, 301);
+        IF_NAME_RET_NO(subscript_ext, 302);
+        IF_NAME_RET_NO(ass_subscript_ext, 303);
     }
 
     if(!(am == NULL || (am->am_await != NULL || am->am_aiter != NULL || am->am_anext != NULL || am->am_send != NULL)))
@@ -10888,13 +10929,11 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(await_ext ||
-           aiter_ext ||
-           anext_ext ||
-           send_ext)
-        {
-            return 1;
-        }
+
+        IF_NAME_RET_NO(await_ext, 401);
+        IF_NAME_RET_NO(aiter_ext, 402);
+        IF_NAME_RET_NO(anext_ext, 403);
+        IF_NAME_RET_NO(send_ext, 404);
     }
 
     if(!(bf == NULL || bf->bf_getbuffer == NULL))
@@ -10912,11 +10951,8 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(getbuffer_ext ||
-           releasebuffer_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(getbuffer_ext, 501);
+        IF_NAME_RET_NO(releasebuffer_ext, 502);
     }
 
     if(tp->tp_getattr != NULL ||
@@ -10948,10 +10984,9 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(getattr_ext || setattr_ext || methods_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(getattr_ext, 601);
+        IF_NAME_RET_NO(setattr_ext, 602);
+        IF_NAME_RET_NO(methods_ext, 603);
     }
 
     if (!(tp->tp_setattro == PyObject_GenericSetAttr || tp->tp_setattro == NULL)){
@@ -10966,10 +11001,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(setattro_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(setattro_ext, 701);
     }
 
     if (!(tp->tp_getattro == PyObject_GenericGetAttr || tp->tp_getattro == NULL)){
@@ -10984,10 +11016,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(getattro_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(getattro_ext, 702);
     }
 
     if(!(tp->tp_getset == NULL ||
@@ -11006,10 +11035,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
             }
         }
 
-        if(getset_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(getset_ext, 703);
     }
 
     if(!(tp->tp_str == NULL || tp->tp_str == object_str)){
@@ -11023,10 +11049,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
                 break;
             }
         }
-        if(str_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(str_ext, 704);
     }
 
     if(!(tp->tp_repr == NULL || tp->tp_repr == object_repr)){
@@ -11040,10 +11063,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
                 break;
             }
         }
-        if(repr_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(repr_ext, 705);
     }
 
     if(!(tp->tp_richcompare == NULL || tp->tp_richcompare == object_richcompare)){
@@ -11057,10 +11077,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
                 break;
             }
         }
-        if(richcompare_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(richcompare_ext, 706);
     }
 
     if(!(tp->tp_hash == NULL || tp->tp_hash == (hashfunc)_Py_HashPointer)){
@@ -11074,11 +11091,8 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
                 break;
             }
         }
-        if(hash_ext)
-        {
-            return 1;
-        }
+        IF_NAME_RET_NO(hash_ext, 707);
     }
 
-    return 0;
+    return checked_flags;
 }

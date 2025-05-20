@@ -273,7 +273,7 @@ typedef struct _heaptypeobject {
 PyAPI_FUNC(const char *) _PyType_Name(PyTypeObject *);
 PyAPI_FUNC(PyObject *) _PyType_Lookup(PyTypeObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyType_LookupId(PyTypeObject *, _Py_Identifier *);
-PyAPI_FUNC(int) _PyType_HasExtensionSlots(PyTypeObject *);
+PyAPI_FUNC(long long) _PyType_HasExtensionSlots(PyTypeObject *);
 PyAPI_FUNC(PyObject *) _PyObject_LookupSpecialId(PyObject *, _Py_Identifier *);
 #ifndef Py_BUILD_CORE
 // Backward compatibility for 3rd-party extensions

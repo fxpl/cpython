@@ -34,4 +34,13 @@ PyDoc_STRVAR(immutable_isfrozen__doc__,
 
 #define IMMUTABLE_ISFROZEN_METHODDEF    \
     {"isfrozen", (PyCFunction)immutable_isfrozen, METH_O, immutable_isfrozen__doc__},
-/*[clinic end generated code: output=0edcea6c15426dec input=a9049054013a1b77]*/
+
+PyDoc_STRVAR(immutable_check_freezable__doc__,
+"check_freezable($module, obj, /)\n"
+"--\n"
+"\n"
+"Checks if an object is freezable and returns the reason.");
+
+#define IMMUTABLE_CHECK_FREEZABLE_METHODDEF    \
+    {"check_freezable", (PyCFunction)immutable_check_freezable, METH_O, immutable_check_freezable__doc__},
+/*[clinic end generated code: output=5d19ceb1c0528c0b input=a9049054013a1b77]*/

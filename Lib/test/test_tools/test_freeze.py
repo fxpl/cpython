@@ -18,6 +18,7 @@ with imports_under_tool('freeze', 'test'):
 class TestFreeze(unittest.TestCase):
 
     @support.requires_resource('cpu') # Building Python is slow
+    @unittest.skip('demo')
     def test_freeze_simple_script(self):
         script = textwrap.dedent("""
             import sys

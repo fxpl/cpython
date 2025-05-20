@@ -6,3 +6,4 @@ PyAPI_DATA(PyTypeObject) _PyNotFreezable_Type;
 
 PyAPI_FUNC(int) _PyImmutability_Freeze(PyObject*);
 PyAPI_FUNC(int) _PyImmutability_RegisterFreezable(PyTypeObject*);
+PyAPI_FUNC(long long) _PyImmutability_CheckFreezable(PyObject*);
