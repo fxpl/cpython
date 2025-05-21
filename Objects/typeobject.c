@@ -10696,8 +10696,8 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
     #define SLOT_EXT_FLAG(PREFIX, NAME) bool NAME##_ext = !(PREFIX->PREFIX##_##NAME == NULL || PREFIX->PREFIX##_##NAME == slot_##PREFIX##_##NAME)
     #define EXT_TEST(PREFIX, NAME) if(PREFIX->PREFIX##_##NAME == base_##PREFIX->PREFIX##_##NAME){NAME##_ext = false;}
     #define EXT_TEST_RET(PREFIX, NAME, VAL) if(PREFIX->PREFIX##_##NAME == base_##PREFIX->PREFIX##_##NAME){return VAL;}
-    #define IF_NAME_RET_NO(NAME, VAL) if(NAME) {return -(checked_flags | VAL);}
-    #define SET_ACCEPTED_FLAG(COND, BIT) if(COND) {checked_flags |= ((1ll << (BIT)) << 10); }
+    #define IF_NAME_RET_NO(NAME, VAL) if(NAME) {return -(checked_flags | VAL##ll);}
+    #define SET_ACCEPTED_FLAG(COND, BIT) if(COND) {checked_flags |= ((1ll << (BIT)) << 16); }
 
     SET_ACCEPTED_FLAG(nb == NULL, 1);
     if (nb != NULL) {
@@ -10986,7 +10986,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
 
         IF_NAME_RET_NO(getattr_ext, 601);
         IF_NAME_RET_NO(setattr_ext, 602);
-        IF_NAME_RET_NO(methods_ext, 603);
+        IF_NAME_RET_NO(methods_ext, 604);
     }
 
     if (!(tp->tp_setattro == PyObject_GenericSetAttr || tp->tp_setattro == NULL)){

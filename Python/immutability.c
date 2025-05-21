@@ -386,7 +386,7 @@ typedef enum {
 } FreezableCheck;
 
 
-static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyObject* obj, bool simplify_reason)
+static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyObject* obj)
 {
     int result = 0;
 
@@ -421,18 +421,19 @@ static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyOb
 
     long long ll_result = _PyType_HasExtensionSlots(obj->ob_type);
     if(ll_result < 0) {
-        if (simplify_reason) {
-            return INVALID_C_EXTENSIONS;
-        } else {
-            return (FreezableCheck)result;
-        }
+        return INVALID_C_EXTENSIONS;
     }
 
     return VALID_IMPLICIT;
 }
 
+// This function is just a hack for some data mining
 long long _PyImmutability_CheckFreezable(PyObject* obj) {
     int result = 0;
+
+    if (!PyType_Check(obj)) {
+        return (long long)ERROR;
+    }
 
     result = PyObject_IsInstance(obj, (PyObject *)&_PyNotFreezable_Type);
     if(result == -1){
@@ -442,7 +443,7 @@ long long _PyImmutability_CheckFreezable(PyObject* obj) {
         return (long long)INVALID_NOT_FREEZABLE;
     }
 
-    if(is_freezable_builtin(obj->ob_type)){
+    if(is_freezable_builtin((PyTypeObject*)obj)){
         return (long long)VALID_BUILTIN;
     }
 
@@ -451,20 +452,13 @@ long long _PyImmutability_CheckFreezable(PyObject* obj) {
         PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
         return -1;
     }
-    result = is_explicitly_freezable(state, obj);
-    if(result == -1){
-        return (long long)ERROR;
-    }
-    else if(result == 1){
+    result = PySet_Contains(state->freezable_types, obj);
+    if(result == 1){
         return (long long)VALID_EXPLICIT;
     }
 
-    long long ll_result = _PyType_HasExtensionSlots(obj->ob_type);
-    if(ll_result < 0) {
-        return ll_result;
-    }
-
-    return (long long)VALID_IMPLICIT;
+    long long ll_result = _PyType_HasExtensionSlots((PyTypeObject*)obj);
+    return ll_result;
 }
 
 int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
@@ -541,7 +535,7 @@ int _PyImmutability_Freeze(PyObject* obj)
             continue;
         }
 
-        check = check_freezable(state, item, true);
+        check = check_freezable(state, item);
         switch(check){
             case INVALID_NOT_FREEZABLE:
                 PyErr_SetString(PyExc_TypeError, "Invalid freeze request: instance of NotFreezable");
