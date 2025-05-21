@@ -10697,51 +10697,51 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
     #define EXT_TEST(PREFIX, NAME) if(PREFIX->PREFIX##_##NAME == base_##PREFIX->PREFIX##_##NAME){NAME##_ext = false;}
     #define EXT_TEST_RET(PREFIX, NAME, VAL) if(PREFIX->PREFIX##_##NAME == base_##PREFIX->PREFIX##_##NAME){return VAL;}
     #define IF_NAME_RET_NO(NAME, VAL) if(NAME) {return -(checked_flags | VAL##ll);}
-    #define SET_ACCEPTED_FLAG(COND, BIT) if(COND) {checked_flags |= ((1ll << (BIT)) << 16); }
+    #define SET_ACCEPTED_FLAG(COND, BIT) if(COND) {checked_flags |= ((1ll << (BIT)) << 15); }
 
-    SET_ACCEPTED_FLAG(nb == NULL, 1);
+    SET_ACCEPTED_FLAG(nb != NULL, 1);
     if (nb != NULL) {
-        SET_ACCEPTED_FLAG(nb->nb_index == NULL, 2);
-        SET_ACCEPTED_FLAG(nb->nb_int == NULL, 3);
-        SET_ACCEPTED_FLAG(nb->nb_float == NULL, 4);
+        SET_ACCEPTED_FLAG(nb->nb_index != NULL, 2);
+        SET_ACCEPTED_FLAG(nb->nb_int != NULL, 3);
+        SET_ACCEPTED_FLAG(nb->nb_float != NULL, 4);
     }
-    SET_ACCEPTED_FLAG(sq == NULL, 5);
+    SET_ACCEPTED_FLAG(sq != NULL, 5);
     if (sq != NULL) {
-        SET_ACCEPTED_FLAG(sq->sq_item == NULL, 6);
+        SET_ACCEPTED_FLAG(sq->sq_item != NULL, 6);
     }
-    SET_ACCEPTED_FLAG(mp == NULL, 7);
+    SET_ACCEPTED_FLAG(mp != NULL, 7);
     if (mp != NULL) {
-        SET_ACCEPTED_FLAG(mp->mp_subscript == NULL, 8);
+        SET_ACCEPTED_FLAG(mp->mp_subscript != NULL, 8);
     }
-    SET_ACCEPTED_FLAG(am == NULL, 9);
+    SET_ACCEPTED_FLAG(am != NULL, 9);
     if (am != NULL) {
-        SET_ACCEPTED_FLAG(am->am_await == NULL, 10);
-        SET_ACCEPTED_FLAG(am->am_aiter == NULL, 11);
-        SET_ACCEPTED_FLAG(am->am_anext == NULL, 12);
-        SET_ACCEPTED_FLAG(am->am_send == NULL, 13);
+        SET_ACCEPTED_FLAG(am->am_await != NULL, 10);
+        SET_ACCEPTED_FLAG(am->am_aiter != NULL, 11);
+        SET_ACCEPTED_FLAG(am->am_anext != NULL, 12);
+        SET_ACCEPTED_FLAG(am->am_send != NULL, 13);
     }
-    SET_ACCEPTED_FLAG(bf == NULL, 14);
+    SET_ACCEPTED_FLAG(bf != NULL, 14);
     if (bf != NULL) {
-        SET_ACCEPTED_FLAG(bf->bf_getbuffer == NULL, 15);
+        SET_ACCEPTED_FLAG(bf->bf_getbuffer != NULL, 15);
     }
-    SET_ACCEPTED_FLAG(tp->tp_getattr == NULL, 16);
-    SET_ACCEPTED_FLAG(tp->tp_setattr == NULL, 17);
-    SET_ACCEPTED_FLAG(tp->tp_methods == NULL, 18);
+    SET_ACCEPTED_FLAG(tp->tp_getattr != NULL, 16);
+    SET_ACCEPTED_FLAG(tp->tp_setattr != NULL, 17);
+    SET_ACCEPTED_FLAG(tp->tp_methods != NULL, 18);
     SET_ACCEPTED_FLAG(tp->tp_setattro == PyObject_GenericSetAttr, 19);
-    SET_ACCEPTED_FLAG(tp->tp_setattro == NULL, 20);
+    SET_ACCEPTED_FLAG(tp->tp_setattro != NULL, 20);
     SET_ACCEPTED_FLAG(tp->tp_getattro == PyObject_GenericGetAttr, 21);
-    SET_ACCEPTED_FLAG(tp->tp_getattro == NULL, 22);
-    SET_ACCEPTED_FLAG(tp->tp_getset == NULL, 23);
+    SET_ACCEPTED_FLAG(tp->tp_getattro != NULL, 22);
+    SET_ACCEPTED_FLAG(tp->tp_getset != NULL, 23);
     SET_ACCEPTED_FLAG(tp->tp_getset == subtype_getsets_full, 24);
     SET_ACCEPTED_FLAG(tp->tp_getset == subtype_getsets_weakref_only, 25);
     SET_ACCEPTED_FLAG(tp->tp_getset == subtype_getsets_dict_only, 26);
-    SET_ACCEPTED_FLAG(tp->tp_str == NULL, 27);
+    SET_ACCEPTED_FLAG(tp->tp_str != NULL, 27);
     SET_ACCEPTED_FLAG(tp->tp_str == object_str, 28);
-    SET_ACCEPTED_FLAG(tp->tp_repr == NULL, 29);
+    SET_ACCEPTED_FLAG(tp->tp_repr != NULL, 29);
     SET_ACCEPTED_FLAG(tp->tp_repr == object_repr, 30);
-    SET_ACCEPTED_FLAG(tp->tp_richcompare == NULL, 31);
+    SET_ACCEPTED_FLAG(tp->tp_richcompare != NULL, 31);
     SET_ACCEPTED_FLAG(tp->tp_richcompare == object_richcompare, 32);
-    SET_ACCEPTED_FLAG(tp->tp_hash == NULL, 33);
+    SET_ACCEPTED_FLAG(tp->tp_hash != NULL, 33);
     SET_ACCEPTED_FLAG(tp->tp_hash == (hashfunc)_Py_HashPointer, 34);
 
     if(!(nb == NULL ||
