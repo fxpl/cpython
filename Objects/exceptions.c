@@ -238,12 +238,50 @@ PyDoc_STRVAR(add_note_doc,
 "Exception.add_note(note) --\n\
     add a note to the exception");
 
+    // Most of these are unsafe, but I don't see a reason why it couldn't
+    // be frozen, it most be something how these functions are used.
+    //
+    // Hippo thesis: Freezing an exception still being thrown will be
+    // problematic. Freezing a caught exception might be fine. Indicating
+    // phase of life. Makes total sense, just question if we want to
+    //add special handling
+    //
+    // Update, Exceptions are WEIRD, it seems like freezing them during a throw is
+    // not possible due to the stacktrace, freezing it after seems to be fine again.
+    // Needs investigation... another day:
+    //
+    // ```
+    // from immutable import freeze, register_freezable
+    // 
+    // try:
+    //     None.no_attribute
+    // except Exception as e:
+    //     y = e
+    //     register_freezable(y.__class__)
+    //     freeze(y) # This errors...
+    // 
+    // # This seems to be fine again?
+    // freeze(y)
+    // 
+    // # I also had a weird error, where the first `register_freezable(y.__class__)` didn't succeed fully:
+    // 
+    // # >>> y.__class__
+    // # <class 'AttributeError'>
+    // # >>> register_freezable(y.__class__)
+    // # >>> freeze(y)
+    // # Traceback (most recent call last):
+    // #   File "<stdin>", line 1, in <module>
+    // # TypeError: Cannot freeze instance of type traceback due to custom functionality implemented in C
+    // # >>> register_freezable(y.__class__)
+    // # >>> freeze(y)
+    // # >>>
+    // ```
 static PyMethodDef BaseException_methods[] = {
-   {"__reduce__", (PyCFunction)BaseException_reduce, METH_NOARGS },
-   {"__setstate__", (PyCFunction)BaseException_setstate, METH_O },
-   {"with_traceback", (PyCFunction)BaseException_with_traceback, METH_O,
+   {"__reduce__", (PyCFunction)BaseException_reduce, METH_NOARGS }, // Safe
+   {"__setstate__", (PyCFunction)BaseException_setstate, METH_O }, // Unsafe (Surprizingly)
+   {"with_traceback", (PyCFunction)BaseException_with_traceback, METH_O, // Unsafe
     with_traceback_doc},
-   {"add_note", (PyCFunction)BaseException_add_note, METH_O,
+   {"add_note", (PyCFunction)BaseException_add_note, METH_O, // Unsafe
     add_note_doc},
    {NULL, NULL, 0, NULL},
 };

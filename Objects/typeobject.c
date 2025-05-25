@@ -10680,10 +10680,14 @@ PyTypeObject PySuper_Type = {
     .tp_vectorcall = (vectorcallfunc)super_vectorcall,
 };
 
+#pragma GCC push_options
+#pragma GCC optimize ("O0")
+// ...
 
 long long
 _PyType_HasExtensionSlots(PyTypeObject *tp)
 {
+
     PyNumberMethods *nb = tp->tp_as_number;
     PySequenceMethods *sq = tp->tp_as_sequence;
     PyMappingMethods *mp = tp->tp_as_mapping;
@@ -11096,3 +11100,4 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
 
     return checked_flags;
 }
+#pragma GCC pop_options
