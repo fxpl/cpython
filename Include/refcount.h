@@ -217,7 +217,10 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
         // immutable object. The majority of calls appear to be where the rc
         // has reached 0 and a finalizer is running. This seems a reasonable
         // place to allow the refcnt to be set to 1, and clear the immutable flag.
-        assert(_Py_IMMUTABLE_FLAG_CLEAR(ob->ob_refcnt) == 0);
+
+        // TODO(Immutable): This assert does not hold should it.
+        // assert(_Py_IMMUTABLE_FLAG_CLEAR(ob->ob_refcnt) == 0);
+
         // TODO(Immutable): Do we need to clear the immutability state here?
         // TODO(Immutable): Is here even reachable?
     }

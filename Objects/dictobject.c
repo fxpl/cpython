@@ -3134,6 +3134,7 @@ PyDict_Pop(PyObject *op, PyObject *key, PyObject **result)
     if(!Py_CHECKWRITE(op)){
         PyErr_WriteToImmutable(op);
         err = -1;
+        *result = NULL;
         goto end;
     }
     err = pop_lock_held(op, key, result);

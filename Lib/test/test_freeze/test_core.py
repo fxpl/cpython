@@ -623,5 +623,13 @@ class TestNotFreezable(BaseNotFreezableTest):
         super().__init__(*args, obj=obj, **kwargs)
 
 
+class TestInheritFromCType(unittest.TestCase):
+    class C(list):
+        pass
+
+    def test_inherit_from_list(self):
+        obj = TestInheritFromCType.C()
+        freeze(obj)
+
 if __name__ == '__main__':
     unittest.main()
