@@ -13,6 +13,9 @@ struct _Py_immutability_state {
     PyObject *blocking_on;
     PyObject *freezable_types;
     PyObject *destroy_cb;
+#ifdef Py_DEBUG
+    PyObject *traceback_func;  // For debugging purposes, can be NULL
+#endif
 };
 
 #ifdef __cplusplus
