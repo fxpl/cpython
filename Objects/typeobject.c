@@ -12763,6 +12763,7 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
                 PySequenceMethods *base_sq = base->tp_as_sequence;
                 EXT_TEST(sq, length);
                 EXT_TEST(sq, concat);
+                EXT_TEST(sq, repeat);
                 EXT_TEST(sq, item);
                 EXT_TEST(sq, ass_item);
                 EXT_TEST(sq, contains);

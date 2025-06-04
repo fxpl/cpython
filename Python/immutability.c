@@ -369,10 +369,10 @@ is_freezable_builtin(PyTypeObject *type)
 }
 
 static int
-is_explicitly_freezable(struct _Py_immutability_state *state, PyObject *obj)
+is_explicitly_freezable(struct _Py_immutability_state *state, PyTypeObject *obj)
 {
     int result = 0;
-    PyObject *ref = type_weakref(state, (PyObject *)obj->ob_type);
+    PyObject *ref = type_weakref(state, (PyObject *)obj);
     if(ref == NULL){
         return -1;
     }
@@ -413,11 +413,20 @@ static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyOb
         return INVALID_NOT_FREEZABLE;
     }
 
-    if(is_freezable_builtin(obj->ob_type)){
+    // The following checks only apply to type objects. At this point
+    // we know that all objects reachable by `obj` can be frozen,
+    // including the type. Unfreezeable types will therefore block `obj`
+    // from being frozen before this point.
+    if (!Py_IS_TYPE(obj, &PyType_Type)) {
+        return VALID_IMPLICIT;
+    }
+
+    PyTypeObject* ty = (PyTypeObject*) obj;
+    if(is_freezable_builtin(ty)){
         return VALID_BUILTIN;
     }
 
-    result = is_explicitly_freezable(state, obj);
+    result = is_explicitly_freezable(state, ty);
     if(result == -1){
         return ERROR;
     }
@@ -425,7 +434,7 @@ static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyOb
         return VALID_EXPLICIT;
     }
 
-    if(_PyType_HasExtensionSlots(obj->ob_type)){
+    if(_PyType_HasExtensionSlots(ty)){
         return INVALID_C_EXTENSIONS;
     }
 
@@ -519,9 +528,11 @@ int _PyImmutability_Freeze(PyObject* obj)
                 goto error;
 
             case INVALID_C_EXTENSIONS:
+                assert(Py_IS_TYPE(obj, &PyType_Type));
+                PyTypeObject* ty = (PyTypeObject*) item;
                 PyObject* error_msg = PyUnicode_FromFormat(
-                    "Cannot freeze instance of type %s due to custom functionality implemented in C",
-                    (item->ob_type->tp_name));
+                    "Cannot freeze type %s due to custom functionality implemented in C",
+                    (ty->tp_name));
                 PyErr_SetObject(PyExc_TypeError, error_msg);
                 goto error;
 
