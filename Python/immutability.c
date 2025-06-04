@@ -79,6 +79,21 @@ int init_state(struct _Py_immutability_state *state)
     return 0;
 }
 
+// This is separate to the previous init as it depends on the traceback
+// module being available, and can cause a circular import if it is
+// called during register freezable.
+static
+void init_traceback_state(struct _Py_immutability_state *state)
+{
+#ifdef Py_DEBUG
+    PyObject *traceback_module = PyImport_ImportModule("traceback");
+    if (traceback_module != NULL) {
+        state->traceback_func = PyObject_GetAttrString(traceback_module, "format_stack");
+        Py_DECREF(traceback_module);
+    }
+#endif
+}
+
 static struct _Py_immutability_state* get_immutable_state(void)
 {
     PyInterpreterState* interp = PyInterpreterState_Get();
@@ -509,6 +524,25 @@ int _PyImmutability_Freeze(PyObject* obj)
         return -1;
     }
 
+    PyObject* freeze_location = NULL;
+#ifdef Py_DEBUG
+    // In debug mode, we can set a freeze location for debugging purposes.
+    // Get a traceback object to use as the freeze location.
+    if (state->traceback_func == NULL) {
+        init_traceback_state(state);
+    }
+
+    if (state->traceback_func != NULL) {
+        PyObject *stack = PyObject_CallFunctionObjArgs(state->traceback_func, NULL);
+        if (stack != NULL) {
+            // Add the type name to the top of the stack, can be useful.
+            PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(obj)), "__name__");
+            push(stack, typename);
+            freeze_location = stack;
+        }
+    }
+#endif
+
     if(_Py_IsImmutable(obj)){
         return result;
     }
@@ -564,6 +598,18 @@ int _PyImmutability_Freeze(PyObject* obj)
         if(_Py_IsImmutable(item)){
             continue;
         }
+#ifdef Py_DEBUG
+        if (freeze_location != NULL) {
+            // TODO(Immutable): Some objects don't have attributes that can be set.
+            // As this is a Debug only feature, we could potentially increase the object
+            // size to allow this to be stored directly on the object.
+            if (PyObject_SetAttrString(item, "__freeze_location__", freeze_location) < 0) {
+                // Ignore failure to set _freeze_location
+                PyErr_Clear();
+                // We still want to freeze the object, so we continue
+            }
+        }
+#endif
 
         _Py_SetImmutable(item);
 
