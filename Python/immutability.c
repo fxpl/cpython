@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include "pycore_descrobject.h"
+#include "pycore_gc.h"
 #include "pycore_object.h"
 #include "pycore_immutability.h"
 #include "pycore_list.h"
@@ -159,6 +160,199 @@ static PyObject* pop(PyObject* s){
 
 static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
+}
+
+// Lifted fro mPython/gc.c
+//******************************** */
+#define GC_NEXT _PyGCHead_NEXT
+#define GC_PREV _PyGCHead_PREV
+
+static inline void
+gc_list_init(PyGC_Head *list)
+{
+    // List header must not have flags.
+    // We can assign pointer by simple cast.
+    list->_gc_prev = (uintptr_t)list;
+    list->_gc_next = (uintptr_t)list;
+}
+
+static inline int
+gc_list_is_empty(PyGC_Head *list)
+{
+    return (list->_gc_next == (uintptr_t)list);
+}
+
+/* Append `node` to `list`. */
+static inline void
+gc_list_append(PyGC_Head *node, PyGC_Head *list)
+{
+    assert((list->_gc_prev & ~_PyGC_PREV_MASK) == 0);
+    PyGC_Head *last = (PyGC_Head *)list->_gc_prev;
+
+    // last <-> node
+    _PyGCHead_SET_PREV(node, last);
+    _PyGCHead_SET_NEXT(last, node);
+
+    // node <-> list
+    _PyGCHead_SET_NEXT(node, list);
+    list->_gc_prev = (uintptr_t)node;
+}
+
+/* Move `node` from the gc list it's currently in (which is not explicitly
+ * named here) to the end of `list`.  This is semantically the same as
+ * gc_list_remove(node) followed by gc_list_append(node, list).
+ */
+static void
+gc_list_move(PyGC_Head *node, PyGC_Head *list)
+{
+    /* Unlink from current list. */
+    PyGC_Head *from_prev = GC_PREV(node);
+    PyGC_Head *from_next = GC_NEXT(node);
+    _PyGCHead_SET_NEXT(from_prev, from_next);
+    _PyGCHead_SET_PREV(from_next, from_prev);
+
+    /* Relink at end of new list. */
+    // list must not have flags.  So we can skip macros.
+    PyGC_Head *to_prev = (PyGC_Head*)list->_gc_prev;
+    _PyGCHead_SET_PREV(node, to_prev);
+    _PyGCHead_SET_NEXT(to_prev, node);
+    list->_gc_prev = (uintptr_t)node;
+    _PyGCHead_SET_NEXT(node, list);
+}
+
+/* append list `from` onto list `to`; `from` becomes an empty list */
+static void
+gc_list_merge(PyGC_Head *from, PyGC_Head *to)
+{
+    assert(from != to);
+    if (!gc_list_is_empty(from)) {
+        PyGC_Head *to_tail = GC_PREV(to);
+        PyGC_Head *from_head = GC_NEXT(from);
+        PyGC_Head *from_tail = GC_PREV(from);
+        assert(from_head != from);
+        assert(from_tail != from);
+
+        _PyGCHead_SET_NEXT(to_tail, from_head);
+        _PyGCHead_SET_PREV(from_head, to_tail);
+
+        _PyGCHead_SET_NEXT(from_tail, to);
+        _PyGCHead_SET_PREV(to, from_tail);
+    }
+    gc_list_init(from);
+}
+
+struct _gc_runtime_state*
+get_gc_state(void)
+{
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    return &interp->gc;
+}
+
+/**
+ * Used to track the state of an in progress freeze operation.
+ *
+ */
+struct FreezeState {
+#ifndef Py_GIL_DISABLED
+    PyGC_Head visited;  // Set of objects that have been visited
+    PyGC_Head visited_untracked; // Set of objects that have been visited and are immortal
+#endif
+    PyObject* visited_list; // Some objects don't have GC space, so we need to track them separately.
+};
+
+
+//******************************** */
+
+
+void
+init_freeze_state(struct FreezeState *state)
+{
+#ifndef Py_GIL_DISABLED
+    gc_list_init(&(state->visited));
+    gc_list_init(&(state->visited_untracked));
+#endif
+    state->visited_list = NULL;
+}
+
+int
+add_visited_set(struct FreezeState *state, PyObject *op)
+{
+#ifndef Py_GIL_DISABLED
+    if (_PyObject_IS_GC(op)) {
+        if (_PyObject_GC_IS_TRACKED(op)) {
+            gc_list_move(_Py_AS_GC(op), &(state->visited));
+            return 0;
+        }
+        // If the object is not tracked by the GC, we can just add it to the visited_untracked list.
+        gc_list_append(_Py_AS_GC(op), &(state->visited_untracked));
+        return 0;
+    }
+#endif
+
+    // Only create the visited_list if it is needed.
+    if (state->visited_list == NULL) {
+        state->visited_list = PyList_New(0);
+        if (state->visited_list == NULL) {
+            return -1; // Memory error
+        }
+    }
+
+    return push(state->visited_list, op);
+}
+
+void fail_freeze(struct FreezeState *state)
+{
+#ifndef Py_GIL_DISABLED
+    PyGC_Head *gc;
+    for (gc = _PyGCHead_NEXT(&(state->visited)); gc != &(state->visited); gc = _PyGCHead_NEXT(gc)) {
+        _Py_CLEAR_IMMUTABLE(_Py_FROM_GC(gc));
+    }
+    struct _gc_runtime_state* gc_state = get_gc_state();
+    gc_list_merge(&(state->visited), &(gc_state->old[1].head));
+
+
+    PyGC_Head *next;
+    for (gc = _PyGCHead_NEXT(&(state->visited_untracked)); gc != &(state->visited_untracked); gc = next) {
+        next = _PyGCHead_NEXT(gc);
+        _Py_CLEAR_IMMUTABLE(_Py_FROM_GC(gc));
+        // Object was not tracked in the GC, so we don't need to merge it back.
+        _PyGCHead_SET_PREV(gc, NULL);
+        _PyGCHead_SET_NEXT(gc, NULL);
+    }
+#endif
+
+    if (state->visited_list == NULL) {
+        return; // Nothing to do
+    }
+
+    while (PyList_Size(state->visited_list) > 0) {
+        // Pop doesn't return a newref, but we know the object is still live
+        // as we didn't change anything.
+        PyObject* item = pop(state->visited_list);
+        _Py_CLEAR_IMMUTABLE(item);
+    }
+
+    // Tidy up the visited set
+    Py_DECREF(state->visited_list);
+}
+
+void finish_freeze(struct FreezeState *state)
+{
+#ifndef Py_GIL_DISABLED
+    struct _gc_runtime_state* gc_state = get_gc_state();
+    gc_list_merge(&(state->visited), &(gc_state->old[1].head));
+
+    PyGC_Head *gc;
+    PyGC_Head *next;
+    for (gc = _PyGCHead_NEXT(&(state->visited_untracked)); gc != &(state->visited_untracked); gc = next) {
+        next = _PyGCHead_NEXT(gc);
+        // Object was not tracked in the GC, so we don't need to merge it back.
+        _PyGCHead_SET_PREV(gc, NULL);
+        _PyGCHead_SET_NEXT(gc, NULL);
+    }
+#endif
+
+    Py_XDECREF(state->visited_list);
 }
 
 /**
@@ -492,12 +686,8 @@ int _Py_DecRef_Immutable(PyObject *op)
 
     assert(_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) == 0);
 
-    // Clear the immutable flag so that finalisers can run correctly.
-#if SIZEOF_VOID_P > 4
-    op->ob_flags &= ~_Py_IMMUTABLE_FLAG;
-#else
-    op->ob_refcnt = 0;
-#endif
+    _Py_CLEAR_IMMUTABLE(op);
+
     return true;
 #endif
 }
@@ -517,6 +707,9 @@ int _PyImmutability_Freeze(PyObject* obj)
 {
     PyObject* frontier = NULL;
     int result = 0;
+    struct FreezeState freeze_state;
+    // Initialize the freeze state
+    init_freeze_state(&freeze_state);
 
     struct _Py_immutability_state* state = get_immutable_state();
     if(state == NULL){
@@ -560,6 +753,10 @@ int _PyImmutability_Freeze(PyObject* obj)
         PyObject* item = pop(frontier);
         FreezableCheck check;
 
+        if(_Py_IsImmutable(item)){
+            continue;
+        }
+
         if(item == state->blocking_on ||
            item == state->module_locks){
             continue;
@@ -593,11 +790,6 @@ int _PyImmutability_Freeze(PyObject* obj)
                 goto error;
         }
 
-        // TODO(Immutable):  mjp: This should be earlier once we have backtracking of freeze.
-        // Putting it here makes some things fail the second time they are attempted to be frozen.
-        if(_Py_IsImmutable(item)){
-            continue;
-        }
 #ifdef Py_DEBUG
         if (freeze_location != NULL) {
             // TODO(Immutable): Some objects don't have attributes that can be set.
@@ -610,7 +802,12 @@ int _PyImmutability_Freeze(PyObject* obj)
             }
         }
 #endif
-
+        if (add_visited_set(&freeze_state, item) != 0) {
+            // If we fail to add the item to the visited set, then we
+            // will not be able to backtrack, so go to error case.
+            PyErr_SetString(PyExc_RuntimeError, "Failed to add item to visited set");
+            goto error;
+        }
         _Py_SetImmutable(item);
 
         if(is_c_wrapper(item)) {
@@ -663,9 +860,11 @@ int _PyImmutability_Freeze(PyObject* obj)
         }
     }
 
+    finish_freeze(&freeze_state);
     goto finally;
 
 error:
+    fail_freeze(&freeze_state);
     result = -1;
 
 finally:
