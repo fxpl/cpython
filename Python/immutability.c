@@ -162,7 +162,7 @@ static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
 
-// Lifted fro mPython/gc.c
+// Lifted from Python/gc.c
 //******************************** */
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
@@ -250,7 +250,14 @@ get_gc_state(void)
 
 /**
  * Used to track the state of an in progress freeze operation.
- *
+ * We track the objects that have been visited so far using three lists:
+ *   -  visited - a list of objects that have been visited and were being tracked by the GC
+ *                we use the GC header to thread this list.
+ *   -  visited_untracked - a list of objects that have been visited but were not tracked by the GC
+ *               we use the GC header to thread this list.
+ *   -  visited_list - a list of objects that do not have GC space, so we track them separately using
+ *               a Python list.  In No-GIL builds, this is the only list that is used as the GC header
+ *               has been repurposed for biased reference counting.
  */
 struct FreezeState {
 #ifndef Py_GIL_DISABLED
@@ -274,11 +281,34 @@ init_freeze_state(struct FreezeState *state)
     state->visited_list = NULL;
 }
 
+static inline void _Py_SetImmutable(PyObject *op)
+{
+if(op) {
+#if SIZEOF_VOID_P > 4
+        op->ob_flags |= _Py_IMMUTABLE_FLAG;
+#else
+        op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
+#endif
+    }
+}
+
+int has_visited(struct FreezeState*, PyObject *op)
+{
+    if (_Py_IsImmutable(op))
+        return true;
+    return false;
+}
+
 int
 add_visited_set(struct FreezeState *state, PyObject *op)
 {
+    // Note that we should only set immutable once this cannot fail.
+    // Failure would require us to backtrack the immutability, but
+    // if we failed to add to the list, the caller wouldn't know what to undo.
+
 #ifndef Py_GIL_DISABLED
     if (_PyObject_IS_GC(op)) {
+        _Py_SetImmutable(op);
         if (_PyObject_GC_IS_TRACKED(op)) {
             gc_list_move(_Py_AS_GC(op), &(state->visited));
             return 0;
@@ -293,13 +323,27 @@ add_visited_set(struct FreezeState *state, PyObject *op)
     if (state->visited_list == NULL) {
         state->visited_list = PyList_New(0);
         if (state->visited_list == NULL) {
-            return -1; // Memory error
+            goto error;
         }
     }
 
-    return push(state->visited_list, op);
+    if (push(state->visited_list, op) != 0)
+    {
+        // If we fail to add the item to the visited set, then we
+        // will not be able to backtrack, so go to error case.
+        goto error;
+    }
+    
+    _Py_SetImmutable(op);
+    return 0;
+
+error:
+    PyErr_SetString(PyExc_RuntimeError, "Failed to add item to visited set");
+    return -1;
 }
 
+// Called on the failure of a freeze operation.
+// This unsets the immutability of all the objects that were visited.
 void fail_freeze(struct FreezeState *state)
 {
 #ifndef Py_GIL_DISABLED
@@ -336,6 +380,13 @@ void fail_freeze(struct FreezeState *state)
     Py_DECREF(state->visited_list);
 }
 
+// Called on the successful completion of a freeze operation.
+// This merges the visited set back into the GC's old generation, and clears
+// the visited_untracked set, which contains objects that were not tracked
+// by the GC, but were visited during the freeze operation.
+// It also decrements the reference count of the visited_list, which is used
+// to track objects that do not have GC space, so we need to clear it up
+// after the freeze operation is complete.
 void finish_freeze(struct FreezeState *state)
 {
 #ifndef Py_GIL_DISABLED
@@ -368,7 +419,7 @@ void finish_freeze(struct FreezeState *state)
  * copies containing just those globals and builtins we were able to determine
  * the function uses.
  */
-static PyObject* shadow_function_globals(PyObject* op)
+static int shadow_function_globals(PyObject* op)
 {
     PyObject* builtins = NULL;
     PyObject* shadow_builtins = NULL;
@@ -402,7 +453,7 @@ static PyObject* shadow_function_globals(PyObject* op)
     if(PyDict_SetItemString(shadow_globals, "__builtins__", shadow_builtins)){
         Py_DECREF(shadow_builtins);
         Py_DECREF(shadow_globals);
-        return NULL;
+        return 0;
     }
 
     _PyObject_ASSERT(f_ptr, PyCode_Check(f_ptr));
@@ -428,14 +479,14 @@ static PyObject* shadow_function_globals(PyObject* op)
             if(PyDict_SetItem(shadow_globals, name, value)){
                 Py_DECREF(shadow_builtins);
                 Py_DECREF(shadow_globals);
-                return NULL;
+                return 0;
             }
         }else if(PyDict_Contains(builtins, name)){
             PyObject* value = PyDict_GetItem(builtins, name);
             if(PyDict_SetItem(shadow_builtins, name, value)){
                 Py_DECREF(shadow_builtins);
                 Py_DECREF(shadow_globals);
-                return NULL;
+                return 0;
             }
         }
     }
@@ -455,7 +506,7 @@ static PyObject* shadow_function_globals(PyObject* op)
                 if(PyDict_SetItem(shadow_globals, name, value)){
                     Py_DECREF(shadow_builtins);
                     Py_DECREF(shadow_globals);
-                    return NULL;
+                    return 0;
                 }
             }
         }
@@ -467,7 +518,7 @@ static PyObject* shadow_function_globals(PyObject* op)
         if(size == -1){
             Py_DECREF(shadow_builtins);
             Py_DECREF(shadow_globals);
-            return NULL;
+            return 0;
         }
     }
 
@@ -480,7 +531,7 @@ static PyObject* shadow_function_globals(PyObject* op)
             Py_DECREF(shadow_cellvar);
             Py_DECREF(shadow_builtins);
             Py_DECREF(shadow_globals);
-            return NULL;
+            return 0;
         }
 
         if(PyUnicode_Check(value) && check_globals){
@@ -495,7 +546,7 @@ static PyObject* shadow_function_globals(PyObject* op)
                 if(PyDict_SetItem(shadow_globals, name, value)){
                     Py_DECREF(shadow_builtins);
                     Py_DECREF(shadow_globals);
-                    return NULL;
+                    return 0;
                 }
             }
         }
@@ -514,21 +565,26 @@ static PyObject* shadow_function_globals(PyObject* op)
         }
     }
 
-    Py_RETURN_NONE;
+    return 0;
 
 nomemory:
     Py_XDECREF(shadow_builtins);
     Py_XDECREF(shadow_globals);
-    return PyErr_NoMemory();
+    PyErr_NoMemory();
+    return -1;
 }
 
 static int freeze_visit(PyObject* obj, void* frontier)
 {
-    if(!_Py_IsImmutable(obj)){
-        if(push(frontier, obj)){
-            PyErr_NoMemory();
-            return -1;
-        }
+    if (obj == NULL)
+        return 0;
+
+    if (_Py_IsImmutable(obj))
+        return 0;
+
+    if(push(frontier, obj)){
+        PyErr_NoMemory();
+        return -1;
     }
 
     return 0;
@@ -594,21 +650,11 @@ is_explicitly_freezable(struct _Py_immutability_state *state, PyObject *obj)
     return result;
 }
 
-typedef enum {
-    VALID_BUILTIN,
-    VALID_EXPLICIT,
-    VALID_IMPLICIT,
-    INVALID_NOT_FREEZABLE,
-    INVALID_C_EXTENSIONS,
-    FREEZABLE_ERROR
-} FreezableCheck;
 
-
-static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyObject* obj)
+static int check_freezable(struct _Py_immutability_state *state, PyObject* obj)
 {
-    int result = 0;
-
     /*
+    TODO(Immutable): mjp: Not sure the following is true anymore.
     Immutable(TODO)
     This is technically all that is needed, but without the ability to back out
     the immutability, the instance will still be frozen, which is why the alternative code
@@ -617,31 +663,36 @@ static FreezableCheck check_freezable(struct _Py_immutability_state *state, PyOb
         return INVALID_NOT_FREEZABLE;
     }
     */
-    result = PyObject_IsInstance(obj, (PyObject *)&_PyNotFreezable_Type);
+    int result = PyObject_IsInstance(obj, (PyObject *)&_PyNotFreezable_Type);
     if(result == -1){
-        return FREEZABLE_ERROR;
+        return -1;
     }
     else if(result == 1){
-        return INVALID_NOT_FREEZABLE;
+        PyErr_SetString(PyExc_TypeError, "Invalid freeze request: instance of NotFreezable");
+        return -1;
     }
 
     if(is_freezable_builtin(obj->ob_type)){
-        return VALID_BUILTIN;
+        return 0;
     }
 
     result = is_explicitly_freezable(state, obj);
     if(result == -1){
-        return FREEZABLE_ERROR;
+        return -1;
     }
     else if(result == 1){
-        return VALID_EXPLICIT;
+        return 0;
     }
 
     if(_PyType_HasExtensionSlots(obj->ob_type)){
-        return INVALID_C_EXTENSIONS;
+        PyObject* error_msg = PyUnicode_FromFormat(
+            "Cannot freeze instance of type %s due to custom functionality implemented in C",
+            (obj->ob_type->tp_name));
+        PyErr_SetObject(PyExc_TypeError, error_msg);
+        return -1;
     }
 
-    return VALID_IMPLICIT;
+    return 0;
 }
 
 
@@ -692,15 +743,53 @@ int _Py_DecRef_Immutable(PyObject *op)
 #endif
 }
 
-static inline void _Py_SetImmutable(PyObject *op)
+// Macro that jumps to error, if the expression `x` does not succeed.
+#define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
+
+int traverse_freeze(PyObject* obj, PyObject* frontier)
 {
-if(op) {
-#if SIZEOF_VOID_P > 4
-        op->ob_flags |= _Py_IMMUTABLE_FLAG;
-#else
-        op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
-#endif
+    if(is_c_wrapper(obj)) {
+        // C functions are not mutable
+        // Types are manually traversed
+        return 0;
     }
+
+    // Function require some work to freeze, so we do not freeze the
+    // world as they mention globals and builtins.  This will shadow what they
+    // use, and then we can freeze the those components.
+    if(PyFunction_Check(obj)){
+        SUCCEEDS(shadow_function_globals(obj));
+    }
+
+    if(PyType_Check(obj)){
+        // TODO(Immutable): Special case for types not sure if required.
+        PyTypeObject* type = (PyTypeObject*)obj;
+
+        SUCCEEDS(freeze_visit(type->tp_dict, frontier));
+        SUCCEEDS(freeze_visit(type->tp_mro, frontier));
+        // We need to freeze the tuple object, even though the types
+        // within will have been frozen already.
+        SUCCEEDS(freeze_visit(type->tp_bases, frontier));
+    }
+    else
+    {
+        traverseproc traverse = Py_TYPE(obj)->tp_traverse;
+        if(traverse != NULL){
+            SUCCEEDS(traverse(obj, (visitproc)freeze_visit, frontier));
+        }
+    }
+
+    // The default tp_traverse will not visit the type object if it is
+    // not heap allocated, so we need to do that manually here to freeze
+    // the statically allocated types that are reachable.
+    if (!(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        SUCCEEDS(freeze_visit(_PyObject_CAST(Py_TYPE(obj)), frontier));
+    }
+
+    return 0;
+
+error:
+    return -1;
 }
 
 int _PyImmutability_Freeze(PyObject* obj)
@@ -717,8 +806,12 @@ int _PyImmutability_Freeze(PyObject* obj)
         return -1;
     }
 
-    PyObject* freeze_location = NULL;
+    if(_Py_IsImmutable(obj)){
+        goto finally;
+    }
+
 #ifdef Py_DEBUG
+    PyObject* freeze_location = NULL;
     // In debug mode, we can set a freeze location for debugging purposes.
     // Get a traceback object to use as the freeze location.
     if (state->traceback_func == NULL) {
@@ -736,24 +829,17 @@ int _PyImmutability_Freeze(PyObject* obj)
     }
 #endif
 
-    if(_Py_IsImmutable(obj)){
-        return result;
-    }
-
     frontier = PyList_New(0);
     if(frontier == NULL){
         goto error;
     }
 
-    if(push(frontier, obj)){
-        goto error;
-    }
+    SUCCEEDS(push(frontier, obj));
 
     while(PyList_Size(frontier) != 0){
         PyObject* item = pop(frontier);
-        FreezableCheck check;
 
-        if(_Py_IsImmutable(item)){
+        if(has_visited(&freeze_state, item)){
             continue;
         }
 
@@ -762,33 +848,7 @@ int _PyImmutability_Freeze(PyObject* obj)
             continue;
         }
 
-        check = check_freezable(state, item);
-        switch(check){
-            case INVALID_NOT_FREEZABLE:
-                PyErr_SetString(PyExc_TypeError, "Invalid freeze request: instance of NotFreezable");
-                goto error;
-
-            case INVALID_C_EXTENSIONS:
-            {
-                PyObject* error_msg = PyUnicode_FromFormat(
-                    "Cannot freeze instance of type %s due to custom functionality implemented in C",
-                    (item->ob_type->tp_name));
-                PyErr_SetObject(PyExc_TypeError, error_msg);
-                goto error;
-            }
-
-            case VALID_BUILTIN:
-            case VALID_EXPLICIT:
-            case VALID_IMPLICIT:
-                break;
-
-            case FREEZABLE_ERROR:
-                goto error;
-
-            default:
-                PyErr_SetString(PyExc_RuntimeError, "Unknown freezable check value");
-                goto error;
-        }
+        SUCCEEDS(check_freezable(state, item));
 
 #ifdef Py_DEBUG
         if (freeze_location != NULL) {
@@ -802,62 +862,9 @@ int _PyImmutability_Freeze(PyObject* obj)
             }
         }
 #endif
-        if (add_visited_set(&freeze_state, item) != 0) {
-            // If we fail to add the item to the visited set, then we
-            // will not be able to backtrack, so go to error case.
-            PyErr_SetString(PyExc_RuntimeError, "Failed to add item to visited set");
-            goto error;
-        }
-        _Py_SetImmutable(item);
+        SUCCEEDS(add_visited_set(&freeze_state, item));
 
-        if(is_c_wrapper(item)) {
-            // C functions are not mutable
-            // Types are manually traversed
-            continue;
-        }
-
-        if(PyFunction_Check(item)){
-            if(shadow_function_globals(item) == NULL){
-                goto error;
-            }
-        }
-
-        if(PyType_Check(item)){
-            PyTypeObject* type = (PyTypeObject*)item;
-
-            if(push(frontier, type->tp_dict))
-            {
-                goto error;
-            }
-
-            if(check != VALID_EXPLICIT)
-            {
-                if(push(frontier, type->tp_mro))
-                {
-                    goto error;
-                }
-
-                // We need to freeze the tuple object, even though the types
-                // within will have been frozen already.
-                if(push(frontier, type->tp_bases))
-                {
-                    goto error;
-                }
-            }
-        }
-        else
-        {
-            traverseproc traverse = Py_TYPE(item)->tp_traverse;
-            if(traverse != NULL){
-                if(traverse(item, (visitproc)freeze_visit, frontier)){
-                    goto error;
-                }
-            }
-
-            if(push(frontier, _PyObject_CAST(Py_TYPE(item)))){
-                goto error;
-            }
-        }
+        SUCCEEDS(traverse_freeze(item, frontier));
     }
 
     finish_freeze(&freeze_state);
@@ -868,6 +875,9 @@ error:
     result = -1;
 
 finally:
+#ifdef Py_DEBUG
+    Py_XDECREF(freeze_location);
+#endif
     Py_XDECREF(frontier);
 
     return result;
