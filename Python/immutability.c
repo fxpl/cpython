@@ -341,7 +341,7 @@ add_visited_set(struct FreezeState *state, PyObject *op)
         // will not be able to backtrack, so go to error case.
         goto error;
     }
-    
+
     _Py_SetImmutable(op);
     return 0;
 

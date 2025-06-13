@@ -2816,7 +2816,7 @@ PySet_Discard(PyObject *set, PyObject *key)
     }
 
     rv = set_discard_key((PySetObject *)set, key);
-end:
+end:;
     Py_END_CRITICAL_SECTION();
     return rv;
 }
