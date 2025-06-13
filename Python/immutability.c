@@ -68,13 +68,6 @@ int init_state(struct _Py_immutability_state *state)
         return -1;
     }
 
-    // TODO(Immutable): mjp: Why is this here?  I can find anyone using it.  Can we remove it?
-    //  Commented out for now, but we should remove if MAJ agrees.
-    // if(PyDict_SetItemString(PyModule_GetDict(frozen_importlib), "_freezable_types", state->freezable_types)){
-    //     Py_DECREF(frozen_importlib);
-    //     return -1;
-    // }
-
     Py_DECREF(frozen_importlib);
 
     return 0;
@@ -362,9 +355,6 @@ error:
 void fail_freeze(struct FreezeState *state)
 {
     Py_XDECREF(state->dfs);
-#ifdef Py_DEBUG
-    Py_XDECREF(state->freeze_location);
-#endif
 
 #ifndef Py_GIL_DISABLED
     PyGC_Head *gc;
@@ -750,7 +740,7 @@ int _Py_DecRef_Immutable(PyObject *op)
     _Py_DecRefShared(op);
     return false;
 #else
-    // TODO(Immutable): This needs to be atomic.
+    // TODO(Immutable): This will need to be atomic.
     op->ob_refcnt -= 1;
     if (_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) != 0)
         // Context does not to dealloc this object.
@@ -783,7 +773,7 @@ int traverse_freeze(PyObject* obj, PyObject* dfs)
     }
 
     if(PyType_Check(obj)){
-        // TODO(Immutable): Special case for types not sure if required.
+        // TODO(Immutable): mjp: Special case for types not sure if required. We should review.
         PyTypeObject* type = (PyTypeObject*)obj;
 
         SUCCEEDS(freeze_visit(type->tp_dict, dfs));
@@ -813,6 +803,7 @@ error:
     return -1;
 }
 
+// Main entry point to freeze an object and everything it can reach.
 int _PyImmutability_Freeze(PyObject* obj)
 {
     if(_Py_IsImmutable(obj)){
@@ -867,7 +858,7 @@ int _PyImmutability_Freeze(PyObject* obj)
 
 #ifdef Py_DEBUG
         if (freeze_location != NULL) {
-            // TODO(Immutable): Some objects don't have attributes that can be set.
+            // Some objects don't have attributes that can be set.
             // As this is a Debug only feature, we could potentially increase the object
             // size to allow this to be stored directly on the object.
             if (PyObject_SetAttrString(item, "__freeze_location__", freeze_location) < 0) {

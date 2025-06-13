@@ -2798,15 +2798,19 @@ PySet_Discard(PyObject *set, PyObject *key)
         return -1;
     }
 
+    int rv;
+
+    Py_BEGIN_CRITICAL_SECTION(set);
+    // Need to check inside the critical section incase of
+    // concurrent freezing.
     if(!Py_CHECKWRITE(set)){
-        // TODO(Immutable): Should this be inside the critical section?
         PyErr_WriteToImmutable(set);
-        return -1;
+        rv = -1;
+        goto end;
     }
 
-    int rv;
-    Py_BEGIN_CRITICAL_SECTION(set);
     rv = set_discard_key((PySetObject *)set, key);
+end:
     Py_END_CRITICAL_SECTION();
     return rv;
 }
@@ -2821,14 +2825,16 @@ PySet_Add(PyObject *anyset, PyObject *key)
     }
 
     int rv;
-    if(!Py_CHECKWRITE(anyset)){
-        // TODO(Immutable): Should this be inside the critical section?
-        PyErr_WriteToImmutable(anyset);
-        return -1;
-    }
 
     Py_BEGIN_CRITICAL_SECTION(anyset);
+    if(!Py_CHECKWRITE(anyset)){
+        PyErr_WriteToImmutable(anyset);
+        rv = -1;
+        goto end;
+    }
+
     rv = set_add_key((PySetObject *)anyset, key);
+end:
     Py_END_CRITICAL_SECTION();
     return rv;
 }
