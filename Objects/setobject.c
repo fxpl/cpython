@@ -2810,7 +2810,7 @@ PySet_Discard(PyObject *set, PyObject *key)
     }
 
     rv = set_discard_key((PySetObject *)set, key);
-end:
+end:;
     Py_END_CRITICAL_SECTION();
     return rv;
 }
@@ -2834,7 +2834,7 @@ PySet_Add(PyObject *anyset, PyObject *key)
     }
 
     rv = set_add_key((PySetObject *)anyset, key);
-end:
+end:;
     Py_END_CRITICAL_SECTION();
     return rv;
 }
