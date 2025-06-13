@@ -30,10 +30,7 @@ class BaseNotFreezableTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             freeze(self.obj)
 
-        # Immutability(TODO)
-        # this test currently fails due to the lack of a walk-back functionality
-        # for failed freeze attempts
-        #self.assertFalse(isfrozen(self.obj))
+        self.assertFalse(isfrozen(self.obj))
 
 
 if __name__ == '__main__':

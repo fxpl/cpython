@@ -101,6 +101,7 @@ static struct _Py_immutability_state* get_immutable_state(void)
     struct _Py_immutability_state *state = &interp->immutability;
     if(state->freezable_types == NULL){
         if(init_state(state) == -1){
+            PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
             return NULL;
         }
     }
@@ -164,6 +165,7 @@ static bool is_c_wrapper(PyObject* obj){
 
 // Lifted from Python/gc.c
 //******************************** */
+#ifndef Py_GIL_DISABLED
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
 
@@ -247,7 +249,7 @@ get_gc_state(void)
     PyInterpreterState *interp = _PyInterpreterState_GET();
     return &interp->gc;
 }
-
+#endif // Py_GIL_DISABLED
 /**
  * Used to track the state of an in progress freeze operation.
  * We track the objects that have been visited so far using three lists:
@@ -265,13 +267,15 @@ struct FreezeState {
     PyGC_Head visited_untracked; // Set of objects that have been visited and are immortal
 #endif
     PyObject* visited_list; // Some objects don't have GC space, so we need to track them separately.
+
+    PyObject* dfs; // The DFS stack used to traverse the object graph during freezing.
 };
 
 
 //******************************** */
 
 
-void
+int
 init_freeze_state(struct FreezeState *state)
 {
 #ifndef Py_GIL_DISABLED
@@ -279,6 +283,15 @@ init_freeze_state(struct FreezeState *state)
     gc_list_init(&(state->visited_untracked));
 #endif
     state->visited_list = NULL;
+    state->dfs = NULL;
+
+    state->dfs = PyList_New(0);
+    if (state->dfs == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to create DFS stack for freeze operation");
+        return -1;
+    }
+
+    return 0;
 }
 
 static inline void _Py_SetImmutable(PyObject *op)
@@ -294,6 +307,8 @@ if(op) {
 
 int has_visited(struct FreezeState*, PyObject *op)
 {
+    // TODO(Immutable): In NoGIL builds we will need to use a side data structure
+    // as we will need to handle multiple threads freezing overlapping object graphs.
     if (_Py_IsImmutable(op))
         return true;
     return false;
@@ -346,6 +361,11 @@ error:
 // This unsets the immutability of all the objects that were visited.
 void fail_freeze(struct FreezeState *state)
 {
+    Py_XDECREF(state->dfs);
+#ifdef Py_DEBUG
+    Py_XDECREF(state->freeze_location);
+#endif
+
 #ifndef Py_GIL_DISABLED
     PyGC_Head *gc;
     for (gc = _PyGCHead_NEXT(&(state->visited)); gc != &(state->visited); gc = _PyGCHead_NEXT(gc)) {
@@ -404,6 +424,7 @@ void finish_freeze(struct FreezeState *state)
 #endif
 
     Py_XDECREF(state->visited_list);
+    Py_XDECREF(state->dfs);
 }
 
 /**
@@ -574,7 +595,7 @@ nomemory:
     return -1;
 }
 
-static int freeze_visit(PyObject* obj, void* frontier)
+static int freeze_visit(PyObject* obj, void* dfs)
 {
     if (obj == NULL)
         return 0;
@@ -582,7 +603,7 @@ static int freeze_visit(PyObject* obj, void* frontier)
     if (_Py_IsImmutable(obj))
         return 0;
 
-    if(push(frontier, obj)){
+    if(push(dfs, obj)){
         PyErr_NoMemory();
         return -1;
     }
@@ -746,7 +767,7 @@ int _Py_DecRef_Immutable(PyObject *op)
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
-int traverse_freeze(PyObject* obj, PyObject* frontier)
+int traverse_freeze(PyObject* obj, PyObject* dfs)
 {
     if(is_c_wrapper(obj)) {
         // C functions are not mutable
@@ -765,17 +786,17 @@ int traverse_freeze(PyObject* obj, PyObject* frontier)
         // TODO(Immutable): Special case for types not sure if required.
         PyTypeObject* type = (PyTypeObject*)obj;
 
-        SUCCEEDS(freeze_visit(type->tp_dict, frontier));
-        SUCCEEDS(freeze_visit(type->tp_mro, frontier));
+        SUCCEEDS(freeze_visit(type->tp_dict, dfs));
+        SUCCEEDS(freeze_visit(type->tp_mro, dfs));
         // We need to freeze the tuple object, even though the types
         // within will have been frozen already.
-        SUCCEEDS(freeze_visit(type->tp_bases, frontier));
+        SUCCEEDS(freeze_visit(type->tp_bases, dfs));
     }
     else
     {
         traverseproc traverse = Py_TYPE(obj)->tp_traverse;
         if(traverse != NULL){
-            SUCCEEDS(traverse(obj, (visitproc)freeze_visit, frontier));
+            SUCCEEDS(traverse(obj, (visitproc)freeze_visit, dfs));
         }
     }
 
@@ -783,7 +804,7 @@ int traverse_freeze(PyObject* obj, PyObject* frontier)
     // not heap allocated, so we need to do that manually here to freeze
     // the statically allocated types that are reachable.
     if (!(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
-        SUCCEEDS(freeze_visit(_PyObject_CAST(Py_TYPE(obj)), frontier));
+        SUCCEEDS(freeze_visit(_PyObject_CAST(Py_TYPE(obj)), dfs));
     }
 
     return 0;
@@ -794,21 +815,20 @@ error:
 
 int _PyImmutability_Freeze(PyObject* obj)
 {
-    PyObject* frontier = NULL;
+    if(_Py_IsImmutable(obj)){
+        return 0;
+    }
     int result = 0;
+
     struct FreezeState freeze_state;
     // Initialize the freeze state
-    init_freeze_state(&freeze_state);
+    SUCCEEDS(init_freeze_state(&freeze_state));
 
     struct _Py_immutability_state* state = get_immutable_state();
     if(state == NULL){
-        PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
-        return -1;
+        goto error;
     }
 
-    if(_Py_IsImmutable(obj)){
-        goto finally;
-    }
 
 #ifdef Py_DEBUG
     PyObject* freeze_location = NULL;
@@ -829,15 +849,10 @@ int _PyImmutability_Freeze(PyObject* obj)
     }
 #endif
 
-    frontier = PyList_New(0);
-    if(frontier == NULL){
-        goto error;
-    }
+    SUCCEEDS(push(freeze_state.dfs, obj));
 
-    SUCCEEDS(push(frontier, obj));
-
-    while(PyList_Size(frontier) != 0){
-        PyObject* item = pop(frontier);
+    while(PyList_Size(freeze_state.dfs) != 0){
+        PyObject* item = pop(freeze_state.dfs);
 
         if(has_visited(&freeze_state, item)){
             continue;
@@ -864,7 +879,7 @@ int _PyImmutability_Freeze(PyObject* obj)
 #endif
         SUCCEEDS(add_visited_set(&freeze_state, item));
 
-        SUCCEEDS(traverse_freeze(item, frontier));
+        SUCCEEDS(traverse_freeze(item, freeze_state.dfs));
     }
 
     finish_freeze(&freeze_state);
@@ -878,7 +893,5 @@ finally:
 #ifdef Py_DEBUG
     Py_XDECREF(freeze_location);
 #endif
-    Py_XDECREF(frontier);
-
     return result;
 }
