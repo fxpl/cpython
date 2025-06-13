@@ -298,8 +298,10 @@ if(op) {
     }
 }
 
-int has_visited(struct FreezeState*, PyObject *op)
+int has_visited(struct FreezeState* state, PyObject *op)
 {
+    // Not currently using state, but will need this for NoGIL builds.
+    (void)state;
     // TODO(Immutable): In NoGIL builds we will need to use a side data structure
     // as we will need to handle multiple threads freezing overlapping object graphs.
     if (_Py_IsImmutable(op))
