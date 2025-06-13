@@ -298,7 +298,7 @@ if(op) {
     }
 }
 
-int has_visited(struct FreezeState* state, PyObject *op)
+int has_visited(struct FreezeState *state, PyObject *op)
 {
     // Not currently using state, but will need this for NoGIL builds.
     (void)state;
