@@ -77,7 +77,8 @@
 #ifndef Py_GIL_DISABLED
 
 #undef Py_DECREF
-/// TODO(Immutable):  Should use IsImmortalOrImmutable() like below
+/// TODO(Immutable):
+///  Need to double check logic here as ImmortalOrImmutable ocassionally says yes when it shouldn't!
 #define Py_DECREF(arg) \
     do { \
         PyObject *op = _PyObject_CAST(arg); \

@@ -316,6 +316,7 @@ PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 static inline Py_ALWAYS_INLINE void Py_INCREF_MORTAL(PyObject *op)
 {
     // TODO(Immutable): This is new, and we should check what is needed for immutable objects.
+    // Probably needs to be atomic for immutable objects.
     assert(!_Py_IsStaticImmortal(op));
     op->ob_refcnt++;
     _Py_INCREF_STAT_INC();
