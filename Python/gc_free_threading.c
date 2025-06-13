@@ -1742,7 +1742,7 @@ delete_garbage(struct collection_state *state)
         else {
             inquiry clear = Py_TYPE(op)->tp_clear;
             if (clear != NULL) {
-                // TODO(Immutable): Make object mutable before clearing.
+                // Make object mutable before clearing.
                 _Py_CLEAR_IMMUTABLE(op);
                 (void) clear(op);
                 if (_PyErr_Occurred(tstate)) {
