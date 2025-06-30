@@ -1968,6 +1968,10 @@ void _Py_RegionRemoveReference(PyObject *src, PyObject *tgt) {
     }
 
     // This must be a parent reference, so we need to remove the parent reference.
+    // FIXME(Pyrona): We might want to allow the `tgt_parent_md` to be NULL.
+    // This would prevent an exception if someone calls remove reference twice.
+    // We could also make this a dynamic check, which is lenient by default but
+    // can be turned strict by a flag.
     regiondata* src_md = Py_REGION_DATA(src);
     regiondata* tgt_parent_md = REGION_DATA_CAST(Py_region_ptr(tgt_md->parent));
     if (tgt_parent_md != src_md) {
