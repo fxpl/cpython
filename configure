@@ -1095,6 +1095,7 @@ with_static_libpython
 enable_profiling
 enable_gil
 with_pydebug
+with_ownership_invariant
 with_trace_refs
 enable_pystats
 with_assertions
@@ -1882,6 +1883,9 @@ Optional Packages:
                           do not build libpythonMAJOR.MINOR.a and do not
                           install python.o (default is yes)
   --with-pydebug          build with Py_DEBUG defined (default is no)
+  --with-ownership-invariant
+                          enable ownership invariant for debugging purpose
+                          (default is no)
   --with-trace-refs       enable tracing references for debugging purpose
                           (default is no)
   --with-assertions       build with C assertions enabled (default is no)
@@ -8299,6 +8303,31 @@ printf "%s\n" "no" >&6; } ;;
 esac
 fi
 
+
+# Check for --with-ownership-invariant
+# --with-ownership-invariant
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for --with-ownership-invariant" >&5
+printf %s "checking for --with-ownership-invariant... " >&6; }
+
+# Check whether --with-ownership-invariant was given.
+if test ${with_ownership_invariant+y}
+then :
+  withval=$with_ownership_invariant;
+else case e in #(
+  e) with_ownership_invariant=no
+ ;;
+esac
+fi
+
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $with_ownership_invariant" >&5
+printf "%s\n" "$with_ownership_invariant" >&6; }
+
+if test "$with_ownership_invariant" = "yes"
+then
+
+printf "%s\n" "#define Py_OWNERSHIP_INVARIANT 1" >>confdefs.h
+
+fi
 
 # Check for --with-trace-refs
 # --with-trace-refs

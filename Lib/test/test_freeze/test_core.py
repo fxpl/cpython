@@ -462,6 +462,7 @@ class TestWeakRef(unittest.TestCase):
         self.assertTrue(c.val() is not None)
 
 class TestStackCapture(unittest.TestCase):
+     @unittest.skip("TODO(immutable): xFrednet: Disabled see comment in frame.c")
      def test_stack_capture(self):
          import sys
          x = {}

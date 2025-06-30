@@ -5,8 +5,9 @@
 #include <stdio.h>
 #include "pycore_descrobject.h"
 #include "pycore_gc.h"
-#include "pycore_object.h"
 #include "pycore_immutability.h"
+#include "pycore_object.h"
+#include "pycore_ownership.h"
 #include "pycore_list.h"
 
 // #define IMMUTABLE_TRACING
@@ -1571,7 +1572,7 @@ int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
 
     debug_obj("%s (%p) rc=%zd\n", obj, Py_REFCNT(obj));
 
-    if(is_c_wrapper(obj)) {
+    if(_PyOwnership_is_c_wrapper(obj)) {
         set_direct_rc(obj);
         // C functions are not mutable
         // Types are manually traversed
@@ -1655,7 +1656,6 @@ int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     }
 
     return 0;
-
 error:
     return -1;
 }
@@ -1668,6 +1668,21 @@ int _PyImmutability_Freeze(PyObject* obj)
     }
     int result = 0;
     TRACE_MERMAID_START();
+
+#ifdef Py_DEBUG
+    // This has to be declared early to support the `Py_XDECREF` if any of the
+    // `SUCCEEDS` fails
+    PyObject* freeze_location = NULL;
+#endif
+
+    // Enable the invariant. It has to be enabled at the beginning to allow
+    // reentry and failure in internal calls.
+    SUCCEEDS(_PyOwnership_invariant_enable());
+    // This function incrementally marks new objects as frozen. During this
+    // process it is possible that frozen objects point to mutable ones. This
+    // therefore needs to pause the invariant. Otherwise we might get an
+    // exception when freezing calls into Python and triggers the invariant.
+    SUCCEEDS(_PyOwnership_invariant_pause());
 
     struct FreezeState freeze_state;
     // Initialize the freeze state

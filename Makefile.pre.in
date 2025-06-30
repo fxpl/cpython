@@ -474,6 +474,7 @@ PYTHON_OBJS=	\
 		Python/optimizer.o \
 		Python/optimizer_analysis.o \
 		Python/optimizer_symbols.o \
+		Python/ownership.o \
 		Python/parking_lot.o \
 		Python/pathconfig.o \
 		Python/preconfig.o \
@@ -1392,6 +1393,7 @@ PYTHON_HEADERS= \
 		$(srcdir)/Include/internal/pycore_opcode_metadata.h \
 		$(srcdir)/Include/internal/pycore_opcode_utils.h \
 		$(srcdir)/Include/internal/pycore_optimizer.h \
+		$(srcdir)/Include/internal/pycore_ownership.h \
 		$(srcdir)/Include/internal/pycore_parking_lot.h \
 		$(srcdir)/Include/internal/pycore_parser.h \
 		$(srcdir)/Include/internal/pycore_pathconfig.h \

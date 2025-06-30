@@ -147,13 +147,26 @@ do { \
 
 
 /* Do interpreter dispatch accounting for tracing and instrumentation */
-#define DISPATCH() \
+#ifdef Py_OWNERSHIP_INVARIANT
+#  define DISPATCH() \
+    { \
+        if (_PyOwnership_check_invariant(tstate) != 0) { \
+            JUMP_TO_LABEL(error); \
+        } \
+        assert(frame->stackpointer == NULL); \
+        NEXTOPARG(); \
+        PRE_DISPATCH_GOTO(); \
+        DISPATCH_GOTO(); \
+    }
+#else
+#  define DISPATCH() \
     { \
         assert(frame->stackpointer == NULL); \
         NEXTOPARG(); \
         PRE_DISPATCH_GOTO(); \
         DISPATCH_GOTO(); \
     }
+#endif
 
 #define DISPATCH_SAME_OPARG() \
     { \

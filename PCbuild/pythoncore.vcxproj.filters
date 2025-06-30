@@ -697,6 +697,8 @@
       <Filter>Include\internal</Filter>
     </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_index_pool.h">
+      <Filter>Include\internal</Filter>
+    </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_immutability.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
@@ -1442,6 +1444,8 @@
       <Filter>Python</Filter>
     </ClCompile>
     <ClCompile Include="..\Python\index_pool.c">
+      <Filter>Python</Filter>
+    </ClCompile>
     <ClCompile Include="..\Python\immutability.c">
       <Filter>Python</Filter>
     </ClCompile>
@@ -1491,6 +1495,9 @@
       <Filter>Python</Filter>
     </ClCompile>
     <ClCompile Include="..\Python\optimizer_symbols.c">
+      <Filter>Python</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Python\ownership.c">
       <Filter>Python</Filter>
     </ClCompile>
     <ClCompile Include="..\Python\parking_lot.c">

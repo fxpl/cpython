@@ -7,7 +7,7 @@
 #include "pycore_pylifecycle.h"   // _PyErr_Print()
 #include "pycore_pystats.h"       // _Py_PrintSpecializationStats()
 #include "pycore_runtime.h"       // _PyRuntime
-
+#include "pycore_ownership.h"     // _PyOwnership_check_invariant
 
 /*
    Notes about the implementation:
@@ -1362,6 +1362,13 @@ _Py_HandlePending(PyThreadState *tstate)
         /* The attach blocks until the stop-the-world event is complete. */
         _PyThreadState_Attach(tstate);
     }
+
+#ifdef Py_OWNERSHIP_INVARIANT
+    /* Check the region invariant if required. */
+    if (_PyOwnership_check_invariant(tstate) != 0) {
+        return -1;
+    }
+#endif
 
     /* Pending signals */
     if ((breaker & _PY_SIGNALS_PENDING_BIT) != 0) {

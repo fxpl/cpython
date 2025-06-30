@@ -289,6 +289,7 @@
     <ClInclude Include="..\Include\internal\pycore_obmalloc.h" />
     <ClInclude Include="..\Include\internal\pycore_obmalloc_init.h" />
     <ClInclude Include="..\Include\internal\pycore_optimizer.h" />
+    <ClInclude Include="..\Include\internal\pycore_ownership.h" />
     <ClInclude Include="..\Include\internal\pycore_parking_lot.h" />
     <ClInclude Include="..\Include\internal\pycore_pathconfig.h" />
     <ClInclude Include="..\Include\internal\pycore_pyarena.h" />
@@ -648,6 +649,7 @@
     <ClCompile Include="..\Python\optimizer.c" />
     <ClCompile Include="..\Python\optimizer_analysis.c" />
     <ClCompile Include="..\Python\optimizer_symbols.c" />
+    <ClCompile Include="..\Python\ownership.c" />
     <ClCompile Include="..\Python\parking_lot.c" />
     <ClCompile Include="..\Python\pathconfig.c" />
     <ClCompile Include="..\Python\perf_trampoline.c" />
