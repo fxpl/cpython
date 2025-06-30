@@ -2777,32 +2777,6 @@ builtin_makeimmutable(PyObject *module, PyObject *obj)
 }
 
 /*[clinic input]
-invariant_failure_src as builtin_invariantsrcfailure
-
-Find the source of an invariant failure.
-[clinic start generated code]*/
-
-static PyObject *
-builtin_invariantsrcfailure_impl(PyObject *module)
-/*[clinic end generated code: output=8830901cbbefe8ba input=0266aae8308be0a4]*/
-{
-    return Py_InvariantSrcFailure();
-}
-
-/*[clinic input]
-invariant_failure_tgt as builtin_invarianttgtfailure
-
-Find the target of an invariant failure.
-[clinic start generated code]*/
-
-static PyObject *
-builtin_invarianttgtfailure_impl(PyObject *module)
-/*[clinic end generated code: output=f7c9cd7cb737bd13 input=9c79a563d1eb52f9]*/
-{
-    return Py_InvariantTgtFailure();
-}
-
-/*[clinic input]
 enableinvariant as builtin_enableinvariant
 
 Enable the checking of the region invariant.
@@ -3116,8 +3090,6 @@ static PyMethodDef builtin_methods[] = {
     BUILTIN_ISSUBCLASS_METHODDEF
     BUILTIN_ISIMMUTABLE_METHODDEF
     BUILTIN_MAKEIMMUTABLE_METHODDEF
-    BUILTIN_INVARIANTSRCFAILURE_METHODDEF
-    BUILTIN_INVARIANTTGTFAILURE_METHODDEF
     BUILTIN_ITER_METHODDEF
     BUILTIN_AITER_METHODDEF
     BUILTIN_LEN_METHODDEF
