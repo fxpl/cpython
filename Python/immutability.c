@@ -5,8 +5,9 @@
 #include <stdio.h>
 #include "pycore_descrobject.h"
 #include "pycore_gc.h"
-#include "pycore_object.h"
 #include "pycore_immutability.h"
+#include "pycore_object.h"
+#include "pycore_ownership.h"
 #include "pycore_list.h"
 
 
@@ -150,10 +151,6 @@ static PyObject* pop(PyObject* s){
     }
 
     return item;
-}
-
-static bool is_c_wrapper(PyObject* obj){
-    return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
 
 // Lifted from Python/gc.c
@@ -775,7 +772,7 @@ int _Py_DecRef_Immutable(PyObject *op)
 
 int traverse_freeze(PyObject* obj, PyObject* dfs)
 {
-    if(is_c_wrapper(obj)) {
+    if(_PyOwnership_is_c_wrapper(obj)) {
         // C functions are not mutable
         // Types are manually traversed
         return 0;
@@ -788,33 +785,9 @@ int traverse_freeze(PyObject* obj, PyObject* dfs)
         SUCCEEDS(shadow_function_globals(obj));
     }
 
-    if(PyType_Check(obj)){
-        // TODO(Immutable): mjp: Special case for types not sure if required. We should review.
-        PyTypeObject* type = (PyTypeObject*)obj;
-
-        SUCCEEDS(freeze_visit(type->tp_dict, dfs));
-        SUCCEEDS(freeze_visit(type->tp_mro, dfs));
-        // We need to freeze the tuple object, even though the types
-        // within will have been frozen already.
-        SUCCEEDS(freeze_visit(type->tp_bases, dfs));
-    }
-    else
-    {
-        traverseproc traverse = Py_TYPE(obj)->tp_traverse;
-        if(traverse != NULL){
-            SUCCEEDS(traverse(obj, (visitproc)freeze_visit, dfs));
-        }
-    }
-
-    // The default tp_traverse will not visit the type object if it is
-    // not heap allocated, so we need to do that manually here to freeze
-    // the statically allocated types that are reachable.
-    if (!(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
-        SUCCEEDS(freeze_visit(_PyObject_CAST(Py_TYPE(obj)), dfs));
-    }
+    SUCCEEDS(_PyOwnership_traverse_obj(obj, (visitproc)freeze_visit, (void*)dfs));
 
     return 0;
-
 error:
     return -1;
 }
@@ -827,6 +800,21 @@ int _PyImmutability_Freeze(PyObject* obj)
     }
     int result = 0;
 
+#ifdef Py_DEBUG
+    // This has to be declared early to support the `Py_XDECREF` if any of the
+    // `SUCCEEDS` fails
+    PyObject* freeze_location = NULL;
+#endif
+
+    // Enable the invariant. It has to be enabled at the beginning to allow
+    // reentry and failure in internal calls.
+    SUCCEEDS(_PyOwnership_invariant_enable());
+    // This function incrementally marks new objects as frozen. During this
+    // process it is possible that frozen objects point to mutable ones. This
+    // therefore needs to pause the invariant. Otherwise we might get an
+    // exception when freezing calls into Python and triggers the invariant.
+    SUCCEEDS(_PyOwnership_invariant_pause());
+
     struct FreezeState freeze_state;
     // Initialize the freeze state
     SUCCEEDS(init_freeze_state(&freeze_state));
@@ -836,9 +824,7 @@ int _PyImmutability_Freeze(PyObject* obj)
         goto error;
     }
 
-
 #ifdef Py_DEBUG
-    PyObject* freeze_location = NULL;
     // In debug mode, we can set a freeze location for debugging purposes.
     // Get a traceback object to use as the freeze location.
     if (state->traceback_func == NULL) {
@@ -900,5 +886,11 @@ finally:
 #ifdef Py_DEBUG
     Py_XDECREF(freeze_location);
 #endif
+    // Indicate that this funciton no longer requires the invariant to be paused.
+    // This can't use the `SUCCEEDS` macro, since that one would jump to the
+    // `error` label above.
+    if (_PyOwnership_invariant_resume() != 0) {
+        result = -1;
+    }
     return result;
 }
