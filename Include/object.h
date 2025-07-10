@@ -79,6 +79,25 @@ whose size is determined when the object is allocated.
 #define PyObject_HEAD                   PyObject ob_base;
 
 /*
+Immutability:
+
+Immutability is tracked in the top bit of the reference count. The immutability
+system also uses the second-to-top bit for managing immutable graphs.
+*/
+
+#if SIZEOF_VOID_P > 4
+#define _Py_REFCNT_MASK 0xFFFFFFFF
+#define _Py_IMMUTABLE_FLAG 0x4000000000
+#define _Py_IMMUTABLE_SCC_FLAG 0x8000000000
+#else
+#define _Py_REFCNT_MASK 0x1FFFFFFF
+#define _Py_IMMUTABLE_FLAG 0x20000000
+#define _Py_IMMUTABLE_SCC_FLAG 0x40000000
+#endif
+
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_SCC_FLAG | _Py_IMMUTABLE_FLAG)
+
+/*
 Immortalization:
 
 The following indicates the immortalization strategy depending on the amount
@@ -112,9 +131,9 @@ be done by checking the bit sign flag in the lower 32 bits.
 #else
 /*
 In 32 bit systems, an object will be marked as immortal by setting all of the
-lower 30 bits of the reference count field, which is equal to: 0x3FFFFFFF
+lower 28 bits of the reference count field, which is equal to: 0x0FFFFFFF.
 
-Using the lower 30 bits makes the value backwards compatible by allowing
+Using the lower 28 bits makes the value backwards compatible by allowing
 C-Extensions without the updated checks in Py_INCREF and Py_DECREF to safely
 increase and decrease the objects reference count. The object would lose its
 immortality, but the execution would still be correct.
@@ -122,7 +141,7 @@ immortality, but the execution would still be correct.
 Reference count increases and decreases will first go through an immortality
 check by comparing the reference count field to the immortality reference count.
 */
-#define _Py_IMMORTAL_REFCNT (UINT_MAX >> 2)
+#define _Py_IMMORTAL_REFCNT (UINT_MAX >> 4)
 #endif
 
 // Make all internal uses of PyObject_HEAD_INIT immortal while preserving the
@@ -208,7 +227,7 @@ PyAPI_FUNC(int) Py_Is(PyObject *x, PyObject *y);
 
 
 static inline Py_ssize_t Py_REFCNT(PyObject *ob) {
-    return ob->ob_refcnt;
+    return ob->ob_refcnt & _Py_REFCNT_MASK;
 }
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 < 0x030b0000
 #  define Py_REFCNT(ob) Py_REFCNT(_PyObject_CAST(ob))
@@ -242,7 +261,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmortal(PyObject *op)
 #if SIZEOF_VOID_P > 4
     return _Py_CAST(PY_INT32_T, op->ob_refcnt) < 0;
 #else
-    return op->ob_refcnt == _Py_IMMORTAL_REFCNT;
+    return (op->ob_refcnt & _Py_REFCNT_MASK) == _Py_IMMORTAL_REFCNT;
 #endif
 }
 #define _Py_IsImmortal(op) _Py_IsImmortal(_PyObject_CAST(op))
@@ -254,16 +273,44 @@ static inline int Py_IS_TYPE(PyObject *ob, PyTypeObject *type) {
 #  define Py_IS_TYPE(ob, type) Py_IS_TYPE(_PyObject_CAST(ob), (type))
 #endif
 
+static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
+{
+    return (op->ob_refcnt & _Py_IMMUTABLE_MASK) > 0;
+}
+#define _Py_IsImmutable(op) _Py_IsImmutable(_PyObject_CAST(op))
+
+// Check whether an object is writeable.
+// This check will always succeed during runtime finalization.
+#define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || Py_IsFinalizing()))
+#define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
+
+static inline Py_ALWAYS_INLINE int _Py_IsImmortalOrImmutable(PyObject *op)
+{
+    // TODO(Immutable): Does this work for both 32 and 64bit?
+    return op->ob_refcnt >= _Py_IMMORTAL_REFCNT;
+}
+#define _Py_IsImmortalOrImmutable(op) _Py_IsImmortalOrImmutable(_PyObject_CAST(op))
 
 static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     // This immortal check is for code that is unaware of immortal objects.
     // The runtime tracks these objects and we should avoid as much
     // as possible having extensions inadvertently change the refcnt
     // of an immortalized object.
-    if (_Py_IsImmortal(ob)) {
+    if (_Py_IsImmortalOrImmutable(ob))
+    {
+        if (_Py_IsImmortal(ob)) {
+            return;
+        }
+        assert(_Py_IsImmutable(ob));
+        // TODO(Immutable): It is dangerous to set the reference count of an
+        // immutable object. The majority of calls appear to be where the rc
+        // has reached 0 and a finalizer is running. This seems a reasonable
+        // place to allow the refcnt to be set to 1, and clear the immutable flag.
+        assert((ob->ob_refcnt & _Py_REFCNT_MASK) == 0);
+        ob->ob_refcnt = refcnt;
         return;
     }
-    ob->ob_refcnt = refcnt;
+    ob->ob_refcnt = (ob->ob_refcnt & _Py_IMMUTABLE_MASK) | (refcnt & _Py_REFCNT_MASK);
 }
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 < 0x030b0000
 #  define Py_SET_REFCNT(ob, refcnt) Py_SET_REFCNT(_PyObject_CAST(ob), (refcnt))
@@ -622,6 +669,8 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
+
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
 #if defined(Py_LIMITED_API) && (Py_LIMITED_API+0 >= 0x030c0000 || defined(Py_REF_DEBUG))
@@ -682,12 +731,21 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
     if (op->ob_refcnt <= 0) {
         _Py_NegativeRefcount(filename, lineno, op);
     }
-    if (_Py_IsImmortal(op)) {
+
+    if (_Py_IsImmortalOrImmutable(op))
+    {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        if (_Py_DecRef_Immutable(op))
+          _Py_Dealloc(op);
         return;
     }
     _Py_DECREF_STAT_INC();
     _Py_DECREF_DecRefTotal();
-    if (--op->ob_refcnt == 0) {
+    op->ob_refcnt -= 1;
+    if ((op->ob_refcnt & _Py_REFCNT_MASK) == 0) {
         _Py_Dealloc(op);
     }
 }
@@ -698,11 +756,19 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
 {
     // Non-limited C API and limited C API for Python 3.9 and older access
     // directly PyObject.ob_refcnt.
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op))
+    {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        if (_Py_DecRef_Immutable(op))
+            _Py_Dealloc(op);
         return;
     }
     _Py_DECREF_STAT_INC();
-    if (--op->ob_refcnt == 0) {
+    op->ob_refcnt -= 1;
+    if ((op->ob_refcnt & _Py_REFCNT_MASK) == 0) {
         _Py_Dealloc(op);
     }
 }

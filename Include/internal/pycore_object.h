@@ -71,7 +71,7 @@ static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
 static inline void _Py_SetImmortal(PyObject *op)
 {
     if (op) {
-        op->ob_refcnt = _Py_IMMORTAL_REFCNT;
+        op->ob_refcnt = (op->ob_refcnt & _Py_IMMUTABLE_MASK) | _Py_IMMORTAL_REFCNT;
     }
 }
 #define _Py_SetImmortal(op) _Py_SetImmortal(_PyObject_CAST(op))
@@ -80,7 +80,8 @@ static inline void _Py_SetImmortal(PyObject *op)
 static inline void _Py_ClearImmortal(PyObject *op)
 {
     if (op) {
-        assert(op->ob_refcnt == _Py_IMMORTAL_REFCNT);
+        assert((op->ob_refcnt & _Py_REFCNT_MASK) == _Py_IMMORTAL_REFCNT);
+        // note this also clears the _Py_IMMUTABLE_FLAG, if set
         op->ob_refcnt = 1;
         Py_DECREF(op);
     }
@@ -91,17 +92,33 @@ static inline void _Py_ClearImmortal(PyObject *op)
         op = NULL; \
     } while (0)
 
+static inline void _Py_SetImmutable(PyObject *op)
+{
+    if(op) {
+        op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
+    }
+}
+#define _Py_SetImmutable(op) _Py_SetImmutable(_PyObject_CAST(op))
+
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        assert(_Py_IsImmutable(op));
+        if (_Py_DecRef_Immutable(op)) {
+            destruct(op);
+        }
         return;
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
     _Py_DEC_REFTOTAL(_PyInterpreterState_GET());
 #endif
-    if (--op->ob_refcnt != 0) {
+    op->ob_refcnt -= 1;
+    if ((op->ob_refcnt & _Py_REFCNT_MASK) != 0) {
         assert(op->ob_refcnt > 0);
     }
     else {
@@ -115,7 +132,11 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 static inline void
 _Py_DECREF_NO_DEALLOC(PyObject *op)
 {
-    if (_Py_IsImmortal(op)) {
+    if (_Py_IsImmortalOrImmutable(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+        _Py_DecRef_Immutable(op);
         return;
     }
     _Py_DECREF_STAT_INC();

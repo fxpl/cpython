@@ -208,6 +208,7 @@
     <ClCompile Include="..\Python\hashtable.c" />
     <ClCompile Include="..\Python\import.c" />
     <ClCompile Include="..\Python\importdl.c" />
+    <ClCompile Include="..\Python\immutability.c" />
     <ClCompile Include="..\Python\initconfig.c" />
     <ClCompile Include="..\Python\intrinsics.c" />
     <ClCompile Include="..\Python\instrumentation.c" />

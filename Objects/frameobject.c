@@ -1433,6 +1433,10 @@ _PyFrame_LocalsToFast(_PyInterpreterFrame *frame, int clear)
         if (cell != NULL) {
             oldvalue = PyCell_GET(cell);
             if (value != oldvalue) {
+                if (!Py_CHECKWRITE(cell)) {
+                    PyErr_WriteToImmutable(cell);
+                    return;
+                }
                 PyCell_SET(cell, Py_XNewRef(value));
                 Py_XDECREF(oldvalue);
             }

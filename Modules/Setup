@@ -152,6 +152,7 @@ PYTHONPATH=$(COREPYTHONPATH)
 #array arraymodule.c
 #audioop audioop.c
 #binascii binascii.c
+#immutable immutablemodule.c
 #cmath cmathmodule.c
 #math mathmodule.c
 #mmap mmapmodule.c

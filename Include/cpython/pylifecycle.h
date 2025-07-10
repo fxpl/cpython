@@ -51,7 +51,6 @@ Py_DEPRECATED(3.11) PyAPI_FUNC(void) _Py_SetProgramFullPath(const wchar_t *);
 PyAPI_FUNC(const char *) _Py_gitidentifier(void);
 PyAPI_FUNC(const char *) _Py_gitversion(void);
 
-PyAPI_FUNC(int) _Py_IsFinalizing(void);
 PyAPI_FUNC(int) _Py_IsInterpreterFinalizing(PyInterpreterState *interp);
 
 /* Random */

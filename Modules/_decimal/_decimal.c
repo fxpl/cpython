@@ -588,6 +588,11 @@ signaldict_setitem(PyObject *self, PyObject *key, PyObject *value)
     uint32_t flag;
     int x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (SdFlagAddr(self) == NULL) {
         return value_error_int(INVALID_SIGNALDICT_ERROR_MSG);
     }
@@ -810,6 +815,11 @@ context_setprec(PyObject *self, PyObject *value, void *closure UNUSED)
     mpd_context_t *ctx;
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return -1;
@@ -830,6 +840,11 @@ context_setemin(PyObject *self, PyObject *value, void *closure UNUSED)
     mpd_context_t *ctx;
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return -1;
@@ -849,6 +864,11 @@ context_setemax(PyObject *self, PyObject *value, void *closure UNUSED)
 {
     mpd_context_t *ctx;
     mpd_ssize_t x;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
@@ -871,6 +891,11 @@ context_unsafe_setprec(PyObject *self, PyObject *value)
     mpd_context_t *ctx = CTX(self);
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return NULL;
@@ -891,6 +916,11 @@ context_unsafe_setemin(PyObject *self, PyObject *value)
     mpd_context_t *ctx = CTX(self);
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return NULL;
@@ -910,6 +940,11 @@ context_unsafe_setemax(PyObject *self, PyObject *value)
 {
     mpd_context_t *ctx = CTX(self);
     mpd_ssize_t x;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
@@ -932,6 +967,11 @@ context_setround(PyObject *self, PyObject *value, void *closure UNUSED)
     mpd_context_t *ctx;
     int x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = getround(value);
     if (x == -1) {
         return -1;
@@ -949,6 +989,11 @@ static int
 context_setcapitals(PyObject *self, PyObject *value, void *closure UNUSED)
 {
     mpd_ssize_t x;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
@@ -971,6 +1016,11 @@ context_settraps(PyObject *self, PyObject *value, void *closure UNUSED)
     mpd_context_t *ctx;
     uint32_t flags;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     flags = long_as_flags(value);
     if (flags & DEC_ERRORS) {
         return -1;
@@ -991,6 +1041,11 @@ context_settraps_list(PyObject *self, PyObject *value)
     mpd_context_t *ctx;
     uint32_t flags;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     flags = list_as_flags(value);
     if (flags & DEC_ERRORS) {
         return -1;
@@ -1009,6 +1064,11 @@ context_settraps_dict(PyObject *self, PyObject *value)
 {
     mpd_context_t *ctx;
     uint32_t flags;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (PyDecSignalDict_Check(value)) {
         flags = SdFlags(value);
@@ -1035,6 +1095,11 @@ context_setstatus(PyObject *self, PyObject *value, void *closure UNUSED)
     mpd_context_t *ctx;
     uint32_t flags;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     flags = long_as_flags(value);
     if (flags & DEC_ERRORS) {
         return -1;
@@ -1055,6 +1120,11 @@ context_setstatus_list(PyObject *self, PyObject *value)
     mpd_context_t *ctx;
     uint32_t flags;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     flags = list_as_flags(value);
     if (flags & DEC_ERRORS) {
         return -1;
@@ -1073,6 +1143,11 @@ context_setstatus_dict(PyObject *self, PyObject *value)
 {
     mpd_context_t *ctx;
     uint32_t flags;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (PyDecSignalDict_Check(value)) {
         flags = SdFlags(value);
@@ -1098,6 +1173,11 @@ context_setclamp(PyObject *self, PyObject *value, void *closure UNUSED)
     mpd_context_t *ctx;
     mpd_ssize_t x;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
         return -1;
@@ -1117,7 +1197,12 @@ static int
 context_setallcr(PyObject *self, PyObject *value, void *closure UNUSED)
 {
     mpd_context_t *ctx;
-    mpd_ssize_t x;
+    mpd_ssize_t x;j
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     x = PyLong_AsSsize_t(value);
     if (x == -1 && PyErr_Occurred()) {
@@ -1238,6 +1323,10 @@ context_setattrs(PyObject *self, PyObject *prec, PyObject *rounding,
 static PyObject *
 context_clear_traps(PyObject *self, PyObject *dummy UNUSED)
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     CTX(self)->traps = 0;
     Py_RETURN_NONE;
 }
@@ -1245,6 +1334,10 @@ context_clear_traps(PyObject *self, PyObject *dummy UNUSED)
 static PyObject *
 context_clear_flags(PyObject *self, PyObject *dummy UNUSED)
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     CTX(self)->status = 0;
     Py_RETURN_NONE;
 }
@@ -5897,6 +5990,9 @@ PyInit__decimal(void)
     CHECK_INT(PyModule_AddObjectRef(m, "Decimal", (PyObject *)&PyDec_Type));
     CHECK_INT(PyModule_AddObjectRef(m, "Context", (PyObject *)&PyDecContext_Type));
     CHECK_INT(PyModule_AddObjectRef(m, "DecimalTuple", (PyObject *)DecimalTuple));
+
+    CHECK_INT(_PyImmutability_RegisterFreezable(&PyDec_Type));
+    CHECK_INT(_PyImmutability_RegisterFreezable(&PyDecContext_Type));
 
     /* Create top level exception */
     ASSIGN_PTR(DecimalException, PyErr_NewException(

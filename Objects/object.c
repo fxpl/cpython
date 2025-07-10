@@ -1172,7 +1172,13 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
     PyUnicode_InternInPlace(&name);
     if (tp->tp_setattro != NULL) {
-        err = (*tp->tp_setattro)(v, name, value);
+        if(Py_CHECKWRITE(v)){
+            err = (*tp->tp_setattro)(v, name, value);
+        }else{
+            PyErr_WriteToImmutable(v);
+            err = -1;
+        }
+
         Py_DECREF(name);
         return err;
     }
@@ -1182,7 +1188,14 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
             Py_DECREF(name);
             return -1;
         }
-        err = (*tp->tp_setattr)(v, (char *)name_str, value);
+
+        if(Py_CHECKWRITE(v)){
+            err = (*tp->tp_setattr)(v, (char *)name_str, value);
+        }else{
+            PyErr_WriteToImmutable(v);
+            err = -1;
+        }
+
         Py_DECREF(name);
         return err;
     }
@@ -1541,6 +1554,11 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
         return -1;
     }
 
+    if(!Py_CHECKWRITE(obj)){
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
+
     Py_INCREF(name);
     Py_INCREF(tp);
     descr = _PyType_Lookup(tp, name);
@@ -1622,6 +1640,11 @@ PyObject_GenericSetAttr(PyObject *obj, PyObject *name, PyObject *value)
 int
 PyObject_GenericSetDict(PyObject *obj, PyObject *value, void *context)
 {
+    if(!Py_CHECKWRITE(obj)){
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
+
     PyObject **dictptr = _PyObject_GetDictPtr(obj);
     if (dictptr == NULL) {
         if (_PyType_HasFeature(Py_TYPE(obj), Py_TPFLAGS_MANAGED_DICT) &&

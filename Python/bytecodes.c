@@ -1410,6 +1410,12 @@ dummy_func(
                 format_exc_unbound(tstate, frame->f_code, oparg);
                 goto error;
             }
+
+            if (!Py_CHECKWRITE(cell)){
+                format_exc_notwriteable(tstate, frame->f_code, oparg);
+                goto error;
+            }
+
             PyCell_SET(cell, NULL);
             Py_DECREF(oldobj);
         }
@@ -1464,6 +1470,12 @@ dummy_func(
         inst(STORE_DEREF, (v --)) {
             PyObject *cell = GETLOCAL(oparg);
             PyObject *oldobj = PyCell_GET(cell);
+
+            if(!Py_CHECKWRITE(cell)){
+                format_exc_notwriteable(tstate, frame->f_code, oparg);
+                goto error;
+            }
+
             PyCell_SET(cell, v);
             Py_XDECREF(oldobj);
         }
@@ -1954,6 +1966,11 @@ dummy_func(
             PyDictOrValues dorv = *_PyObject_DictOrValuesPointer(owner);
             DEOPT_IF(!_PyDictOrValues_IsValues(dorv), STORE_ATTR);
             STAT_INC(STORE_ATTR, hit);
+            if (!Py_CHECKWRITE(owner))
+            {
+                format_exc_notwriteable(tstate, frame->f_code, oparg);
+                goto error;
+            }
             PyDictValues *values = _PyDictOrValues_GetValues(dorv);
             PyObject *old_value = values->values[index];
             values->values[index] = value;
@@ -1975,6 +1992,11 @@ dummy_func(
             DEOPT_IF(_PyDictOrValues_IsValues(dorv), STORE_ATTR);
             PyDictObject *dict = (PyDictObject *)_PyDictOrValues_GetDict(dorv);
             DEOPT_IF(dict == NULL, STORE_ATTR);
+            if (!Py_CHECKWRITE(owner))
+            {
+                format_exc_notwriteable(tstate, frame->f_code, oparg);
+                goto error;
+            }
             assert(PyDict_CheckExact((PyObject *)dict));
             PyObject *name = GETITEM(frame->f_code->co_names, oparg);
             DEOPT_IF(hint >= (size_t)dict->ma_keys->dk_nentries, STORE_ATTR);
@@ -2011,6 +2033,11 @@ dummy_func(
             PyTypeObject *tp = Py_TYPE(owner);
             assert(type_version != 0);
             DEOPT_IF(tp->tp_version_tag != type_version, STORE_ATTR);
+            if (!Py_CHECKWRITE(owner))
+            {
+                format_exc_notwriteable(tstate, frame->f_code, oparg);
+                goto error;
+            }
             char *addr = (char *)owner + index;
             STAT_INC(STORE_ATTR, hit);
             PyObject *old_value = *(PyObject **)addr;

@@ -1238,6 +1238,11 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
 {
     PyObject *old_value;
 
+    if (!Py_CHECKWRITE(mp)){
+        PyErr_WriteToImmutable(mp);
+        goto Fail;
+    }
+
     if (DK_IS_UNICODE(mp->ma_keys) && !PyUnicode_CheckExact(key)) {
         if (insertion_resize(interp, mp, 0) < 0)
             goto Fail;
@@ -1334,6 +1339,13 @@ insert_to_emptydict(PyInterpreterState *interp, PyDictObject *mp,
                     PyObject *key, Py_hash_t hash, PyObject *value)
 {
     assert(mp->ma_keys == Py_EMPTY_KEYS);
+
+    if (!Py_CHECKWRITE(mp)){
+        PyErr_WriteToImmutable(mp);
+        Py_DECREF(key);
+        Py_DECREF(value);
+        return -1;
+    }
 
     uint64_t new_version = _PyDict_NotifyEvent(
             interp, PyDict_EVENT_ADDED, mp, key, value);
@@ -2002,6 +2014,11 @@ _PyDict_DelItem_KnownHash(PyObject *op, PyObject *key, Py_hash_t hash)
         return -1;
     }
 
+    if(!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        return -1;
+    }
+
     PyInterpreterState *interp = _PyInterpreterState_GET();
     uint64_t new_version = _PyDict_NotifyEvent(
             interp, PyDict_EVENT_DELETED, mp, key, NULL);
@@ -2057,8 +2074,8 @@ _PyDict_DelItemIf(PyObject *op, PyObject *key,
 }
 
 
-void
-PyDict_Clear(PyObject *op)
+static void
+_dict_clear(PyObject *op)
 {
     PyDictObject *mp;
     PyDictKeysObject *oldkeys;
@@ -2095,6 +2112,18 @@ PyDict_Clear(PyObject *op)
         dictkeys_decref(interp, oldkeys);
     }
     ASSERT_CONSISTENT(mp);
+}
+
+
+void
+PyDict_Clear(PyObject *op)
+{
+    if(!Py_CHECKWRITE(op)){
+        PyErr_WriteToImmutable(op);
+        return;
+    }
+
+    _dict_clear(op);
 }
 
 /* Internal version of PyDict_Next that returns a hash value in addition
@@ -2703,6 +2732,10 @@ dict_update_common(PyObject *self, PyObject *args, PyObject *kwds,
 static PyObject *
 dict_update(PyObject *self, PyObject *args, PyObject *kwds)
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     if (dict_update_common(self, args, kwds, "update") != -1)
         Py_RETURN_NONE;
     return NULL;
@@ -3299,6 +3332,10 @@ PyDict_SetDefault(PyObject *d, PyObject *key, PyObject *defaultobj)
         return NULL;
     }
 
+    if(!Py_CHECKWRITE(d)){
+        return PyErr_WriteToImmutable(d);
+    }
+
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
         if (hash == -1)
@@ -3406,6 +3443,10 @@ dict_setdefault_impl(PyDictObject *self, PyObject *key,
 static PyObject *
 dict_clear(PyDictObject *mp, PyObject *Py_UNUSED(ignored))
 {
+    if(!Py_CHECKWRITE(mp)){
+        return PyErr_WriteToImmutable(mp);
+    }
+
     PyDict_Clear((PyObject *)mp);
     Py_RETURN_NONE;
 }
@@ -3427,6 +3468,10 @@ static PyObject *
 dict_pop_impl(PyDictObject *self, PyObject *key, PyObject *default_value)
 /*[clinic end generated code: output=3abb47b89f24c21c input=e221baa01044c44c]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     return _PyDict_Pop((PyObject*)self, key, default_value);
 }
 
@@ -3447,6 +3492,10 @@ dict_popitem_impl(PyDictObject *self)
     PyObject *res;
     uint64_t new_version;
     PyInterpreterState *interp = _PyInterpreterState_GET();
+
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
 
     /* Allocate the result tuple before checking the size.  Believe it
      * or not, this allocation could trigger a garbage collection which
@@ -3561,7 +3610,7 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
 static int
 dict_tp_clear(PyObject *op)
 {
-    PyDict_Clear(op);
+    _dict_clear(op);
     return 0;
 }
 
@@ -5428,6 +5477,12 @@ _PyObject_StoreInstanceAttribute(PyObject *obj, PyDictValues *values,
     assert(keys != NULL);
     assert(values != NULL);
     assert(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
+
+    if(!Py_CHECKWRITE(obj)){
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
+
     Py_ssize_t ix = DKIX_EMPTY;
     if (PyUnicode_CheckExact(name)) {
         ix = insert_into_dictkeys(keys, name);
@@ -5636,7 +5691,14 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
             dict = make_dict_from_instance_attributes(
                     interp, CACHED_KEYS(tp), values);
             if (dict != NULL) {
-                dorv_ptr->dict = dict;
+                if (_Py_IsImmutable(obj)) {
+                    if(_PyImmutability_Freeze(_PyObject_CAST(dict)) < 0){
+                        return NULL;
+                    }
+                }
+                else {
+                    dorv_ptr->dict = dict;
+                }
             }
         }
         else {
@@ -5644,7 +5706,14 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
             if (dict == NULL) {
                 dictkeys_incref(CACHED_KEYS(tp));
                 dict = new_dict_with_shared_keys(interp, CACHED_KEYS(tp));
-                dorv_ptr->dict = dict;
+                if (_Py_IsImmutable(obj)) {
+                    if(_PyImmutability_Freeze(_PyObject_CAST(dict)) < 0){
+                        return NULL;
+                    }
+                }
+                else {
+                    dorv_ptr->dict = dict;
+                }
             }
         }
     }
@@ -5660,11 +5729,19 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
             PyTypeObject *tp = Py_TYPE(obj);
             if (_PyType_HasFeature(tp, Py_TPFLAGS_HEAPTYPE) && CACHED_KEYS(tp)) {
                 dictkeys_incref(CACHED_KEYS(tp));
-                *dictptr = dict = new_dict_with_shared_keys(
+                dict = new_dict_with_shared_keys(
                         interp, CACHED_KEYS(tp));
             }
             else {
-                *dictptr = dict = PyDict_New();
+                dict = PyDict_New();
+            }
+            if (_Py_IsImmutable(obj)) {
+                if(_PyImmutability_Freeze(_PyObject_CAST(dict)) < 0){
+                    return NULL;
+                }
+            }
+            else {
+                *dictptr = dict;
             }
         }
     }
