@@ -44,6 +44,7 @@ extern PyObject* PyInit_xxsubtype(void);
 extern PyObject* PyInit__interpreters(void);
 extern PyObject* PyInit__interpchannels(void);
 extern PyObject* PyInit__interpqueues(void);
+extern PyObject* PyInit__boc(void);
 extern PyObject* PyInit__random(void);
 extern PyObject* PyInit_itertools(void);
 extern PyObject* PyInit__collections(void);
@@ -156,6 +157,7 @@ struct _inittab _PyImport_Inittab[] = {
     {"_interpreters", PyInit__interpreters},
     {"_interpchannels", PyInit__interpchannels},
     {"_interpqueues", PyInit__interpqueues},
+    {"_boc", PyInit__boc},
 #ifdef _Py_HAVE_ZLIB
     {"zlib", PyInit_zlib},
 #endif

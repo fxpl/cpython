@@ -48,6 +48,7 @@
 @MODULE__INTERPRETERS_TRUE@_interpreters _interpretersmodule.c
 @MODULE__INTERPCHANNELS_TRUE@_interpchannels _interpchannelsmodule.c
 @MODULE__INTERPQUEUES_TRUE@_interpqueues _interpqueuesmodule.c
+@MODULE__BOC_TRUE@_boc _bocmodule.c
 
 @MODULE__ZONEINFO_TRUE@_zoneinfo _zoneinfo.c
 

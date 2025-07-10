@@ -494,6 +494,7 @@
     <ClCompile Include="..\Modules\_interpretersmodule.c" />
     <ClCompile Include="..\Modules\_interpchannelsmodule.c" />
     <ClCompile Include="..\Modules\_interpqueuesmodule.c" />
+    <ClCompile Include="..\Modules\_bocmodule.c" />
     <ClCompile Include="..\Modules\_io\fileio.c" />
     <ClCompile Include="..\Modules\_io\bytesio.c" />
     <ClCompile Include="..\Modules\_io\stringio.c" />

@@ -7774,6 +7774,7 @@ AS_CASE([$ac_sys_system],
       [_interpreters],
       [_interpchannels],
       [_interpqueues],
+      [_boc],
       [grp],
       [pwd],
       [resource],
@@ -7804,6 +7805,7 @@ AS_CASE([$ac_sys_system],
       [_interpreters],
       [_interpchannels],
       [_interpqueues],
+      [_boc],
       [grp],
       [pwd],
       [resource],
@@ -7916,6 +7918,7 @@ PY_STDLIB_MOD_SIMPLE([_typing])
 PY_STDLIB_MOD_SIMPLE([_interpreters])
 PY_STDLIB_MOD_SIMPLE([_interpchannels])
 PY_STDLIB_MOD_SIMPLE([_interpqueues])
+PY_STDLIB_MOD_SIMPLE([_boc])
 PY_STDLIB_MOD_SIMPLE([_zoneinfo])
 
 dnl multiprocessing modules

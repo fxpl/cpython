@@ -777,6 +777,8 @@ MODULE__MULTIPROCESSING_FALSE
 MODULE__MULTIPROCESSING_TRUE
 MODULE__ZONEINFO_FALSE
 MODULE__ZONEINFO_TRUE
+MODULE__BOC_FALSE
+MODULE__BOC_TRUE
 MODULE__INTERPQUEUES_FALSE
 MODULE__INTERPQUEUES_TRUE
 MODULE__INTERPCHANNELS_FALSE
@@ -31195,6 +31197,7 @@ case $ac_sys_system in #(
     py_cv_module__interpreters=n/a
     py_cv_module__interpchannels=n/a
     py_cv_module__interpqueues=n/a
+    py_cv_module__boc=n/a
     py_cv_module_grp=n/a
     py_cv_module_pwd=n/a
     py_cv_module_resource=n/a
@@ -31225,6 +31228,7 @@ case $ac_sys_system in #(
     py_cv_module__interpreters=n/a
     py_cv_module__interpchannels=n/a
     py_cv_module__interpqueues=n/a
+    py_cv_module__boc=n/a
     py_cv_module_grp=n/a
     py_cv_module_pwd=n/a
     py_cv_module_resource=n/a
@@ -31727,6 +31731,28 @@ fi
 
   as_fn_append MODULE_BLOCK "MODULE__INTERPQUEUES_STATE=$py_cv_module__interpqueues$as_nl"
   if test "x$py_cv_module__interpqueues" = xyes
+then :
+
+
+
+
+fi
+
+
+        if test "$py_cv_module__boc" != "n/a"
+then :
+  py_cv_module__boc=yes
+fi
+   if test "$py_cv_module__boc" = yes; then
+  MODULE__BOC_TRUE=
+  MODULE__BOC_FALSE='#'
+else
+  MODULE__BOC_TRUE='#'
+  MODULE__BOC_FALSE=
+fi
+
+  as_fn_append MODULE_BLOCK "MODULE__BOC_STATE=$py_cv_module__boc$as_nl"
+  if test "x$py_cv_module__boc" = xyes
 then :
 
 
@@ -34473,6 +34499,10 @@ Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${MODULE__INTERPQUEUES_TRUE}" && test -z "${MODULE__INTERPQUEUES_FALSE}"; then
   as_fn_error $? "conditional \"MODULE__INTERPQUEUES\" was never defined.
+Usually this means the macro was only invoked conditionally." "$LINENO" 5
+fi
+if test -z "${MODULE__BOC_TRUE}" && test -z "${MODULE__BOC_FALSE}"; then
+  as_fn_error $? "conditional \"MODULE__BOC\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${MODULE__ZONEINFO_TRUE}" && test -z "${MODULE__ZONEINFO_FALSE}"; then
