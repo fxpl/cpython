@@ -163,6 +163,14 @@ static bool is_c_wrapper(PyObject* obj){
 #define GC_PREV _PyGCHead_PREV
 
 static inline void
+gc_set_old_space(PyGC_Head *g, int space)
+{
+    assert(space == 0 || space == _PyGC_NEXT_MASK_OLD_SPACE_1);
+    g->_gc_next &= ~_PyGC_NEXT_MASK_OLD_SPACE_1;
+    g->_gc_next |= space;
+}
+
+static inline void
 gc_list_init(PyGC_Head *list)
 {
     // List header must not have flags.
@@ -321,6 +329,10 @@ add_visited_set(struct FreezeState *state, PyObject *op)
         _Py_SetImmutable(op);
         if (_PyObject_GC_IS_TRACKED(op)) {
             gc_list_move(_Py_AS_GC(op), &(state->visited));
+            // Just set to space 0 for now.
+            // TODO(Immutable): Decide how to integrate with the incremental GC.
+            // Perhaps, should be gcstate->visited_space?
+            gc_set_old_space(_Py_AS_GC(op), 0);
             return 0;
         }
         // If the object is not tracked by the GC, we can just add it to the visited_untracked list.
@@ -364,7 +376,8 @@ void fail_freeze(struct FreezeState *state)
         _Py_CLEAR_IMMUTABLE(_Py_FROM_GC(gc));
     }
     struct _gc_runtime_state* gc_state = get_gc_state();
-    gc_list_merge(&(state->visited), &(gc_state->old[1].head));
+    // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
+    gc_list_merge(&(state->visited), &(gc_state->old[0].head));
 
 
     PyGC_Head *next;
@@ -403,7 +416,8 @@ void finish_freeze(struct FreezeState *state)
 {
 #ifndef Py_GIL_DISABLED
     struct _gc_runtime_state* gc_state = get_gc_state();
-    gc_list_merge(&(state->visited), &(gc_state->old[1].head));
+    // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
+    gc_list_merge(&(state->visited), &(gc_state->old[0].head));
 
     PyGC_Head *gc;
     PyGC_Head *next;
