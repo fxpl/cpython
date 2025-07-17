@@ -79,13 +79,6 @@ take_ownership(PyFrameObject *f, _PyInterpreterFrame *frame)
             PyErr_Clear();
         }
         else {
-            // TODO(immutable): xFrednet: This can modify a frozen frame object
-            // it's a bit weird, that his is updated after a frame object can be
-            // accessed from Python. Anyhow.
-            // A fundemental question is, if frame objects should be freezeable
-            // in the first place. It seems impractical for sharing and turns
-            // basically the whole world immutable. We should probably just
-            // mark it as not freezable.
             f->f_back = (PyFrameObject *)Py_NewRef(back);
         }
         PyErr_SetRaisedException(exc);

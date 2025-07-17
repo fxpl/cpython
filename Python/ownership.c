@@ -15,7 +15,7 @@
 
 static int init_state(_Py_ownership_state *state)
 {
-    state->is_initilized = true;
+    state->is_initialized = true;
 #ifdef Py_OWNERSHIP_INVARIANT
     state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
 #endif
@@ -31,7 +31,7 @@ static _Py_ownership_state* get_ownership_state()
     }
 
     _Py_ownership_state *state = &interp->ownership;
-    if (state->is_initilized == false) {
+    if (state->is_initialized == false) {
         if (init_state(state) == -1) {
             PyErr_SetString(PyExc_RuntimeError, "Failed to initialize ownership state");
             return NULL;
@@ -76,10 +76,7 @@ error:
 }
 
 // All code belonging to the invariant
-#if Py_OWNERSHIP_INVARIANT
-
-// FIXME(Pyrona): This should be on a "Per interpreter state"
-bool is_invariant_enabled = false;
+#ifdef Py_OWNERSHIP_INVARIANT
 
 static void throw_invariant_error(
     PyObject* src,
@@ -188,8 +185,9 @@ int _PyOwnership_check_invariant(PyThreadState *tstate) {
             if (_Py_IsImmutable(ob)) {
                 visit = (visitproc)check_invariant_visit_immutable;
             } else {
-                // The object shouldn't be validated.
-                // (This surely won't backfire on us)
+                // Mutable objects are allowed to reference all other objects
+                // (regardless if mutable or not). These therefore don't need
+                // to be traversed.
                 continue;
             }
 
