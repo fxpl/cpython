@@ -180,11 +180,11 @@ meth_dealloc(PyObject *self)
     Py_XDECREF(m->m_module);
     if (ml_flags & METH_METHOD) {
         assert(Py_IS_TYPE(self, &PyCMethod_Type));
-        _Py_FREELIST_FREE(pycmethodobject, m, PyObject_GC_Del);
+        _Py_FREELIST_FREE_OBJ(pycmethodobject, m, PyObject_GC_Del);
     }
     else {
         assert(Py_IS_TYPE(self, &PyCFunction_Type));
-        _Py_FREELIST_FREE(pycfunctionobject, m, PyObject_GC_Del);
+        _Py_FREELIST_FREE_OBJ(pycfunctionobject, m, PyObject_GC_Del);
     }
 }
 

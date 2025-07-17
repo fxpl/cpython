@@ -609,6 +609,9 @@
     <ClInclude Include="..\Include\internal\pycore_context.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
+    <ClInclude Include="..\Include\internal\pycore_cown.h">
+      <Filter>Include\internal</Filter>
+    </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_critical_section.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
@@ -1069,6 +1072,11 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\hmacmodule.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Modules\immutablemodule.c" >
+      <Filter>Modules</Filter>
+    </ClCompile>
     <ClCompile Include="..\Modules\itertoolsmodule.c">
       <Filter>Modules</Filter>
     </ClCompile>
@@ -1091,6 +1099,9 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\posixmodule.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Modules\regionsmodule.c">
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\rotatingtree.c">
@@ -1207,6 +1218,9 @@
     <ClCompile Include="..\Objects\complexobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
+    <ClCompile Include="..\Objects\cownobject.c">
+      <Filter>Objects</Filter>
+    </ClCompile>
     <ClCompile Include="..\Objects\descrobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
@@ -1262,6 +1276,9 @@
       <Filter>Objects</Filter>
     </ClCompile>
     <ClCompile Include="..\Objects\rangeobject.c">
+      <Filter>Objects</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Objects\regionobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
     <ClCompile Include="..\Objects\setobject.c">
@@ -1536,6 +1553,12 @@
       <Filter>Python</Filter>
     </ClCompile>
     <ClCompile Include="..\Python\pystrtod.c">
+      <Filter>Python</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Python\region.c">
+      <Filter>Python</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Python\ownership.c">
       <Filter>Python</Filter>
     </ClCompile>
     <ClCompile Include="..\Python\remote_debugging.c">

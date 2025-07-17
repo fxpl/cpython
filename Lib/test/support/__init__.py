@@ -923,9 +923,9 @@ def expected_failure_if_gil_disabled():
     return lambda test_case: test_case
 
 if Py_GIL_DISABLED:
-    _header = 'PHBBInP'
+    _header = 'PHBBInPP'
 else:
-    _header = 'nP'
+    _header = 'nPP'
 _align = '0n'
 _vheader = _header + 'n'
 

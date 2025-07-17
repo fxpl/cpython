@@ -231,6 +231,7 @@ static const char* _Py_stdlib_module_names[] = {
 "random",
 "re",
 "readline",
+"regions",
 "reprlib",
 "resource",
 "rlcompleter",

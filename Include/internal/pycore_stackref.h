@@ -10,6 +10,7 @@ extern "C" {
 
 #include "pycore_object.h"        // Py_DECREF_MORTAL
 #include "pycore_object_deferred.h" // _PyObject_HasDeferredRefcount()
+#include "region.h"                 // PyRegion_AddLocalRef()
 
 #include <stdbool.h>              // bool
 
@@ -596,9 +597,13 @@ PyStackRef_AsPyObjectSteal(_PyStackRef ref)
     if (PyStackRef_RefcountOnObject(ref)) {
         return BITS_TO_PTR(ref);
     }
-    else {
-        return Py_NewRef(BITS_TO_PTR_MASKED(ref));
+    PyObject *obj = BITS_TO_PTR_MASKED(ref);
+    if (PyRegion_AddLocalRef(obj)) {
+        // Regions: This should never happen since we have a stack ref
+        assert(false);
+        return NULL;
     }
+    return Py_NewRef(obj);
 }
 
 static inline _PyStackRef
@@ -632,6 +637,12 @@ _PyStackRef_FromPyObjectNew(PyObject *obj)
     if (_Py_IsImmortal(obj)) {
         return (_PyStackRef){ .bits = ((uintptr_t)obj) | Py_TAG_REFCNT};
     }
+    // Regions: This should always succeed, since we already have a local
+    // reference of the object on the stack.
+    if (PyRegion_AddLocalRef(obj)) {
+        assert(false);
+        return PyStackRef_NULL;
+    }
     _Py_INCREF_MORTAL(obj);
     _PyStackRef ref = (_PyStackRef){ .bits = (uintptr_t)obj };
     PyStackRef_CheckValid(ref);
@@ -643,6 +654,12 @@ static inline _PyStackRef
 _PyStackRef_FromPyObjectNewMortal(PyObject *obj)
 {
     assert(obj != NULL);
+    // Regions: This should always succeed, since we already have a local
+    // reference of the object on the stack.
+    if (PyRegion_AddLocalRef(obj)) {
+        assert(false);
+        return PyStackRef_NULL;
+    }
     _Py_INCREF_MORTAL(obj);
     _PyStackRef ref = (_PyStackRef){ .bits = (uintptr_t)obj };
     PyStackRef_CheckValid(ref);
@@ -659,6 +676,7 @@ PyStackRef_FromPyObjectBorrow(PyObject *obj)
 
 /* WARNING: This macro evaluates its argument more than once */
 #ifdef _WIN32
+// TODO(regions): xFrednet: Include a `AddLocalRef` for this `_Py_INCREF_MORTAL` call
 #define PyStackRef_DUP(REF) \
     (PyStackRef_RefcountOnObject(REF) ? (_Py_INCREF_MORTAL(BITS_TO_PTR(REF)), (REF)) : (REF))
 #else
@@ -667,6 +685,12 @@ PyStackRef_DUP(_PyStackRef ref)
 {
     assert(!PyStackRef_IsNull(ref));
     if (PyStackRef_RefcountOnObject(ref)) {
+        // Regions: This should always succeed, since we already have a local
+        // reference of the object on the stack.
+        if (PyRegion_AddLocalRef(BITS_TO_PTR(ref))) {
+            assert(false);
+            return PyStackRef_NULL;
+        }
         _Py_INCREF_MORTAL(BITS_TO_PTR(ref));
     }
     return ref;
@@ -686,6 +710,11 @@ PyStackRef_MakeHeapSafe(_PyStackRef ref)
         return ref;
     }
     PyObject *obj = BITS_TO_PTR_MASKED(ref);
+
+    // This should always succeed, since we already have a reference on the stack
+    int res = PyRegion_AddLocalRef(obj);
+    assert(res == 0);
+    (void)res;
     Py_INCREF(obj);
     ref.bits = (uintptr_t)obj;
     PyStackRef_CheckValid(ref);
@@ -704,7 +733,9 @@ PyStackRef_CLOSE(_PyStackRef ref)
 {
     assert(!PyStackRef_IsNull(ref));
     if (PyStackRef_RefcountOnObject(ref)) {
-        Py_DECREF_MORTAL(BITS_TO_PTR(ref));
+        PyObject *ob = BITS_TO_PTR(ref);
+        PyRegion_RemoveLocalRef(ob);
+        Py_DECREF_MORTAL(ob);
     }
 }
 #endif
@@ -720,7 +751,9 @@ PyStackRef_CLOSE_SPECIALIZED(_PyStackRef ref, destructor destruct)
 {
     assert(!PyStackRef_IsNull(ref));
     if (PyStackRef_RefcountOnObject(ref)) {
-        Py_DECREF_MORTAL_SPECIALIZED(BITS_TO_PTR(ref), destruct);
+        PyObject *ob = BITS_TO_PTR(ref);
+        PyRegion_RemoveLocalRef(ob);
+        Py_DECREF_MORTAL_SPECIALIZED(ob, destruct);
     }
 }
 
@@ -733,7 +766,9 @@ PyStackRef_XCLOSE(_PyStackRef ref)
     assert(ref.bits != 0);
     if (PyStackRef_RefcountOnObject(ref)) {
         assert(!PyStackRef_IsNull(ref));
-        Py_DECREF_MORTAL(BITS_TO_PTR(ref));
+        PyObject *ob = BITS_TO_PTR(ref);
+        PyRegion_RemoveLocalRef(ob);
+        Py_DECREF_MORTAL(ob);
     }
 }
 #endif
@@ -764,9 +799,21 @@ PyStackRef_TYPE(_PyStackRef stackref) {
     return Py_TYPE(PyStackRef_AsPyObjectBorrow(stackref));
 }
 
+static inline PyObject*
+_PyStackRef_AsPyObjectNew(_PyStackRef stackref) {
+    PyObject *obj = PyStackRef_AsPyObjectBorrow(stackref);
+    if (PyRegion_AddLocalRef(obj)) {
+        // Regions: This should never happens since we already have a
+        // stack reference which is local.
+        assert(false);
+        return NULL;
+    }
+    return Py_NewRef(obj);
+}
+
 // Converts a PyStackRef back to a PyObject *, converting the
 // stackref to a new reference.
-#define PyStackRef_AsPyObjectNew(stackref) Py_NewRef(PyStackRef_AsPyObjectBorrow(stackref))
+#define PyStackRef_AsPyObjectNew(stackref) _PyStackRef_AsPyObjectNew(stackref)
 
 // StackRef type checks
 

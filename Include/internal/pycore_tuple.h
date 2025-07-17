@@ -47,6 +47,7 @@ _PyTuple_Recycle(PyObject *op)
     if (!_PyObject_GC_IS_TRACKED(op)) {
         _PyObject_GC_TRACK(op);
     }
+    PyRegion_RecycleObject(op);
 }
 
 /* Below are the official constants from the xxHash specification. Optimizing

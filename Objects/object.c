@@ -1479,12 +1479,21 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
     _PyUnicode_InternMortal(tstate->interp, &name);
     if (tp->tp_setattro != NULL) {
-        if(Py_CHECKWRITE(v)){
-            err = (*tp->tp_setattro)(v, name, value);
-        }else{
+        // Check for immutability
+        if (!Py_CHECKWRITE(v)) {
             PyErr_WriteToImmutable(v);
-            err = -1;
+            Py_DECREF(name);
+            return -1;
         }
+
+        // Check if the type is Pyrona aware, otherwise, mark all open
+        // regions as dirty
+        if (tp->tp_setattro != PyObject_GenericSetAttr) {
+            PyRegion_NotifyTypeUse(tp);
+        }
+
+        // Call the setattro function of the type
+        err = (*tp->tp_setattro)(v, name, value);
 
         Py_DECREF(name);
         return err;
@@ -2028,11 +2037,15 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
         }
     }
     else {
+        if (PyRegion_AddLocalRef(dict)) {
+            goto done;
+        }
         Py_INCREF(dict);
         if (value == NULL)
             res = PyDict_DelItem(dict, name);
         else
             res = PyDict_SetItem(dict, name, value);
+        PyRegion_RemoveLocalRef(dict);
         Py_DECREF(dict);
     }
   error_check:

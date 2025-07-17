@@ -16,6 +16,9 @@ Objects/weakrefobject.c	-	_PyWeakref_Lock	-
 ## ---------------
 ## Lazy
 
+Objects/regionobject.c	-	_PyRegion_Type	-
+Objects/cownobject.c	-	_PyCown_Type	-
+
 
 ## ---------------
 ## Tests

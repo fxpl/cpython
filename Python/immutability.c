@@ -10,6 +10,7 @@
 #include "pycore_interp.h"
 #include "pycore_list.h"
 #include "pycore_weakref.h"
+#include "pycore_region.h"
 
 
 // This file has many in progress aspects
@@ -488,6 +489,7 @@ static void deallocate_FreezeState(struct FreezeState *state)
 
 static void set_direct_rc(PyObject* obj)
 {
+    _PyRegion_SignalImmutable(obj);
 #ifndef GIL_DISABLED
     IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_DIRECT;
 #else
@@ -497,6 +499,7 @@ static void set_direct_rc(PyObject* obj)
 
 static void set_indirect_rc(PyObject* obj)
 {
+    _PyRegion_SignalImmutable(obj);
 #ifndef GIL_DISABLED
     IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_INDIRECT;
 #else

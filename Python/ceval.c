@@ -2000,6 +2000,9 @@ _PyEval_Vector(PyThreadState *tstate, PyFunctionObject *func,
     }
     /* _PyEvalFramePushAndInit consumes the references
      * to func, locals and all its arguments */
+    if (PyRegion_AddLocalRef(locals)) {
+        return NULL;
+    }
     Py_XINCREF(locals);
     for (size_t i = 0; i < argcount; i++) {
         arguments[i] = PyStackRef_FromPyObjectNew(args[i]);

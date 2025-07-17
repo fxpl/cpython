@@ -2,6 +2,8 @@
 #  error "this header file must not be included directly"
 #endif
 
+#include "region.h"
+
 typedef struct {
     PyObject_VAR_HEAD
     /* Cached hash.  Initially set to -1. */

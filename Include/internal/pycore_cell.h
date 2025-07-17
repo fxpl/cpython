@@ -27,6 +27,7 @@ PyCell_SwapTakeRef(PyCellObject *cell, PyObject *value, int* result)
     }
     else {
         *result = -1;
+        PyRegion_RemoveLocalRef(value);
         Py_XDECREF(value);
     }
     Py_END_CRITICAL_SECTION();
@@ -38,6 +39,7 @@ PyCell_SetTakeRef(PyCellObject *cell, PyObject *value)
 {
     int result = 0;
     PyObject *old_value = PyCell_SwapTakeRef(cell, value, &result);
+    PyRegion_RemoveRef(cell, old_value);
     Py_XDECREF(old_value);
     return result;
 }
@@ -51,7 +53,7 @@ PyCell_GetRef(PyCellObject *cell)
 #ifdef Py_GIL_DISABLED
     res = _Py_XNewRefWithLock(cell->ob_ref);
 #else
-    res = Py_XNewRef(cell->ob_ref);
+    res = PyRegion_XNewRef(cell->ob_ref);
 #endif
     Py_END_CRITICAL_SECTION();
     return res;

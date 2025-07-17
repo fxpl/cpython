@@ -347,6 +347,9 @@ _PyInlineValuesSize(PyTypeObject *tp)
 int
 _PyDict_DetachFromObject(PyDictObject *dict, PyObject *obj);
 
+int
+_PyDict_Reachable(PyObject *op, visitproc visit, void *arg);
+
 // Enables per-thread ref counting on this dict in the free threading build
 extern void _PyDict_EnablePerThreadRefcounting(PyObject *op);
 

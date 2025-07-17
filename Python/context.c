@@ -543,7 +543,7 @@ context_tp_dealloc(PyObject *self)
     }
     (void)context_tp_clear(self);
 
-    _Py_FREELIST_FREE(contexts, self, Py_TYPE(self)->tp_free);
+    _Py_FREELIST_FREE_OBJ(contexts, self, Py_TYPE(self)->tp_free);
 }
 
 static PyObject *
