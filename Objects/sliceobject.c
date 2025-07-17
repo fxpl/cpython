@@ -351,7 +351,7 @@ slice_dealloc(PyObject *op)
     Py_DECREF(r->step);
     Py_DECREF(r->start);
     Py_DECREF(r->stop);
-    _Py_FREELIST_FREE(slices, r, PyObject_GC_Del);
+    _Py_FREELIST_FREE_OBJ(slices, r, PyObject_GC_Del);
 }
 
 static PyObject *

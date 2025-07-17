@@ -16,6 +16,7 @@ extern "C" {
 #include "pycore_tstate.h"        // _PyThreadStateImpl
 #include "pycore_typedefs.h"      // _PyRuntimeState
 #include "pycore_uop.h"           // struct _PyUOpInstruction
+#include "pycore_ownership.h"     // 
 
 
 #define CODE_MAX_WATCHERS 8
@@ -935,6 +936,7 @@ struct _is {
     struct _Py_dict_state dict_state;
     struct _Py_exc_state exc_state;
     struct _Py_immutability_state immutability;
+    struct _Py_ownership_state ownership;
     struct _Py_mem_interp_free_queue mem_free_queue;
 
     struct ast_state ast;

@@ -12,6 +12,8 @@ extern "C" {
 #include "pycore_stackref.h"
 #endif
 
+#include "region.h"
+
 PyAPI_FUNC(PyObject*) _PyList_Extend(PyListObject *, PyObject *);
 PyAPI_FUNC(PyObject) *_PyList_SliceSubscript(PyObject*, PyObject*);
 extern void _PyList_DebugMallocStats(FILE *out);
@@ -39,7 +41,14 @@ _PyList_AppendTakeRef(PyListObject *self, PyObject *newitem)
     Py_ssize_t len = Py_SIZE(self);
     Py_ssize_t allocated = self->allocated;
     assert((size_t)len + 1 < PY_SSIZE_T_MAX);
+
     if (allocated > len) {
+        if (PyRegion_TakeRef(self, newitem)) {
+            PyRegion_RemoveLocalRef(newitem);
+            Py_DECREF(newitem);
+            return -1;
+        }
+
 #ifdef Py_GIL_DISABLED
         _Py_atomic_store_ptr_release(&self->ob_item[len], newitem);
 #else

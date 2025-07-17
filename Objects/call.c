@@ -226,6 +226,7 @@ _PyObject_MakeTpCall(PyThreadState *tstate, PyObject *callable,
             assert(args != NULL);
             kwdict = _PyStack_AsDict(args + nargs, keywords);
             if (kwdict == NULL) {
+                PyRegion_RemoveLocalRef(argstuple);
                 Py_DECREF(argstuple);
                 return NULL;
             }
@@ -243,8 +244,10 @@ _PyObject_MakeTpCall(PyThreadState *tstate, PyObject *callable,
         _Py_LeaveRecursiveCallTstate(tstate);
     }
 
+    PyRegion_RemoveLocalRef(argstuple);
     Py_DECREF(argstuple);
     if (kwdict != keywords) {
+        PyRegion_RemoveLocalRef(kwdict);
         Py_DECREF(kwdict);
     }
 

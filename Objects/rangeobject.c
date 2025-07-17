@@ -174,7 +174,7 @@ range_dealloc(PyObject *op)
     Py_DECREF(r->stop);
     Py_DECREF(r->step);
     Py_DECREF(r->length);
-    _Py_FREELIST_FREE(ranges, r, PyObject_Free);
+    _Py_FREELIST_FREE_OBJ(ranges, r, PyObject_Free);
 }
 
 static unsigned long
@@ -916,7 +916,7 @@ rangeiter_setstate(PyObject *op, PyObject *state)
 static void
 rangeiter_dealloc(PyObject *self)
 {
-    _Py_FREELIST_FREE(range_iters, (_PyRangeIterObject *)self, PyObject_Free);
+    _Py_FREELIST_FREE_OBJ(range_iters, (_PyRangeIterObject *)self, PyObject_Free);
 }
 
 PyDoc_STRVAR(reduce_doc, "Return state information for pickling.");

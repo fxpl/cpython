@@ -33,6 +33,13 @@ _Py_freelists_GET(void)
 #define _Py_FREELIST_FREE(NAME, op, freefunc) \
     _PyFreeList_Free(&_Py_freelists_GET()->NAME, _PyObject_CAST(op), \
                      Py_ ## NAME ## _MAXFREELIST, freefunc)
+
+// This calls `PyRegion_RecycleObject` before calling `_Py_FREELIST_FREE`
+#define _Py_FREELIST_FREE_OBJ(NAME, op, freefunc) \
+    do { \
+        PyRegion_RecycleObject(_PyObject_CAST(op)); \
+        _Py_FREELIST_FREE(NAME, op, freefunc); \
+    } while (0)
 // Pushes `op` to the freelist, returns 1 if successful, 0 if the freelist is full
 #define _Py_FREELIST_PUSH(NAME, op, limit) \
     _PyFreeList_Push(&_Py_freelists_GET()->NAME, _PyObject_CAST(op), limit)

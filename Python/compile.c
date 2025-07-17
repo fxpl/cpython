@@ -364,7 +364,7 @@ const_cache_insert(PyObject *const_cache, PyObject *o, bool recursive)
                 v = u;
             }
             if (v != item) {
-                PyTuple_SET_ITEM(o, i, Py_NewRef(v));
+                PyTuple_SET_ITEM(o, i, PyRegion_NewRef(v));
                 Py_DECREF(item);
             }
 

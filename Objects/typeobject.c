@@ -17,6 +17,7 @@
 #include "pycore_pyatomic_ft_wrappers.h"
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_region.h"        // _PyRegion_SignalDealloc()
 #include "pycore_symtable.h"      // _Py_Mangle()
 #include "pycore_typeobject.h"    // struct type_cache
 #include "pycore_unicodeobject.h" // _PyUnicode_Copy
@@ -2473,7 +2474,7 @@ type_call(PyObject *self, PyObject *args, PyObject *kwds)
 
         if (nargs == 1 && (kwds == NULL || !PyDict_GET_SIZE(kwds))) {
             obj = (PyObject *) Py_TYPE(PyTuple_GET_ITEM(args, 0));
-            return Py_NewRef(obj);
+            return PyRegion_NewRef(obj);
         }
 
         /* SF bug 475327 -- if that didn't trigger, we need 3
@@ -2507,7 +2508,7 @@ type_call(PyObject *self, PyObject *args, PyObject *kwds)
         int res = type->tp_init(obj, args, kwds);
         if (res < 0) {
             assert(_PyErr_Occurred(tstate));
-            Py_SETREF(obj, NULL);
+            PyRegion_CLEARLOCAL(obj);
         }
         else {
             assert(!_PyErr_Occurred(tstate));
@@ -10932,10 +10933,10 @@ slot_tp_init(PyObject *self, PyObject *args, PyObject *kwds)
         PyErr_Format(PyExc_TypeError,
                      "__init__() should return None, not '%.200s'",
                      Py_TYPE(res)->tp_name);
-        Py_DECREF(res);
+        PyRegion_CLEARLOCAL(res);
         return -1;
     }
-    Py_DECREF(res);
+    PyRegion_CLEARLOCAL(res);
     return 0;
 }
 

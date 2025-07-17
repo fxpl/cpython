@@ -41,6 +41,7 @@
 @MODULE__PICKLE_TRUE@_pickle _pickle.c
 @MODULE__QUEUE_TRUE@_queue _queuemodule.c
 @MODULE__RANDOM_TRUE@_random _randommodule.c
+@MODULE_REGIONS_TRUE@regions regionsmodule.c
 @MODULE__REMOTE_DEBUGGING_TRUE@_remote_debugging _remote_debugging_module.c
 @MODULE__STRUCT_TRUE@_struct _struct.c
 

@@ -2095,8 +2095,8 @@ _PyErr_WriteToImmutable(PyObject* obj)
 
 #ifdef Py_DEBUG
     // Check if object has _freeeze_location attribute
-    if (PyObject_HasAttrString(obj, "__freeze_location__")) {
-        PyObject* freeze_location = PyObject_GetAttrString(obj, "__freeze_location__");
+    if (PyObject_HasAttrString(obj, "__ownership_location__")) {
+        PyObject* freeze_location = PyObject_GetAttrString(obj, "__ownership_location__");
         if (freeze_location != NULL)
         {
             // Load traceback module to convert to a format string
