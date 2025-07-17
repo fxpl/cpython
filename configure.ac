@@ -1746,6 +1746,21 @@ else AC_MSG_RESULT([no]); Py_DEBUG='false'
 fi],
 [AC_MSG_RESULT([no])])
 
+# Check for --with-ownership-invariant
+# --with-ownership-invariant
+AC_MSG_CHECKING([for --with-ownership-invariant])
+AC_ARG_WITH([ownership-invariant],
+  [AS_HELP_STRING([--with-ownership-invariant], [enable ownership invariant for debugging purpose (default is no)])],
+  [], [with_ownership_invariant=no]
+)
+AC_MSG_RESULT([$with_ownership_invariant])
+
+if test "$with_ownership_invariant" = "yes"
+then
+  AC_DEFINE([Py_OWNERSHIP_INVARIANT], [1],
+            [Define if you want to enable ownership invariant for debugging purpose])
+fi
+
 # Check for --with-trace-refs
 # --with-trace-refs
 AC_MSG_CHECKING([for --with-trace-refs])

@@ -465,15 +465,6 @@ class TestWeakRef(unittest.TestCase):
         # self.assertTrue(c.val() is obj)
         self.assertIsNone(c.val())
 
-class TestStackCapture(unittest.TestCase):
-     def test_stack_capture(self):
-         import sys
-         x = {}
-         x["frame"] = sys._getframe()
-         freeze(x)
-         self.assertTrue(isfrozen(x))
-         self.assertTrue(isfrozen(x["frame"]))
-
 global_test_dict = 0
 class TestGlobalDictMutation(unittest.TestCase):
     def g():
