@@ -239,6 +239,14 @@ struct _typeobject {
      * Otherwise, limited to MAX_VERSIONS_PER_CLASS (defined elsewhere).
      */
     uint16_t tp_versions_used;
+
+    /* FIXME(regions): xFrednet: Just adding this field at the end will not
+     * fly on the main branch. We either want another indicator or proper
+     * integration, potentially using a union to support the old 32 bit
+     * `tp_flags` and the extended 64 bit ones. For now let's bikeshed this
+     * task and just use a new 32bit flag field appended here.
+     */
+    uint32_t tp_flags2;
 };
 
 #define _Py_ATTR_CACHE_UNUSED (30000)  // (see tp_versions_used)

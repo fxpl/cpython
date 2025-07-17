@@ -1,0 +1,204 @@
+import unittest
+from regions import Region, is_local
+from immutable import freeze, isfrozen
+
+class TestBasicRegionObject(unittest.TestCase):
+    def test_region_construction(self):
+        r = Region()
+
+        # The region should be open since r points into it
+        self.assertTrue(r.is_open)
+
+        # A region should own itself
+        self.assertTrue(r.owns(r))
+
+        # The region should be open since r points into it
+        self.assertTrue(r.is_open)
+
+        # FIXME(regions): xFrednet: Regions currently default to being dirty
+        # while most write barriers are missing
+        #
+        # A new region should be clean
+        # self.assertFalse(r.is_dirty)
+
+        # A new region has no parent
+        self.assertIsNone(r.parent)
+
+    def test_fields_read_only(self):
+        r = Region()
+
+        # Check the exception on assignment
+        with self.assertRaises(AttributeError):
+            r.is_open = False
+
+        with self.assertRaises(AttributeError):
+            r.is_dirty = False
+
+        with self.assertRaises(AttributeError):
+            r.parent = None
+
+    def test_instance_dict_is_owned(self):
+        r = Region()
+
+        # instance dictionaries are NULL until required
+        self.assertIsNone(r.__dict__)
+
+        # Adding a field will instantiate the dict
+        r.field = "Please init dict"
+
+        # The instance attribute should be initialised and owned
+        self.assertTrue(r.owns(r.__dict__))
+
+
+class TestRegionCounts(unittest.TestCase):
+    def test_osc_1(self):
+        r = Region()
+        r.sub = Region()
+
+        # Pre-condition
+        self.assertEqual(r._osc, 0, "The sub region should be closed")
+
+        # This should open the sub-region
+        sub = r.sub
+
+        # Post-condition
+        self.assertEqual(r._osc, 1, "The sub region should be open now")
+
+
+class ImplicitFreezingForImmortal(unittest.TestCase):
+    def test_implicit_freeze_importal(self):
+        # This would ideally check that the immortal objects
+        # are unfrozen, before we add them to a region. However,
+        # this would create an ordering dependency between tests.
+        # So here we just check that they're frozen after the fact.
+        r = Region()
+
+        r.true = True
+        self.assertFalse(r.owns(r.true))
+        self.assertTrue(isfrozen(r.true))
+        self.assertEqual(r.true, True)
+
+        r.num = 12
+        self.assertFalse(r.owns(r.num))
+        self.assertTrue(isfrozen(r.num))
+        self.assertEqual(r.num, 12)
+
+        r.none = None
+        self.assertFalse(r.owns(r.none))
+        self.assertTrue(isfrozen(r.none))
+        self.assertEqual(r.none, None)
+
+class TestOwnership(unittest.TestCase):
+    class A:
+        pass
+
+    def setUp(self):
+        # Allows the A type to be referenced from multiple regions
+        freeze(self.A)
+
+    def test_local_not_owned(self):
+        # Create a region
+        r = Region()
+
+        # Create a new local object
+        a = self.A()
+
+        self.assertTrue(is_local(a))
+        self.assertFalse(r.owns(a))
+
+    def test_region_takes_ownership_of_local(self):
+        # Create a region
+        r = Region()
+
+        # Create a new local object
+        a = self.A()
+        self.assertTrue(is_local(a))
+
+        # Move a into r
+        r.a = a
+        self.assertTrue(r.owns(a))
+        self.assertFalse(is_local(a))
+
+    def test_region_takes_ownership_of_local_is_deep(self):
+        # Create a region
+        r = Region()
+
+        # Create a new local object
+        a = self.A()
+        a.b = self.A()
+        self.assertTrue(is_local(a))
+        self.assertTrue(is_local(a.b))
+
+        # Move a into r
+        r.a = a
+        self.assertTrue(r.owns(a))
+        self.assertTrue(r.owns(a.b))
+        self.assertFalse(is_local(a))
+        self.assertFalse(is_local(a.b))
+
+class TestInterRegionRelations(unittest.TestCase):
+    class A:
+        pass
+
+    def setUp(self):
+        # Allows the A type to be referenced from multiple regions
+        freeze(self.A)
+
+    def test_reference_to_contained(self):
+        r1 = Region()
+        r2 = Region()
+        a = self.A()
+
+        # Move a into r1
+        r1.a = a
+        self.assertTrue(r1.owns(a))
+        self.assertFalse(r2.owns(a))
+
+        # Check the exception on assignment
+        with self.assertRaises(RuntimeError) as e:
+            r2.a = a
+        self.assertEqual(e.exception.source, r2.__dict__)
+        self.assertEqual(e.exception.target, a)
+
+        # Check ownership is unchanged
+        self.assertTrue(r1.owns(a))
+        self.assertFalse(r2.owns(a))
+
+    def test_unchanged_region_after_failure(self):
+        r1 = Region()
+        r2 = Region()
+        a = self.A()
+        a.b = self.A()
+        a.b.c = self.A()
+
+        # Move a.b.c into r1
+        r1.c = a.b.c
+        self.assertTrue(is_local(a))
+        self.assertTrue(is_local(a.b))
+        self.assertTrue(r1.owns(a.b.c))
+
+        # Moving a into r2 will fail due to a.b.c being in a different region
+        with self.assertRaises(RuntimeError) as e:
+            r2.a = a
+        self.assertEqual(e.exception.source, a.b)
+        self.assertEqual(e.exception.target, a.b.c)
+
+        # Object a and b should remain local
+        self.assertTrue(is_local(a))
+        self.assertTrue(is_local(a.b))
+
+    def test_get_parent(self):
+        r1 = Region()
+        r2 = Region()
+
+        # Make r2 a child of r1
+        r1.r2 = r2
+
+        # Check that r2 knows ab out this
+        self.assertEqual(r2.parent, r1)
+
+        # Unparent r2 again
+        r1.r2 = None
+
+        # Check that r2 has no parent
+        self.assertIsNone(r2.parent)

@@ -26,6 +26,10 @@ PySeqIter_New(PyObject *seq)
     it = PyObject_GC_New(seqiterobject, &PySeqIter_Type);
     if (it == NULL)
         return NULL;
+    if (PyRegion_AddRef(it, seq)) {
+        Py_DECREF(it);
+        return NULL;
+    }
     it->it_index = 0;
     it->it_seq = Py_NewRef(seq);
     _PyObject_GC_TRACK(it);
@@ -37,6 +41,7 @@ iter_dealloc(PyObject *op)
 {
     seqiterobject *it = (seqiterobject*)op;
     _PyObject_GC_UNTRACK(it);
+    PyRegion_RemoveLocalRef(it->it_seq);
     Py_XDECREF(it->it_seq);
     PyObject_GC_Del(it);
 }
@@ -77,6 +82,7 @@ iter_iternext(PyObject *iterator)
     {
         PyErr_Clear();
         it->it_seq = NULL;
+        PyRegion_RemoveRef(it, seq);
         Py_DECREF(seq);
     }
     return NULL;

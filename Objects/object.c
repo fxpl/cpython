@@ -26,6 +26,7 @@
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pymem.h"         // _PyMem_IsPtrFreed()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_region.h"        // _PyRegion_SignalDealloc
 #include "pycore_symtable.h"      // PySTEntry_Type
 #include "pycore_template.h"      // _PyTemplate_Type _PyTemplateIter_Type
 #include "pycore_tuple.h"         // _PyTuple_DebugMallocStats()
@@ -1479,12 +1480,23 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
     _PyUnicode_InternMortal(tstate->interp, &name);
     if (tp->tp_setattro != NULL) {
-        if(Py_CHECKWRITE(v)){
-            err = (*tp->tp_setattro)(v, name, value);
-        }else{
+        // Check for immutability
+        if (!Py_CHECKWRITE(v)) {
             PyErr_WriteToImmutable(v);
-            err = -1;
+            Py_DECREF(name);
+            return -1;
         }
+
+        // Check if the type is Pyrona aware, otherwise, mark all open
+        // regions as dirty
+        if (tp->tp_setattro != PyObject_GenericSetAttr
+            && (tp->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) == 0
+        ) {
+            _PyOwnership_notify_untrusted_code();
+        }
+
+        // Call the setattro function of the type
+        err = (*tp->tp_setattro)(v, name, value);
 
         Py_DECREF(name);
         return err;
@@ -3133,6 +3145,7 @@ _PyTrash_thread_destroy_chain(PyThreadState *tstate)
          * up distorting allocation statistics.
          */
         _PyObject_ASSERT(op, Py_REFCNT(op) == 0);
+        _PyRegion_SignalDealloc(op);
         (*dealloc)(op);
     }
 }
@@ -3225,6 +3238,7 @@ _Py_Dealloc(PyObject *op)
     _Py_ForgetReference(op);
 #endif
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
+    _PyRegion_SignalDealloc(op);
     (*dealloc)(op);
 
 #ifdef Py_DEBUG

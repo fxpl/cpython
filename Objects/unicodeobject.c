@@ -59,6 +59,7 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include "pycore_ucnhash.h"       // _PyUnicode_Name_CAPI
 #include "pycore_unicodeobject.h" // struct _Py_unicode_state
 #include "pycore_unicodeobject_generated.h"  // _PyUnicode_InitStaticStrings()
+#include "immutability.h"         // _PyImmutability_Freeze
 
 #include "stringlib/eq.h"         // unicode_eq()
 #include <stddef.h>               // ptrdiff_t

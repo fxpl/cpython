@@ -796,6 +796,8 @@ MODULE__REMOTE_DEBUGGING_FALSE
 MODULE__REMOTE_DEBUGGING_TRUE
 MODULE__RANDOM_FALSE
 MODULE__RANDOM_TRUE
+MODULE_REGIONS_FALSE
+MODULE_REGIONS_TRUE
 MODULE__QUEUE_FALSE
 MODULE__QUEUE_TRUE
 MODULE__POSIXSUBPROCESS_FALSE
@@ -31506,6 +31508,28 @@ then :
 fi
 
 
+        if test "$py_cv_module_regions" != "n/a"
+then :
+  py_cv_module_regions=yes
+fi
+   if test "$py_cv_module_regions" = yes; then
+  MODULE_REGIONS_TRUE=
+  MODULE_REGIONS_FALSE='#'
+else
+  MODULE_REGIONS_TRUE='#'
+  MODULE_REGIONS_FALSE=
+fi
+
+  as_fn_append MODULE_BLOCK "MODULE_REGIONS_STATE=$py_cv_module_regions$as_nl"
+  if test "x$py_cv_module_regions" = xyes
+then :
+
+
+
+
+fi
+
+
         if test "$py_cv_module__random" != "n/a"
 then :
   py_cv_module__random=yes
@@ -34456,6 +34480,10 @@ Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${MODULE__QUEUE_TRUE}" && test -z "${MODULE__QUEUE_FALSE}"; then
   as_fn_error $? "conditional \"MODULE__QUEUE\" was never defined.
+Usually this means the macro was only invoked conditionally." "$LINENO" 5
+fi
+if test -z "${MODULE_REGIONS_TRUE}" && test -z "${MODULE_REGIONS_FALSE}"; then
+  as_fn_error $? "conditional \"MODULE_REGIONS\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${MODULE__RANDOM_TRUE}" && test -z "${MODULE__RANDOM_FALSE}"; then

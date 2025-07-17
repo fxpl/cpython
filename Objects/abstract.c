@@ -56,7 +56,7 @@ PyObject_Type(PyObject *o)
     }
 
     v = (PyObject *)Py_TYPE(o);
-    return Py_NewRef(v);
+    return PyRegion_NewRef(v);
 }
 
 Py_ssize_t
@@ -1916,6 +1916,12 @@ PySequence_GetItem(PyObject *s, Py_ssize_t i)
                 i += l;
             }
         }
+
+        // Check if the type is Pyrona aware, otherwise, mark all open
+        // regions as dirty
+        if ((Py_TYPE(s)->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) == 0) {
+            _PyOwnership_notify_untrusted_code();
+        }
         PyObject *res = m->sq_item(s, i);
         assert(_Py_CheckSlotResult(s, "__getitem__", res != NULL));
         return res;
@@ -2953,6 +2959,13 @@ static int
 iternext(PyObject *iter, PyObject **item)
 {
     iternextfunc tp_iternext = Py_TYPE(iter)->tp_iternext;
+    // Check if the type is Pyrona aware, otherwise, mark all open
+    // regions as dirty
+    // FIXME(regions): Enable this check, which currently almost always triggers
+    // if ((Py_TYPE(iter)->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) == 0) {
+    //     _PyOwnership_notify_untrusted_code();
+    // }
+
     if ((*item = tp_iternext(iter))) {
         return 1;
     }
@@ -3018,6 +3031,11 @@ PyIter_Send(PyObject *iter, PyObject *arg, PyObject **result)
         return res;
     }
     if (arg == Py_None && PyIter_Check(iter)) {
+        // Check if the type is Pyrona aware, otherwise, mark all open
+        // regions as dirty
+        if ((Py_TYPE(iter)->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) == 0) {
+            _PyOwnership_notify_untrusted_code();
+        }
         *result = Py_TYPE(iter)->tp_iternext(iter);
     }
     else {

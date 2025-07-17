@@ -34,6 +34,7 @@
 #include "pycore_pyerrors.h"      // _PyErr_GetRaisedException()
 #include "pycore_pystate.h"       // _PyInterpreterState_GET()
 #include "pycore_range.h"         // _PyRangeIterObject
+#include "pycore_region.h"        // _PyRegion_SignalDealloc
 #include "pycore_setobject.h"     // _PySet_Update()
 #include "pycore_sliceobject.h"   // _PyBuildSlice_ConsumeRefs
 #include "pycore_sysmodule.h"     // _PySys_GetOptionalAttrString()
@@ -101,6 +102,7 @@
         if ((--op->ob_refcnt) == 0) { \
             _PyReftracerTrack(op, PyRefTracer_DESTROY); \
             destructor dealloc = Py_TYPE(op)->tp_dealloc; \
+            _PyRegion_SignalDealloc(op); \
             (*dealloc)(op); \
         } \
     } while (0)

@@ -9,6 +9,7 @@
 #include "pycore_object.h"
 #include "pycore_ownership.h"
 #include "pycore_list.h"
+#include "pycore_region.h"
 
 // #define IMMUTABLE_TRACING
 
@@ -108,32 +109,10 @@ type_weakref(struct _Py_immutability_state *state, PyObject *obj)
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    PyObject* frozen_importlib = NULL;
-
-    frozen_importlib = PyImport_ImportModule("_frozen_importlib");
-    if(frozen_importlib == NULL){
-        return -1;
-    }
-
-    state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
-    if(state->module_locks == NULL){
-        Py_DECREF(frozen_importlib);
-        return -1;
-    }
-
-    state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
-    if(state->blocking_on == NULL){
-        Py_DECREF(frozen_importlib);
-        return -1;
-    }
-
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
-        Py_DECREF(frozen_importlib);
         return -1;
     }
-
-    Py_DECREF(frozen_importlib);
 
     return 0;
 }
@@ -240,15 +219,23 @@ static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
 
-static inline void _Py_SetImmutable(PyObject *op)
+// TODO(regions): xFrednet: Make sure that all users of this fuction test for failure
+static inline int _Py_SetImmutable(PyObject *op)
 {
+    if (_PyRegion_SignalImmutable(op)) {
+        return -1;
+    }
+
     if(op) {
 #if SIZEOF_VOID_P > 4
         op->ob_flags |= _Py_IMMUTABLE_FLAG;
 #else
         op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
 #endif
+
     }
+
+    return 0;
 }
 
 /**

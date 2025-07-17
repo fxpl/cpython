@@ -119,23 +119,32 @@ PyTuple_SetItem(PyObject *op, Py_ssize_t i, PyObject *newitem)
 {
     PyObject **p;
     if (!PyTuple_Check(op) || Py_REFCNT(op) != 1) {
+        PyRegion_RemoveLocalRef(newitem);
         Py_XDECREF(newitem);
         PyErr_BadInternalCall();
         return -1;
     }
 
     if (!Py_CHECKWRITE(op)){
+        PyRegion_RemoveLocalRef(newitem);
         Py_XDECREF(newitem);
         PyErr_WriteToImmutable(op);
         return -1;
     }
 
     if (i < 0 || i >= Py_SIZE(op)) {
+        PyRegion_RemoveLocalRef(newitem);
         Py_XDECREF(newitem);
         PyErr_SetString(PyExc_IndexError,
                         "tuple assignment index out of range");
         return -1;
     }
+    if (PyRegion_TakeRef(op, newitem)) {
+        PyRegion_RemoveLocalRef(newitem);
+        Py_XDECREF(newitem);
+        return -1;
+    }
+
     p = ((PyTupleObject *)op) -> ob_item + i;
     Py_XSETREF(*p, newitem);
     return 0;
@@ -184,6 +193,11 @@ PyTuple_Pack(Py_ssize_t n, ...)
     items = result->ob_item;
     for (i = 0; i < n; i++) {
         o = va_arg(vargs, PyObject *);
+        if (PyRegion_AddRef(result, o)) {
+            PyRegion_RemoveLocalRef(result);
+            Py_DECREF(result);
+            return NULL;
+        }
         items[i] = Py_NewRef(o);
     }
     va_end(vargs);
@@ -217,6 +231,7 @@ tuple_dealloc(PyObject *self)
 
     Py_ssize_t i = Py_SIZE(op);
     while (--i >= 0) {
+        PyRegion_RemoveRef(op, op->ob_item[i]);
         Py_XDECREF(op->ob_item[i]);
     }
     // This will abort on the empty singleton (if there is one).
@@ -369,7 +384,7 @@ tuple_item(PyObject *op, Py_ssize_t i)
         PyErr_SetString(PyExc_IndexError, "tuple index out of range");
         return NULL;
     }
-    return Py_NewRef(a->ob_item[i]);
+    return PyRegion_NewRef(a->ob_item[i]);
 }
 
 PyObject *
@@ -386,6 +401,11 @@ PyTuple_FromArray(PyObject *const *src, Py_ssize_t n)
     PyObject **dst = tuple->ob_item;
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *item = src[i];
+        if (PyRegion_AddRef(tuple, item)) {
+            PyRegion_RemoveLocalRef(tuple);
+            Py_DECREF(tuple);
+            return NULL;
+        }
         dst[i] = Py_NewRef(item);
     }
     _PyObject_GC_TRACK(tuple);
@@ -404,6 +424,9 @@ _PyTuple_FromStackRefStealOnSuccess(const _PyStackRef *src, Py_ssize_t n)
     }
     PyObject **dst = tuple->ob_item;
     for (Py_ssize_t i = 0; i < n; i++) {
+        // Pyrona: A local reference has been added by `AsPyObjectSteal`
+        // the tuple we're creating is local. Therefore we can skip the
+        // write barrier
         dst[i] = PyStackRef_AsPyObjectSteal(src[i]);
     }
     _PyObject_GC_TRACK(tuple);
@@ -419,6 +442,7 @@ _PyTuple_FromArraySteal(PyObject *const *src, Py_ssize_t n)
     PyTupleObject *tuple = tuple_alloc(n);
     if (tuple == NULL) {
         for (Py_ssize_t i = 0; i < n; i++) {
+            PyRegion_RemoveLocalRef(src[i]);
             Py_DECREF(src[i]);
         }
         return NULL;
@@ -426,6 +450,11 @@ _PyTuple_FromArraySteal(PyObject *const *src, Py_ssize_t n)
     PyObject **dst = tuple->ob_item;
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *item = src[i];
+        if (PyRegion_AddRef(tuple, item)) {
+            PyRegion_RemoveLocalRef(tuple);
+            Py_DECREF(tuple);
+            return NULL;
+        }
         dst[i] = item;
     }
     _PyObject_GC_TRACK(tuple);
@@ -443,7 +472,7 @@ tuple_slice(PyTupleObject *a, Py_ssize_t ilow,
     if (ihigh < ilow)
         ihigh = ilow;
     if (ilow == 0 && ihigh == Py_SIZE(a) && PyTuple_CheckExact(a)) {
-        return Py_NewRef(a);
+        return PyRegion_NewRef(a);
     }
     return PyTuple_FromArray(a->ob_item + ilow, ihigh - ilow);
 }
@@ -463,7 +492,7 @@ tuple_concat(PyObject *aa, PyObject *bb)
 {
     PyTupleObject *a = _PyTuple_CAST(aa);
     if (Py_SIZE(a) == 0 && PyTuple_CheckExact(bb)) {
-        return Py_NewRef(bb);
+        return PyRegion_NewRef(bb);
     }
     if (!PyTuple_Check(bb)) {
         PyErr_Format(PyExc_TypeError,
@@ -474,7 +503,7 @@ tuple_concat(PyObject *aa, PyObject *bb)
     PyTupleObject *b = (PyTupleObject *)bb;
 
     if (Py_SIZE(b) == 0 && PyTuple_CheckExact(a)) {
-        return Py_NewRef(a);
+        return PyRegion_NewRef(a);
     }
     assert((size_t)Py_SIZE(a) + (size_t)Py_SIZE(b) < PY_SSIZE_T_MAX);
     Py_ssize_t size = Py_SIZE(a) + Py_SIZE(b);
@@ -490,15 +519,25 @@ tuple_concat(PyObject *aa, PyObject *bb)
     PyObject **src = a->ob_item;
     PyObject **dest = np->ob_item;
     for (Py_ssize_t i = 0; i < Py_SIZE(a); i++) {
-        PyObject *v = src[i];
-        dest[i] = Py_NewRef(v);
+        PyObject *item = src[i];
+        if (PyRegion_AddRef(np, item)) {
+            PyRegion_RemoveLocalRef(np);
+            Py_DECREF(np);
+            return NULL;
+        }
+        dest[i] = Py_NewRef(item);
     }
 
     src = b->ob_item;
     dest = np->ob_item + Py_SIZE(a);
     for (Py_ssize_t i = 0; i < Py_SIZE(b); i++) {
-        PyObject *v = src[i];
-        dest[i] = Py_NewRef(v);
+        PyObject *item = src[i];
+        if (PyRegion_AddRef(np, item)) {
+            PyRegion_RemoveLocalRef(np);
+            Py_DECREF(np);
+            return NULL;
+        }
+        dest[i] = Py_NewRef(item);
     }
 
     _PyObject_GC_TRACK(np);
@@ -514,7 +553,7 @@ tuple_repeat(PyObject *self, Py_ssize_t n)
         if (PyTuple_CheckExact(a)) {
             /* Since tuples are immutable, we can return a shared
                copy in this case */
-            return Py_NewRef(a);
+            return PyRegion_NewRef(a);
         }
     }
     if (input_size == 0 || n <= 0) {
@@ -533,16 +572,27 @@ tuple_repeat(PyObject *self, Py_ssize_t n)
     PyObject **dest = np->ob_item;
     if (input_size == 1) {
         PyObject *elem = a->ob_item[0];
-        _Py_RefcntAdd(elem, n);
         PyObject **dest_end = dest + output_size;
         while (dest < dest_end) {
-            *dest++ = elem;
+            // This should always succeed, since either:
+            // (1) self is local, so this just bumps the LRC
+            // (2) self is owned, but all of this should succeed since self is on the stack
+            *dest = PyRegion_NewRef(elem);
+            assert(*dest != NULL);
+            dest++;
         }
     }
     else {
         PyObject **src = a->ob_item;
         PyObject **src_end = src + input_size;
         while (src < src_end) {
+            for (int i = 0; i < n; i++) {
+                // This should always succeed, since either:
+                // (1) self is local, so this just bumps the LRC
+                // (2) self is owned, but all of this should succeed since self is on the stack
+                int res = PyRegion_AddLocalRef(*src);
+                assert(res == 0);
+            }
             _Py_RefcntAdd(*src, n);
             *dest++ = *src++;
         }
@@ -755,13 +805,18 @@ tuple_subtype_new(PyTypeObject *type, PyObject *iterable)
     /* This may allocate an empty tuple that is not the global one. */
     newobj = type->tp_alloc(type, n = PyTuple_GET_SIZE(tmp));
     if (newobj == NULL) {
+        PyRegion_RemoveLocalRef(tmp);
         Py_DECREF(tmp);
         return NULL;
     }
     for (i = 0; i < n; i++) {
         item = PyTuple_GET_ITEM(tmp, i);
-        PyTuple_SET_ITEM(newobj, i, Py_NewRef(item));
+        // PyRegion_NewRef should always succeed, since either:
+        // (1) newobj is local, so this just bumps the LRC
+        // (2) newobj is owned, but all of this should succeed since newobj is on the stack
+        PyTuple_SET_ITEM(newobj, i, PyRegion_NewRef(item));
     }
+    PyRegion_RemoveLocalRef(tmp);
     Py_DECREF(tmp);
 
     _PyTuple_RESET_HASH_CACHE(newobj);
@@ -814,7 +869,7 @@ tuple_subscript(PyObject *op, PyObject* item)
         else if (start == 0 && step == 1 &&
                  slicelength == PyTuple_GET_SIZE(self) &&
                  PyTuple_CheckExact(self)) {
-            return Py_NewRef(self);
+            return PyRegion_NewRef(self);
         }
         else {
             PyTupleObject* result = tuple_alloc(slicelength);
@@ -824,7 +879,7 @@ tuple_subscript(PyObject *op, PyObject* item)
             dest = result->ob_item;
             for (cur = start, i = 0; i < slicelength;
                  cur += step, i++) {
-                it = Py_NewRef(src[cur]);
+                it = PyRegion_NewRef(src[cur]);
                 dest[i] = it;
             }
 
@@ -911,6 +966,7 @@ PyTypeObject PyTuple_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = tuple_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_TUPLE,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /* The following function breaks the notion that tuples are immutable:
@@ -932,6 +988,7 @@ _PyTuple_Resize(PyObject **pv, Py_ssize_t newsize)
     if (v == NULL || !Py_IS_TYPE(v, &PyTuple_Type) ||
         (Py_SIZE(v) != 0 && Py_REFCNT(v) != 1)) {
         *pv = 0;
+        PyRegion_RemoveLocalRef(v);
         Py_XDECREF(v);
         PyErr_BadInternalCall();
         return -1;
@@ -942,6 +999,7 @@ _PyTuple_Resize(PyObject **pv, Py_ssize_t newsize)
         return 0;
     }
     if (newsize == 0) {
+        PyRegion_RemoveLocalRef(v);
         Py_DECREF(v);
         *pv = tuple_get_empty();
         return 0;
@@ -952,6 +1010,7 @@ _PyTuple_Resize(PyObject **pv, Py_ssize_t newsize)
 #endif
         /* The empty tuple is statically allocated so we never
            resize it in-place. */
+        PyRegion_RemoveLocalRef(v);
         Py_DECREF(v);
         *pv = PyTuple_New(newsize);
         return *pv == NULL ? -1 : 0;
@@ -965,7 +1024,7 @@ _PyTuple_Resize(PyObject **pv, Py_ssize_t newsize)
 #endif
     /* DECREF items deleted by shrinkage */
     for (i = newsize; i < oldsize; i++) {
-        Py_CLEAR(v->ob_item[i]);
+        PyRegion_CLEAR(v, v->ob_item[i]);
     }
     _PyReftracerTrack((PyObject *)v, PyRefTracer_DESTROY);
     sv = PyObject_GC_Resize(PyTupleObject, v, newsize);
@@ -996,6 +1055,7 @@ tupleiter_dealloc(PyObject *self)
 {
     _PyTupleIterObject *it = _PyTupleIterObject_CAST(self);
     _PyObject_GC_UNTRACK(it);
+    PyRegion_RemoveRef(it, it->it_seq);
     Py_XDECREF(it->it_seq);
     assert(Py_IS_TYPE(self, &PyTupleIter_Type));
     _Py_FREELIST_FREE(tuple_iters, it, PyObject_GC_Del);
@@ -1028,11 +1088,12 @@ tupleiter_next(PyObject *self)
     if (index < PyTuple_GET_SIZE(seq)) {
         FT_ATOMIC_STORE_SSIZE_RELAXED(it->it_index, index + 1);
         item = PyTuple_GET_ITEM(seq, index);
-        return Py_NewRef(item);
+        return PyRegion_NewRef(item);
     }
 
 #ifndef Py_GIL_DISABLED
     it->it_seq = NULL;
+    PyRegion_RemoveRef(it, seq);
     Py_DECREF(seq);
 #endif
     return NULL;
@@ -1136,6 +1197,7 @@ PyTypeObject PyTupleIter_Type = {
     tupleiter_next,                             /* tp_iternext */
     tupleiter_methods,                          /* tp_methods */
     0,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyObject *
@@ -1152,7 +1214,7 @@ tuple_iter(PyObject *seq)
             return NULL;
     }
     it->it_index = 0;
-    it->it_seq = (PyTupleObject *)Py_NewRef(seq);
+    it->it_seq = (PyTupleObject *)PyRegion_NewRef(seq);
     _PyObject_GC_TRACK(it);
     return (PyObject *)it;
 }

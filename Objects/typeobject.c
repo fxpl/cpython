@@ -17,6 +17,7 @@
 #include "pycore_pyatomic_ft_wrappers.h"
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_region.h"        // _PyRegion_SignalDealloc()
 #include "pycore_symtable.h"      // _Py_Mangle()
 #include "pycore_typeobject.h"    // struct type_cache
 #include "pycore_unicodeobject.h" // _PyUnicode_Copy
@@ -2784,6 +2785,7 @@ subtype_dealloc(PyObject *self)
 
         /* Call the base tp_dealloc() */
         assert(basedealloc);
+        _PyRegion_SignalDealloc(self);
         basedealloc(self);
 
         /* Can't reference self beyond this point. It's possible tp_del switched
@@ -2893,6 +2895,7 @@ subtype_dealloc(PyObject *self)
                              && !(base->tp_flags & Py_TPFLAGS_HEAPTYPE));
 
     assert(basedealloc);
+    _PyRegion_SignalDealloc(self);
     basedealloc(self);
 
     /* Can't reference self beyond this point. It's possible tp_del switched

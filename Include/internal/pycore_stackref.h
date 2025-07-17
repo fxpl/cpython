@@ -10,6 +10,7 @@ extern "C" {
 
 #include "pycore_object.h"        // Py_DECREF_MORTAL
 #include "pycore_object_deferred.h" // _PyObject_HasDeferredRefcount()
+#include "region.h"                 // PyRegion_AddLocalRef()
 
 #include <stdbool.h>              // bool
 
@@ -597,7 +598,7 @@ PyStackRef_AsPyObjectSteal(_PyStackRef ref)
         return BITS_TO_PTR(ref);
     }
     else {
-        return Py_NewRef(BITS_TO_PTR_MASKED(ref));
+        return PyRegion_NewRef(BITS_TO_PTR_MASKED(ref));
     }
 }
 
@@ -704,7 +705,9 @@ PyStackRef_CLOSE(_PyStackRef ref)
 {
     assert(!PyStackRef_IsNull(ref));
     if (PyStackRef_RefcountOnObject(ref)) {
-        Py_DECREF_MORTAL(BITS_TO_PTR(ref));
+        PyObject *ob = BITS_TO_PTR(ref);
+        PyRegion_RemoveLocalRef(ob);
+        Py_DECREF_MORTAL(ob);
     }
 }
 #endif
@@ -720,7 +723,9 @@ PyStackRef_CLOSE_SPECIALIZED(_PyStackRef ref, destructor destruct)
 {
     assert(!PyStackRef_IsNull(ref));
     if (PyStackRef_RefcountOnObject(ref)) {
-        Py_DECREF_MORTAL_SPECIALIZED(BITS_TO_PTR(ref), destruct);
+        PyObject *ob = BITS_TO_PTR(ref);
+        PyRegion_RemoveLocalRef(ob);
+        Py_DECREF_MORTAL_SPECIALIZED(ob, destruct);
     }
 }
 
@@ -733,7 +738,9 @@ PyStackRef_XCLOSE(_PyStackRef ref)
     assert(ref.bits != 0);
     if (PyStackRef_RefcountOnObject(ref)) {
         assert(!PyStackRef_IsNull(ref));
-        Py_DECREF_MORTAL(BITS_TO_PTR(ref));
+        PyObject *ob = BITS_TO_PTR(ref);
+        PyRegion_RemoveLocalRef(ob);
+        Py_DECREF_MORTAL(ob);
     }
 }
 #endif

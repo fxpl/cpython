@@ -235,6 +235,7 @@
     <ClInclude Include="..\Include\internal\pycore_complexobject.h" />
     <ClInclude Include="..\Include\internal\pycore_condvar.h" />
     <ClInclude Include="..\Include\internal\pycore_context.h" />
+    <ClInclude Include="..\Include\internal\pycore_cown.h" />
     <ClInclude Include="..\Include\internal\pycore_critical_section.h" />
     <ClInclude Include="..\Include\internal\pycore_crossinterp.h" />
     <ClInclude Include="..\Include\internal\pycore_crossinterp_data_registry.h" />
@@ -305,6 +306,8 @@
     <ClInclude Include="..\Include\internal\pycore_pythread.h" />
     <ClInclude Include="..\Include\internal\pycore_qsbr.h" />
     <ClInclude Include="..\Include\internal\pycore_range.h" />
+    <ClInclude Include="..\Include\internal\pycore_region.h" />
+    <ClInclude Include="..\Include\internal\pycore_regionobject.h" />
     <ClInclude Include="..\Include\internal\pycore_runtime.h" />
     <ClInclude Include="..\Include\internal\pycore_runtime_init.h" />
     <ClInclude Include="..\Include\internal\pycore_runtime_init_generated.h" />
@@ -379,6 +382,7 @@
     <ClInclude Include="..\Include\pythread.h" />
     <ClInclude Include="..\Include\pytypedefs.h" />
     <ClInclude Include="..\Include\rangeobject.h" />
+    <ClInclude Include="..\Include\region.h" />
     <ClInclude Include="..\Include\refcount.h" />
     <ClInclude Include="..\Include\setobject.h" />
     <ClInclude Include="..\Include\sliceobject.h" />
@@ -489,6 +493,7 @@
     <ClCompile Include="..\Modules\_opcode.c" />
     <ClCompile Include="..\Modules\_operator.c" />
     <ClCompile Include="..\Modules\posixmodule.c" />
+    <ClCompile Include="..\Modules\regionsmodule.c" />
     <ClCompile Include="..\Modules\rotatingtree.c" />
     <ClCompile Include="..\Modules\sha1module.c" />
     <ClCompile Include="..\Modules\sha2module.c" />

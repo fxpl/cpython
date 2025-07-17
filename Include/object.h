@@ -60,6 +60,19 @@ whose size is determined when the object is allocated.
 #   error "_Py_OPAQUE_PYOBJECT only makes sense with Py_LIMITED_API"
 #endif
 
+/* The identifier of a region. Functions in `pycore_regions.h` can be used to
+ * get metadata from this pointer.
+ */
+typedef Py_uintptr_t Py_region_t;
+
+/* A constant value used for the local region. Using a constant besides 0 leads
+ * to segementation falts, likely due to custom manual object initialization
+ * without `PyObject_HEAD_INIT`.
+ */
+#define _Py_LOCAL_REGION     ((Py_region_t)0)
+#define _Py_IMMUTABLE_REGION ((Py_region_t)4)
+#define _Py_COWN_REGION      ((Py_region_t)8)
+
 #ifndef _Py_OPAQUE_PYOBJECT
 /* PyObject_HEAD defines the initial segment of every PyObject. */
 #define PyObject_HEAD                   PyObject ob_base;
@@ -84,12 +97,14 @@ whose size is determined when the object is allocated.
         _Py_IMMORTAL_REFCNT_LOCAL,  \
         0,                          \
         (type),                     \
+        (_Py_LOCAL_REGION)          \
     },
 #else
 #define PyObject_HEAD_INIT(type)    \
     {                               \
         { _Py_STATIC_IMMORTAL_INITIAL_REFCNT },    \
-        (type)                      \
+        (type),                      \
+        (_Py_LOCAL_REGION)          \
     },
 #endif
 
@@ -146,6 +161,7 @@ struct _object {
     };
 
     PyTypeObject *ob_type;
+    Py_region_t ob_region;
 };
 #else
 // Objects that are not owned by any thread use a thread id (tid) of zero.
@@ -164,6 +180,7 @@ struct _object {
     uint32_t ob_ref_local;      // local reference count
     Py_ssize_t ob_ref_shared;   // shared (atomic) reference count
     PyTypeObject *ob_type;
+    Py_region_t ob_region;
 };
 #endif // !defined(_Py_OPAQUE_PYOBJECT)
 
@@ -613,6 +630,8 @@ given type object has a specified feature.
 #define Py_TPFLAGS_DICT_SUBCLASS        (1UL << 29)
 #define Py_TPFLAGS_BASE_EXC_SUBCLASS    (1UL << 30)
 #define Py_TPFLAGS_TYPE_SUBCLASS        (1UL << 31)
+
+#define Py_TPFLAGS2_REGION_AWARE        (1UL << 0)
 
 #define Py_TPFLAGS_DEFAULT  ( \
                  Py_TPFLAGS_HAVE_STACKLESS_EXTENSION | \

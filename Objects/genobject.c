@@ -53,6 +53,7 @@ PyCodeObject *
 PyGen_GetCode(PyGenObject *gen) {
     assert(PyGen_Check(gen));
     PyCodeObject *res = _PyGen_GetCode(gen);
+    PyRegion_AddLocalRef(res);
     Py_INCREF(res);
     return res;
 }

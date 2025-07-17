@@ -253,6 +253,7 @@ PyList_New(Py_ssize_t size)
 #ifdef Py_GIL_DISABLED
         _PyListArray *array = list_allocate_array(size);
         if (array == NULL) {
+            PyRegion_RemoveLocalRef(op);
             Py_DECREF(op);
             return PyErr_NoMemory();
         }
@@ -262,6 +263,7 @@ PyList_New(Py_ssize_t size)
         op->ob_item = (PyObject **) PyMem_Calloc(size, sizeof(PyObject *));
 #endif
         if (op->ob_item == NULL) {
+            PyRegion_RemoveLocalRef(op);
             Py_DECREF(op);
             return PyErr_NoMemory();
         }
@@ -284,6 +286,7 @@ list_new_prealloc(Py_ssize_t size)
 #ifdef Py_GIL_DISABLED
     _PyListArray *array = list_allocate_array(size);
     if (array == NULL) {
+        PyRegion_RemoveLocalRef(op);
         Py_DECREF(op);
         return PyErr_NoMemory();
     }
@@ -291,6 +294,7 @@ list_new_prealloc(Py_ssize_t size)
 #else
     op->ob_item = PyMem_New(PyObject *, size);
     if (op->ob_item == NULL) {
+        PyRegion_RemoveLocalRef(op);
         Py_DECREF(op);
         return PyErr_NoMemory();
     }
@@ -377,7 +381,7 @@ list_get_item_ref(PyListObject *op, Py_ssize_t i)
     if (!valid_index(i, Py_SIZE(op))) {
         return NULL;
     }
-    return Py_NewRef(PyList_GET_ITEM(op, i));
+    return PyRegion_NewRef(PyList_GET_ITEM(op, i));
 }
 #endif
 
@@ -449,6 +453,7 @@ PyList_SetItem(PyObject *op, Py_ssize_t i,
                PyObject *newitem)
 {
     if (!PyList_Check(op)) {
+        PyRegion_RemoveLocalRef(newitem);
         Py_XDECREF(newitem);
         PyErr_BadInternalCall();
         return -1;
@@ -456,21 +461,30 @@ PyList_SetItem(PyObject *op, Py_ssize_t i,
     int ret;
     PyListObject *self = ((PyListObject *)op);
     Py_BEGIN_CRITICAL_SECTION(self);
-    if(!Py_CHECKWRITE(op)){
+    if (!Py_CHECKWRITE(op)) {
+        PyRegion_RemoveLocalRef(newitem);
         Py_XDECREF(newitem);
         PyErr_WriteToImmutable(op);
         ret = -1;
         goto end;
     }
     if (!valid_index(i, Py_SIZE(self))) {
+        PyRegion_RemoveLocalRef(newitem);
         Py_XDECREF(newitem);
         PyErr_SetString(PyExc_IndexError,
                         "list assignment index out of range");
         ret = -1;
         goto end;
     }
+    if (PyRegion_TakeRef(self, newitem)) {
+        PyRegion_RemoveLocalRef(newitem);
+        Py_XDECREF(newitem);
+        ret = -1;
+        goto end;
+    }
     PyObject *tmp = self->ob_item[i];
     FT_ATOMIC_STORE_PTR_RELEASE(self->ob_item[i], newitem);
+    PyRegion_RemoveLocalRef(tmp);
     Py_XDECREF(tmp);
     ret = 0;
 end:;
@@ -490,6 +504,8 @@ ins1(PyListObject *self, Py_ssize_t where, PyObject *v)
 
     assert((size_t)n + 1 < PY_SSIZE_T_MAX);
     if (list_resize(self, n+1) < 0)
+        return -1;
+    if (PyRegion_AddRef(self, v))
         return -1;
 
     if (where < 0) {
@@ -534,6 +550,12 @@ _PyList_AppendTakeRefListResize(PyListObject *self, PyObject *newitem)
     Py_ssize_t len = Py_SIZE(self);
     assert(self->allocated == -1 || self->allocated == len);
     if (list_resize(self, len + 1) < 0) {
+        PyRegion_RemoveLocalRef(newitem);
+        Py_DECREF(newitem);
+        return -1;
+    }
+    if (PyRegion_TakeRef(self, newitem)) {
+        PyRegion_RemoveLocalRef(newitem);
         Py_DECREF(newitem);
         return -1;
     }
@@ -552,7 +574,7 @@ PyList_Append(PyObject *op, PyObject *newitem)
     if (PyList_Check(op) && (newitem != NULL)) {
         int ret;
         Py_BEGIN_CRITICAL_SECTION(op);
-        ret = _PyList_AppendTakeRef((PyListObject *)op, Py_NewRef(newitem));
+        ret = _PyList_AppendTakeRef((PyListObject *)op, PyRegion_NewRef(newitem));
         Py_END_CRITICAL_SECTION();
         return ret;
     }
@@ -575,6 +597,7 @@ list_dealloc(PyObject *self)
            immediately deleted. */
         i = Py_SIZE(op);
         while (--i >= 0) {
+            PyRegion_RemoveRef(op, op->ob_item[i]);
             Py_XDECREF(op->ob_item[i]);
         }
         free_list_items(op->ob_item, false);
@@ -612,7 +635,7 @@ list_repr_impl(PyListObject *v)
        so must refetch the list size on each iteration. */
     for (Py_ssize_t i = 0; i < Py_SIZE(v); ++i) {
         /* Hold a strong reference since repr(item) can mutate the list */
-        item = Py_NewRef(v->ob_item[i]);
+        item = PyRegion_NewRef(v->ob_item[i]);
 
         if (i > 0) {
             if (PyUnicodeWriter_WriteChar(writer, ',') < 0) {
@@ -626,6 +649,7 @@ list_repr_impl(PyListObject *v)
         if (PyUnicodeWriter_WriteRepr(writer, item) < 0) {
             goto error;
         }
+        PyRegion_RemoveLocalRef(item);
         Py_CLEAR(item);
     }
 
@@ -637,6 +661,7 @@ list_repr_impl(PyListObject *v)
     return PyUnicodeWriter_Finish(writer);
 
 error:
+    PyRegion_AddLocalRefs(item);
     Py_XDECREF(item);
     PyUnicodeWriter_Discard(writer);
     Py_ReprLeave((PyObject *)v);
@@ -674,6 +699,7 @@ list_contains(PyObject *aa, PyObject *el)
             return 0;
         }
         int cmp = PyObject_RichCompareBool(item, el, Py_EQ);
+        PyRegion_RemoveLocalRef(item);
         Py_DECREF(item);
         if (cmp != 0) {
             return cmp;
@@ -698,7 +724,7 @@ list_item(PyObject *aa, Py_ssize_t i)
         return NULL;
     }
 #else
-    item = Py_NewRef(a->ob_item[i]);
+    item = PyRegion_NewRef(a->ob_item[i]);
 #endif
     return item;
 }
@@ -721,10 +747,17 @@ list_slice_lock_held(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh)
     dest = np->ob_item;
     for (i = 0; i < len; i++) {
         PyObject *v = src[i];
+        // FIXME(regions): This doesn't undo the previous loops
+        if (PyRegion_AddRef(np, v))
+            goto fail;
         dest[i] = Py_NewRef(v);
     }
     Py_SET_SIZE(np, len);
     return (PyObject *)np;
+fail:
+    PyRegion_RemoveLocalRef(np);
+    Py_DECREF(np);
+    return NULL;
 }
 
 PyObject *
@@ -773,16 +806,26 @@ list_concat_lock_held(PyListObject *a, PyListObject *b)
     dest = np->ob_item;
     for (i = 0; i < Py_SIZE(a); i++) {
         PyObject *v = src[i];
+        // FIXME(regions): This doesn't undo the previous loops
+        if (PyRegion_AddRef(np, v))
+            goto fail;
         dest[i] = Py_NewRef(v);
     }
     src = b->ob_item;
     dest = np->ob_item + Py_SIZE(a);
     for (i = 0; i < Py_SIZE(b); i++) {
         PyObject *v = src[i];
+        // FIXME(regions): This doesn't undo the previous loops
+        if (PyRegion_AddRef(np, v))
+            goto fail;
         dest[i] = Py_NewRef(v);
     }
     Py_SET_SIZE(np, size);
     return (PyObject *)np;
+fail:
+    PyRegion_RemoveLocalRef(np);
+    Py_DECREF(np);
+    return NULL;
 }
 
 static PyObject *
@@ -871,6 +914,7 @@ list_clear_impl(PyListObject *a, bool is_resize)
     FT_ATOMIC_STORE_PTR_RELEASE(a->ob_item, NULL);
     a->allocated = 0;
     while (--i >= 0) {
+        PyRegion_RemoveRef(a, items[i]);
         Py_XDECREF(items[i]);
     }
 #ifdef Py_GIL_DISABLED
@@ -949,6 +993,7 @@ list_ass_slice_lock_held(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh, PyO
     assert(norig >= 0);
     d = n - norig;
     if (Py_SIZE(a) + d == 0) {
+        PyRegion_RemoveLocalRef(v_as_SF);
         Py_XDECREF(v_as_SF);
         list_clear(a);
         return 0;
@@ -993,14 +1038,20 @@ list_ass_slice_lock_held(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh, PyO
     }
     for (k = 0; k < n; k++, ilow++) {
         PyObject *w = vitem[k];
+        // FIXME(regions): This doesn't undo the previous loops
+        if (PyRegion_AddRef(a, w))
+            goto Error;
         FT_ATOMIC_STORE_PTR_RELEASE(item[ilow], Py_XNewRef(w));
     }
-    for (k = norig - 1; k >= 0; --k)
+    for (k = norig - 1; k >= 0; --k) {
+        PyRegion_RemoveLocalRef(recycle[k]);
         Py_XDECREF(recycle[k]);
+    }
     result = 0;
  Error:
     if (recycle != recycle_on_stack)
         PyMem_Free(recycle);
+    PyRegion_RemoveLocalRef(v_as_SF);
     Py_XDECREF(v_as_SF);
     return result;
 #undef b
@@ -1019,6 +1070,7 @@ list_ass_slice(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh, PyObject *v)
         }
         else {
             ret = list_ass_slice_lock_held(a, ilow, ihigh, copy);
+            PyRegion_RemoveLocalRef(copy);
             Py_DECREF(copy);
         }
         Py_END_CRITICAL_SECTION();
@@ -1084,6 +1136,10 @@ list_inplace_repeat_lock_held(PyListObject *self, Py_ssize_t n)
 
     PyObject **items = self->ob_item;
     for (Py_ssize_t j = 0; j < input_size; j++) {
+        for (Py_ssize_t r = 0; r < n-1; r++) {
+            // FIXME(regions): This doesn't undo the previous loops
+            PyRegion_AddRef(self, items[j]);
+        }
         _Py_RefcntAdd(items[j], n-1);
     }
     // TODO: _Py_memory_repeat calls are not safe for shared lists in
@@ -1103,7 +1159,7 @@ list_inplace_repeat(PyObject *_self, Py_ssize_t n)
         ret = NULL;
     }
     else {
-        ret = Py_NewRef(self);
+        ret = PyRegion_NewRef(self);
     }
     Py_END_CRITICAL_SECTION();
     return ret;
@@ -1126,8 +1182,12 @@ list_ass_item_lock_held(PyListObject *a, Py_ssize_t i, PyObject *v)
         Py_SET_SIZE(a, size - 1);
     }
     else {
+        if (PyRegion_AddRef(a, v)) {
+            return -1;
+        }
         FT_ATOMIC_STORE_PTR_RELEASE(a->ob_item[i], Py_NewRef(v));
     }
+    PyRegion_RemoveRef(a, tmp);
     Py_DECREF(tmp);
     return 0;
 }
@@ -1220,7 +1280,7 @@ list_append_impl(PyListObject *self, PyObject *object)
         return NULL;
     }
 
-    if (_PyList_AppendTakeRef(self, Py_NewRef(object)) < 0) {
+    if (_PyList_AppendTakeRef(self, PyRegion_NewRef(object)) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -1264,6 +1324,10 @@ list_extend_fast(PyListObject *self, PyObject *iterable)
     PyObject **dest = self->ob_item + m;
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *o = src[i];
+        if (PyRegion_AddRef(self, o)) {
+            // FIXME(regions): This doesn't undo the previous loops
+            return -1;
+        }
         FT_ATOMIC_STORE_PTR_RELEASE(dest[i], Py_NewRef(o));
     }
     return 0;
@@ -1281,6 +1345,7 @@ list_extend_iter_lock_held(PyListObject *self, PyObject *iterable)
     /* Guess a result list size. */
     Py_ssize_t n = PyObject_LengthHint(iterable, 8);
     if (n < 0) {
+        PyRegion_RemoveLocalRef(it);
         Py_DECREF(it);
         return -1;
     }
@@ -1336,10 +1401,12 @@ list_extend_iter_lock_held(PyListObject *self, PyObject *iterable)
             goto error;
     }
 
+    PyRegion_RemoveLocalRef(it);
     Py_DECREF(it);
     return 0;
 
-  error:
+error:
+    PyRegion_RemoveLocalRef(it);
     Py_DECREF(it);
     return -1;
 }
@@ -1353,6 +1420,7 @@ list_extend_lock_held(PyListObject *self, PyObject *iterable)
     }
 
     int res = list_extend_fast(self, seq);
+    PyRegion_RemoveLocalRef(seq);
     Py_DECREF(seq);
     return res;
 }
@@ -1404,6 +1472,10 @@ list_extend_dict(PyListObject *self, PyDictObject *dict, int which_item)
     PyObject *keyvalue[2];
     while (_PyDict_Next((PyObject *)dict, &pos, &keyvalue[0], &keyvalue[1], NULL)) {
         PyObject *obj = keyvalue[which_item];
+        if (PyRegion_AddRef(self, obj)) {
+            // FIXME(regions): This doesn't undo the previous loops
+            return -1;
+        }
         Py_INCREF(obj);
         FT_ATOMIC_STORE_PTR_RELEASE(*dest, obj);
         dest++;
@@ -1560,7 +1632,7 @@ list_inplace_concat(PyObject *_self, PyObject *other)
     if (_list_extend(self, other) < 0) {
         return NULL;
     }
-    return Py_NewRef(self);
+    return PyRegion_NewRef(self);
 }
 
 PyObject* _Py_ListPop(PyListObject *self, Py_ssize_t index)
@@ -2793,6 +2865,7 @@ unsafe_object_compare(PyObject *v, PyObject *w, MergeState *ms)
     res_obj = (*(ms->key_richcompare))(v, w, Py_LT);
 
     if (res_obj == Py_NotImplemented) {
+        PyRegion_RemoveLocalRef(res_obj);
         Py_DECREF(res_obj);
         return PyObject_RichCompareBool(v, w, Py_LT);
     }
@@ -2805,6 +2878,7 @@ unsafe_object_compare(PyObject *v, PyObject *w, MergeState *ms)
     else {
         res = PyObject_IsTrue(res_obj);
     }
+    PyRegion_RemoveLocalRef(res_obj);
     Py_DECREF(res_obj);
 
     /* Note that we can't assert
@@ -3002,8 +3076,11 @@ list_sort_impl(PyListObject *self, PyObject *keyfunc, int reverse)
         for (i = 0; i < saved_ob_size ; i++) {
             keys[i] = PyObject_CallOneArg(keyfunc, saved_ob_item[i]);
             if (keys[i] == NULL) {
-                for (i=i-1 ; i>=0 ; i--)
+                for (i=i-1 ; i>=0 ; i--) {
+                    // FIXME(regions): Is this correct?
+                    PyRegion_RemoveLocalRef(keys[i]);
                     Py_DECREF(keys[i]);
+                }
                 if (saved_ob_size >= MERGESTATE_TEMP_SIZE/2)
                     PyMem_Free(keys);
                 goto keyfunc_fail;
@@ -3173,8 +3250,11 @@ succeed:
     result = Py_None;
 fail:
     if (keys != NULL) {
-        for (i = 0; i < saved_ob_size; i++)
+        for (i = 0; i < saved_ob_size; i++) {
+            // FIXME(regions): Is this correct?
+            PyRegion_RemoveLocalRef(keys[i]);
             Py_DECREF(keys[i]);
+        }
         if (saved_ob_size >= MERGESTATE_TEMP_SIZE/2)
             PyMem_Free(keys);
     }
@@ -3202,6 +3282,7 @@ keyfunc_fail:
         /* we cannot use list_clear() for this because it does not
            guarantee that the list is really empty when it returns */
         while (--i >= 0) {
+            PyRegion_RemoveRef(self, final_ob_item[i]);
             Py_XDECREF(final_ob_item[i]);
         }
 #ifdef Py_GIL_DISABLED
@@ -3212,7 +3293,7 @@ keyfunc_fail:
 #endif
         free_list_items(final_ob_item, use_qsbr);
     }
-    return Py_XNewRef(result);
+    return PyRegion_XNewRef(result);
 }
 #undef IFLT
 #undef ISLT
@@ -3229,6 +3310,7 @@ PyList_Sort(PyObject *v)
     Py_END_CRITICAL_SECTION();
     if (v == NULL)
         return -1;
+    PyRegion_RemoveLocalRef(v);
     Py_DECREF(v);
     return 0;
 }
@@ -3368,6 +3450,7 @@ list_index_impl(PyListObject *self, PyObject *value, Py_ssize_t start,
             break;
         }
         int cmp = PyObject_RichCompareBool(obj, value, Py_EQ);
+        PyRegion_RemoveLocalRef(obj);
         Py_DECREF(obj);
         if (cmp > 0)
             return PyLong_FromSsize_t(i);
@@ -3400,10 +3483,12 @@ list_count_impl(PyListObject *self, PyObject *value)
         }
         if (obj == value) {
            count++;
+           PyRegion_RemoveLocalRef(obj);
            Py_DECREF(obj);
            continue;
         }
         int cmp = PyObject_RichCompareBool(obj, value, Py_EQ);
+        PyRegion_RemoveLocalRef(obj);
         Py_DECREF(obj);
         if (cmp > 0)
             count++;
@@ -3437,8 +3522,12 @@ list_remove_impl(PyListObject *self, PyObject *value)
 
     for (i = 0; i < Py_SIZE(self); i++) {
         PyObject *obj = self->ob_item[i];
+        if (PyRegion_AddLocalRef(obj)) {
+            return NULL;
+        }
         Py_INCREF(obj);
         int cmp = PyObject_RichCompareBool(obj, value, Py_EQ);
+        PyRegion_RemoveLocalRef(obj);
         Py_DECREF(obj);
         if (cmp > 0) {
             if (list_ass_slice_lock_held(self, i, i+1, NULL) == 0)
@@ -3491,9 +3580,14 @@ list_richcompare_impl(PyObject *v, PyObject *w, int op)
             continue;
         }
 
+        if (PyRegion_AddLocalRefs(vitem, witem)) {
+            return NULL;
+        }
         Py_INCREF(vitem);
         Py_INCREF(witem);
         int k = PyObject_RichCompareBool(vitem, witem, Py_EQ);
+        PyRegion_RemoveLocalRef(vitem);
+        PyRegion_RemoveLocalRef(witem);
         Py_DECREF(vitem);
         Py_DECREF(witem);
         if (k < 0)
@@ -3518,9 +3612,14 @@ list_richcompare_impl(PyObject *v, PyObject *w, int op)
     /* Compare the final item again using the proper operator */
     PyObject *vitem = vl->ob_item[i];
     PyObject *witem = wl->ob_item[i];
+    if (PyRegion_AddLocalRefs(vitem, witem)) {
+        return NULL;
+    }
     Py_INCREF(vitem);
     Py_INCREF(witem);
     PyObject *result = PyObject_RichCompare(vl->ob_item[i], wl->ob_item[i], op);
+    PyRegion_RemoveLocalRef(vitem);
+    PyRegion_RemoveLocalRef(witem);
     Py_DECREF(vitem);
     Py_DECREF(witem);
     return result;
@@ -3590,6 +3689,7 @@ list_vectorcall(PyObject *type, PyObject * const*args,
     }
     if (nargs) {
         if (list___init___impl((PyListObject *)list, args[0])) {
+            PyRegion_RemoveLocalRef(list);
             Py_DECREF(list);
             return NULL;
         }
@@ -3664,6 +3764,10 @@ list_slice_step_lock_held(PyListObject *a, Py_ssize_t start, Py_ssize_t step, Py
     for (cur = start, i = 0; i < len;
             cur += (size_t)step, i++) {
         PyObject *v = src[cur];
+        if (PyRegion_AddRef(np, v)) {
+            Py_DECREF(np);
+            return NULL;
+        }
         dest[i] = Py_NewRef(v);
     }
     Py_SET_SIZE(np, len);
@@ -3831,6 +3935,7 @@ list_ass_subscript_lock_held(PyObject *_self, PyObject *item, PyObject *value)
             res = list_resize(self, Py_SIZE(self));
 
             for (i = 0; i < slicelength; i++) {
+                PyRegion_RemoveRef(self, garbage[i]);
                 Py_DECREF(garbage[i]);
             }
             PyMem_Free(garbage);
@@ -3862,6 +3967,7 @@ list_ass_subscript_lock_held(PyObject *_self, PyObject *item, PyObject *value)
 
             if (step == 1) {
                 int res = list_ass_slice_lock_held(self, start, stop, seq);
+                PyRegion_RemoveLocalRef(seq);
                 Py_DECREF(seq);
                 return res;
             }
@@ -3873,11 +3979,13 @@ list_ass_subscript_lock_held(PyObject *_self, PyObject *item, PyObject *value)
                     "size %zd",
                          PySequence_Fast_GET_SIZE(seq),
                          slicelength);
+                PyRegion_RemoveLocalRef(seq);
                 Py_DECREF(seq);
                 return -1;
             }
 
             if (!slicelength) {
+                PyRegion_RemoveLocalRef(seq);
                 Py_DECREF(seq);
                 return 0;
             }
@@ -3885,25 +3993,34 @@ list_ass_subscript_lock_held(PyObject *_self, PyObject *item, PyObject *value)
             garbage = (PyObject**)
                 PyMem_Malloc(slicelength*sizeof(PyObject*));
             if (!garbage) {
+                PyRegion_RemoveLocalRef(seq);
                 Py_DECREF(seq);
                 PyErr_NoMemory();
                 return -1;
             }
 
+            int res = 0;
             selfitems = self->ob_item;
             seqitems = PySequence_Fast_ITEMS(seq);
             for (cur = start, i = 0; i < slicelength;
                  cur += (size_t)step, i++) {
                 garbage[i] = selfitems[cur];
                 ins = Py_NewRef(seqitems[i]);
+                // FIXME(regions): This doesn't undo the previous loops
+                if (PyRegion_TakeRef(self, ins)) {
+                    res = -1;
+                    break;
+                }
                 selfitems[cur] = ins;
             }
 
             for (i = 0; i < slicelength; i++) {
+                PyRegion_RemoveRef(self, garbage[i]);
                 Py_DECREF(garbage[i]);
             }
 
             PyMem_Free(garbage);
+            PyRegion_RemoveLocalRef(seq);
             Py_DECREF(seq);
 
             return 0;
@@ -4039,6 +4156,7 @@ PyTypeObject PyListIter_Type = {
     listiter_next,                              /* tp_iternext */
     listiter_methods,                           /* tp_methods */
     0,                                          /* tp_members */
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
@@ -4056,6 +4174,11 @@ list_iter(PyObject *seq)
             return NULL;
         }
     }
+    if (PyRegion_AddRef(it, seq)) {
+        PyRegion_RemoveLocalRef(it);
+        Py_DECREF(it);
+        return NULL;
+    }
     it->it_index = 0;
     it->it_seq = (PyListObject *)Py_NewRef(seq);
     _PyObject_GC_TRACK(it);
@@ -4067,6 +4190,7 @@ listiter_dealloc(PyObject *self)
 {
     _PyListIterObject *it = (_PyListIterObject *)self;
     _PyObject_GC_UNTRACK(it);
+    PyRegion_RemoveRef(it, it->it_seq);
     Py_XDECREF(it->it_seq);
     assert(Py_IS_TYPE(self, &PyListIter_Type));
     _Py_FREELIST_FREE(list_iters, it, PyObject_GC_Del);
@@ -4095,6 +4219,7 @@ listiter_next(PyObject *self)
 #ifndef Py_GIL_DISABLED
         PyListObject *seq = it->it_seq;
         it->it_seq = NULL;
+        PyRegion_RemoveRef(it, seq);
         Py_DECREF(seq);
 #endif
         return NULL;
@@ -4193,6 +4318,7 @@ PyTypeObject PyListRevIter_Type = {
     listreviter_next,                           /* tp_iternext */
     listreviter_methods,                /* tp_methods */
     0,
+   .tp_flags2 = Py_TPFLAGS2_REGION_AWARE, 
 };
 
 /*[clinic input]
@@ -4210,6 +4336,10 @@ list___reversed___impl(PyListObject *self)
     it = PyObject_GC_New(listreviterobject, &PyListRevIter_Type);
     if (it == NULL)
         return NULL;
+    if (PyRegion_AddRef(it, self)) {
+        Py_DECREF(it);
+        return NULL;
+    }
     assert(PyList_Check(self));
     it->it_index = PyList_GET_SIZE(self) - 1;
     it->it_seq = (PyListObject*)Py_NewRef(self);
@@ -4222,6 +4352,7 @@ listreviter_dealloc(PyObject *self)
 {
     listreviterobject *it = (listreviterobject *)self;
     PyObject_GC_UnTrack(it);
+    PyRegion_RemoveRef(it, it->it_seq);
     Py_XDECREF(it->it_seq);
     PyObject_GC_Del(it);
 }
@@ -4253,6 +4384,7 @@ listreviter_next(PyObject *self)
     FT_ATOMIC_STORE_SSIZE_RELAXED(it->it_index, -1);
 #ifndef Py_GIL_DISABLED
     it->it_seq = NULL;
+    PyRegion_RemoveRef(it, seq);
     Py_DECREF(seq);
 #endif
     return NULL;
