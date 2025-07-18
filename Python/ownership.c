@@ -41,9 +41,187 @@ static _Py_ownership_state* get_ownership_state()
     return state;
 }
 
+/* This function returns true for C wrappers around functions, types and
+ * all kinds of wrappers around C with immutable state. For ownership these
+ * can be seen as immutable, meaning they can be referenced from immutable
+ * objects and from inside regions.
+ */
 int _PyOwnership_is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
+
+/**
+ * Special function for replacing globals and builtins with a copy of just what they use.
+ *
+ * This is necessary because the function object has a pointer to the global
+ * dictionary, and this is problematic because freezing any function directly
+ * (as we do with other objects) would make all globals immutable.
+ *
+ * Instead, we walk the function and find any places where it references
+ * global variables or builtins, and then freeze just those objects. The globals
+ * and builtins dictionaries for the function are then replaced with
+ * copies containing just those globals and builtins we were able to determine
+ * the function uses.
+ */
+static int shadow_function_globals(PyObject* op)
+{
+    PyObject* builtins = NULL;
+    PyObject* shadow_builtins = NULL;
+    PyObject* globals = NULL;
+    PyObject* shadow_globals = NULL;
+    PyFunctionObject* f = NULL;
+    PyObject* f_ptr = NULL;
+    PyCodeObject* f_code = NULL;
+    Py_ssize_t size;
+    bool check_globals = false;
+
+    _PyObject_ASSERT(op, PyFunction_Check(op));
+
+    f = (PyFunctionObject*)op;
+
+    globals = f->func_globals;
+    builtins = f->func_builtins;
+
+    f_ptr = f->func_code;
+
+    shadow_builtins = PyDict_New();
+    if(shadow_builtins == NULL){
+        goto nomemory;
+    }
+
+    shadow_globals = PyDict_New();
+    if(shadow_globals == NULL){
+        goto nomemory;
+    }
+
+    if(PyDict_SetItemString(shadow_globals, "__builtins__", shadow_builtins)){
+        Py_DECREF(shadow_builtins);
+        Py_DECREF(shadow_globals);
+        return 0;
+    }
+
+    _PyObject_ASSERT(f_ptr, PyCode_Check(f_ptr));
+    f_code = (PyCodeObject*)f_ptr;
+
+    size = 0;
+    if (f_code->co_names != NULL)
+        size = PySequence_Fast_GET_SIZE(f_code->co_names);
+    for(Py_ssize_t i = 0; i < size; i++){
+        PyObject* name = PySequence_Fast_GET_ITEM(f_code->co_names, i);
+
+        if(PyUnicode_CompareWithASCIIString(name, "globals") == 0){
+            // if the code calls the globals() builtin, then any
+            // cellvar or const in the function could, potentially, refer to
+            // a global variable. As such, we need to check if the globals
+            // dictionary contains that key and then make it immutable
+            // from this point forwards.
+            check_globals = true;
+        }
+
+        if(PyDict_Contains(globals, name)){
+            PyObject* value = PyDict_GetItem(globals, name);
+            if(PyDict_SetItem(shadow_globals, name, value)){
+                Py_DECREF(shadow_builtins);
+                Py_DECREF(shadow_globals);
+                return 0;
+            }
+        }else if(PyDict_Contains(builtins, name)){
+            PyObject* value = PyDict_GetItem(builtins, name);
+            if(PyDict_SetItem(shadow_builtins, name, value)){
+                Py_DECREF(shadow_builtins);
+                Py_DECREF(shadow_globals);
+                return 0;
+            }
+        }
+    }
+
+    size = PySequence_Fast_GET_SIZE(f_code->co_consts);
+    for(Py_ssize_t i = 0; i < size; i++){
+        PyObject* value = PySequence_Fast_GET_ITEM(f_code->co_consts, i);
+        if(check_globals && PyUnicode_Check(value)){
+            // if the code calls the globals() builtin, then any
+            // cellvar or const in the function could, potentially, refer to
+            // a global variable. As such, we need to check if the globals
+            // dictionary contains that key and then make it immutable
+            // from this point forwards.
+            PyObject* name = value;
+            if(PyDict_Contains(globals, name)){
+                value = PyDict_GetItem(globals, name);
+                if(PyDict_SetItem(shadow_globals, name, value)){
+                    Py_DECREF(shadow_builtins);
+                    Py_DECREF(shadow_globals);
+                    return 0;
+                }
+            }
+        }
+    }
+
+    size = 0;
+    if(f->func_closure != NULL){
+        size = PyTuple_Size(f->func_closure);
+        if(size == -1){
+            Py_DECREF(shadow_builtins);
+            Py_DECREF(shadow_globals);
+            return 0;
+        }
+    }
+
+    for(Py_ssize_t i=0; i < size; ++i){
+        PyObject* cellvar = PyTuple_GET_ITEM(f->func_closure, i);
+        PyObject* value = PyCell_GET(cellvar);
+
+        PyObject* shadow_cellvar = PyCell_New(value);
+        if(PyTuple_SetItem(f->func_closure, i, shadow_cellvar) == -1){
+            Py_DECREF(shadow_cellvar);
+            Py_DECREF(shadow_builtins);
+            Py_DECREF(shadow_globals);
+            return 0;
+        }
+
+        if(PyUnicode_Check(value) && check_globals){
+            // if the code calls the globals() builtin, then any
+            // cellvar or const in the function could, potentially, refer to
+            // a global variable. As such, we need to check if the globals
+            // dictionary contains that key and then make it immutable
+            // from this point forwards.
+            PyObject* name = value;
+            if(PyDict_Contains(globals, name)){
+                value = PyDict_GetItem(globals, name);
+                if(PyDict_SetItem(shadow_globals, name, value)){
+                    Py_DECREF(shadow_builtins);
+                    Py_DECREF(shadow_globals);
+                    return 0;
+                }
+            }
+        }
+    }
+
+    f->func_globals = shadow_globals;
+    Py_DECREF(globals);
+
+    f->func_builtins = shadow_builtins;
+    Py_DECREF(builtins);
+
+    if(f->func_annotations == NULL){
+        f->func_annotations = PyDict_New();
+        if(f->func_annotations == NULL){
+            goto nomemory;
+        }
+    }
+
+    return 0;
+
+nomemory:
+    Py_XDECREF(shadow_builtins);
+    Py_XDECREF(shadow_globals);
+    PyErr_NoMemory();
+    return -1;
+}
+
+/* This function calls the `visit` function for the fields of the `obj`
+ * which should be effected by ownership. The `data` pointer will be
+ * passed along as the second argument to `visit`.
+ */
 int _PyOwnership_traverse_obj(PyObject *obj, visitproc visit, void *data) {
     if (PyType_Check(obj)) {
         // TODO(Immutable): mjp: Special case for types not sure if required. We should review.
@@ -69,6 +247,31 @@ int _PyOwnership_traverse_obj(PyObject *obj, visitproc visit, void *data) {
     // tp_traverse doesn't cover the object type, this therefore needs
     // to explicitly visit the type.
     SUCCEEDS(visit(_PyObject_CAST(Py_TYPE(obj)), data));
+
+    return 0;
+error:
+    return -1;
+}
+
+/* This prepares the given object to be frozen or moved into a region. The
+ * object is then traversed using `_PyOwnership_traverse_obj`
+ */
+int _PyOwnership_prep_and_traverse_obj(PyObject* obj, visitproc visit, void *data)
+{
+    if(_PyOwnership_is_c_wrapper(obj)) {
+        // C functions are not mutable
+        // Types are manually traversed
+        return 0;
+    }
+
+    // Function require some work to freeze, so we do not freeze the
+    // world as they mention globals and builtins.  This will shadow what they
+    // use, and then we can freeze the those components.
+    if(PyFunction_Check(obj)){
+        SUCCEEDS(shadow_function_globals(obj));
+    }
+
+    SUCCEEDS(_PyOwnership_traverse_obj(obj, visit, data));
 
     return 0;
 error:

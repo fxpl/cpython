@@ -35,18 +35,11 @@ typedef struct _Py_ownership_state {
 #endif
 } _Py_ownership_state;
 
-/* This function returns true for C wrappers around functions, types and
- * all kinds of wrappers around C with immutable state. For ownership these
- * can be seen as immutable, meaning they can be referenced from immutable
- * objects and from inside regions.
- */
 PyAPI_FUNC(int) _PyOwnership_is_c_wrapper(PyObject *obj);
 
-/* This function calls the `visit` function for the fields of the `obj`
- * which should be effected by ownership. The `data` pointer will be
- * passed along as the second argument to `visit`.
- */
 PyAPI_FUNC(int) _PyOwnership_traverse_obj(PyObject *obj, visitproc visit, void *data);
+
+int _PyOwnership_prep_and_traverse_obj(PyObject* obj, visitproc visit, void *data);
 
 #ifdef Py_OWNERSHIP_INVARIANT
 
