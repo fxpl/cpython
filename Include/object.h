@@ -56,6 +56,19 @@ whose size is determined when the object is allocated.
 #  define Py_REF_DEBUG
 #endif
 
+/* The identifier of a region. Functions in `pycore_regions.h` can be used to
+ * get metadata from this pointer.
+ */
+typedef Py_uintptr_t Py_region_t;
+
+/* A constant value used for the local region. Using a constant besides 0 leads
+ * to segementation falts, likely due to custom manual object initialization
+ * without `PyObject_HEAD_INIT`.
+ */
+#define _Py_LOCAL_REGION     ((Py_region_t)0)
+#define _Py_IMMUTABLE_REGION ((Py_region_t)4)
+#define _Py_COWN_REGION      ((Py_region_t)8)
+
 /* PyObject_HEAD defines the initial segment of every PyObject. */
 #define PyObject_HEAD                   PyObject ob_base;
 
@@ -77,12 +90,14 @@ whose size is determined when the object is allocated.
         _Py_IMMORTAL_REFCNT_LOCAL,  \
         0,                          \
         (type),                     \
+        (_Py_LOCAL_REGION)          \
     },
 #else
 #define PyObject_HEAD_INIT(type)    \
     {                               \
         { _Py_STATIC_IMMORTAL_INITIAL_REFCNT },    \
-        (type)                      \
+        (type),                      \
+        (_Py_LOCAL_REGION)          \
     },
 #endif
 
@@ -142,6 +157,7 @@ struct _object {
 #endif
 
     PyTypeObject *ob_type;
+    Py_region_t ob_region;
 };
 #else
 // Objects that are not owned by any thread use a thread id (tid) of zero.

@@ -9,7 +9,10 @@
 #include "pycore_object.h"
 #include "pycore_ownership.h"
 #include "pycore_list.h"
+#include "pycore_region.h"
 
+// Macro that jumps to error, if the expression `x` does not succeed.
+#define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
 static PyObject *
 _destroy(PyObject* set, PyObject *objweakref)
@@ -251,15 +254,23 @@ init_freeze_state(struct FreezeState *state)
     return 0;
 }
 
-static inline void _Py_SetImmutable(PyObject *op)
+static inline int _Py_SetImmutable(PyObject *op)
 {
-if(op) {
+    if(op) {
+        SUCCEEDS(_Py_RegionMoveToImmuable(op));
+
 #if SIZEOF_VOID_P > 4
         op->ob_flags |= _Py_IMMUTABLE_FLAG;
 #else
         op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
 #endif
+
     }
+
+    return 0;
+
+error:
+    return 1;
 }
 
 int has_visited(PyObject *op, struct FreezeState *state)
@@ -282,7 +293,7 @@ add_visited_set(struct FreezeState *state, PyObject *op)
 
 #ifndef Py_GIL_DISABLED
     if (_PyObject_IS_GC(op)) {
-        _Py_SetImmutable(op);
+        SUCCEEDS(_Py_SetImmutable(op));
         if (_PyObject_GC_IS_TRACKED(op)) {
             gc_list_move(_Py_AS_GC(op), &(state->visited));
             // Just set to space 0 for now.
@@ -312,7 +323,7 @@ add_visited_set(struct FreezeState *state, PyObject *op)
         goto error;
     }
 
-    _Py_SetImmutable(op);
+    SUCCEEDS(_Py_SetImmutable(op));
     return 0;
 
 error:

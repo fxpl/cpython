@@ -12,8 +12,28 @@ extern "C" {
 #include "object.h"
 
 typedef struct _Py_ownership_state {
-    /* Temporary value until the state always has a field to indicate this. */
-    int is_initialized;
+    /* The global ownership tick used to mark open regions as dirty, if their
+    * invariant might broken. This can happen if untrusted C code is called
+    * which doesn't have write barriers. This C code might create references
+    * between objects which could violate the invariant. Marking a region as
+    * dirty means that it has to be cleaned, before the region can be closed.
+    *
+    * The tick has two kinds of values:
+    * - Even => A region was opened
+    * - Odd  => Untrusted code was called and all currently open regions
+    *           should be marked as dirty.
+    *
+    * Transitions by increment:
+    * - From even to odd => Unknown C code was called
+    * - From odd to even => A new region was opened
+    *
+    * This mechanism allows marking all regions as dirty with a single tick
+    * change.
+    *
+    * Invariant: The tick counter should always be greater or equal to two
+    * as the values 0 and 1 are reserved values by `regiondata.open_tick`.
+    * */
+    Py_ssize_t tick;
     // FIXME: xFrednet: Can we remove this special casing in favor of
     //     unfreezable fields or thread local wrappers.
     PyObject *module_locks;
@@ -46,7 +66,26 @@ typedef struct _Py_ownership_state {
 #endif
 } _Py_ownership_state;
 
+/* This retrives the current ownership tick or 0 if the tick retrival failed.
+* See `_Py_ownership_state.tick`
+*/
+PyAPI_FUNC(Py_ssize_t) _PyOwnership_get_current_tick(void);
+
+/* Returns the tick which should be used for `region.open_tick` or 0 if the
+* ownerstate is currently unavialble.
+*/
+PyAPI_FUNC(Py_ssize_t) _PyOwnership_get_open_region_tick(void);
+
+/* This function should be called when, untrusted code is executed. It will
+* mark all currently open regions as dirty.
+*
+* It can fail, if the ownership state is currently unavailable
+*/
+PyAPI_FUNC(int) _PyOwnership_notify_untrusted_code(void);
+
+
 PyAPI_FUNC(int) _PyOwnership_is_c_wrapper(PyObject *obj);
+
 /* Called for every object, to check what should be done with it. This
  * can be used to implemented a set visited objects and avoid traversing
  * objects multiple times.

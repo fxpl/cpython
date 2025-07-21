@@ -793,10 +793,10 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
 
     Py_CLEAR(interp->immutability.freezable_types);
     Py_CLEAR(interp->immutability.destroy_cb);
-    
+
+    interp->ownership.tick = 0;
     Py_CLEAR(interp->ownership.module_locks);
     Py_CLEAR(interp->ownership.blocking_on);
-    interp->ownership.is_initialized = 0;
 #ifdef Py_OWNERSHIP_INVARIANT
     interp->ownership.invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
 #endif

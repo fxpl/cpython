@@ -19,11 +19,10 @@ static int init_state(_Py_ownership_state *state)
     state->module_locks = NULL;
     state->blocking_on = NULL;
 
+    state->tick = 2;
 #ifdef Py_OWNERSHIP_INVARIANT
     state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
 #endif
-
-    state->is_initialized = true;
 
     return 0;
 }
@@ -47,15 +46,9 @@ static int init_import_state(_Py_ownership_state *state) {
     }
 
     Py_DECREF(frozen_importlib);
-    return 0;
-}
 
-// This is separate to the previous init as it depends on the traceback
-// module being available, and can cause a circular import if it is
-// called during register freezable.
-static
-void init_traceback_state(_Py_ownership_state *state)
-{
+    // In debug mode, we can store the traceback for debugging purposes.
+    // Get a traceback object to use as the ownership location.
 #ifdef Py_DEBUG
     PyObject *traceback_module = PyImport_ImportModule("traceback");
     if (traceback_module != NULL) {
@@ -63,6 +56,8 @@ void init_traceback_state(_Py_ownership_state *state)
         Py_DECREF(traceback_module);
     }
 #endif
+
+    return 0;
 }
 
 static _Py_ownership_state* get_ownership_state(void)
@@ -74,7 +69,7 @@ static _Py_ownership_state* get_ownership_state(void)
     }
 
     _Py_ownership_state *state = &interp->ownership;
-    if (state->is_initialized == false) {
+    if (state->tick == 0) {
         if (init_state(state) == -1) {
             PyErr_SetString(PyExc_RuntimeError, "Failed to initialize ownership state");
             return NULL;
@@ -88,7 +83,7 @@ static _Py_ownership_state* get_ownership_state_for_traverse(void)
 {
     _Py_ownership_state* state = get_ownership_state();
     if (state == NULL) {
-        return 0;
+        return NULL;
     }
 
     if (state->blocking_on == NULL) {
@@ -99,6 +94,53 @@ static _Py_ownership_state* get_ownership_state_for_traverse(void)
     }
 
     return state;
+}
+
+#define IS_OPEN_REGION_TICK(tick) ((tick) % 2 == 0)
+
+Py_ssize_t _PyOwnership_get_current_tick(void) {
+    _Py_ownership_state* state = get_ownership_state();
+    if (state == NULL) {
+        return 0;
+    }
+
+    return state->tick;
+}
+
+Py_ssize_t _PyOwnership_get_open_region_tick(void) {
+    _Py_ownership_state* state = get_ownership_state();
+    if (state == NULL) {
+        return 0;
+    }
+
+    // Only incremeant the counter, if the state is untrusted
+    if (!IS_OPEN_REGION_TICK(state->tick)) {
+        state->tick += 1;
+
+        // Prevent overflow, by resetting early
+        if (state->tick > (PY_SSIZE_T_MAX - 10)) {
+            state->tick = 2;
+        }
+    }
+    assert(IS_OPEN_REGION_TICK(state->tick));
+
+    return state->tick;
+}
+
+int _PyOwnership_notify_untrusted_code(void) {
+    _Py_ownership_state* state = get_ownership_state();
+    if (state == NULL) {
+        return 1;
+    }
+
+    // Only incremeant the counter, if the state is trusted
+    if (IS_OPEN_REGION_TICK(state->tick)) {
+        state->tick += 1;
+    }
+    assert(!IS_OPEN_REGION_TICK(state->tick));
+
+    // Everything is alright
+    return 0;
 }
 
 /* This function returns true for C wrappers around functions, types and
@@ -469,12 +511,6 @@ int _PyOwnership_traverse_object_graph(
     }
 
 #ifdef Py_DEBUG
-    // In debug mode, we can set a freeze location for debugging purposes.
-    // Get a traceback object to use as the freeze location.
-    if (ownership_state->traceback_func == NULL) {
-        init_traceback_state(ownership_state);
-    }
-
     if (ownership_state->traceback_func != NULL) {
         PyObject *stack = PyObject_CallFunctionObjArgs(ownership_state->traceback_func, NULL);
         if (stack != NULL) {
