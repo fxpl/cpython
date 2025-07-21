@@ -4,6 +4,7 @@
 #include "pycore_descrobject.h" // _PyMethodWrapper_Type
 #include "pycore_gc.h"          // _PyGCHead_NEXT, _PyGCHead_PREV, _Py_FROM_GC
 #include "pycore_interp.h"      // PyThreadState_Get
+#include "pycore_list.h"
 #include "pycore_ownership.h"
 #include "pycore_pyerrors.h"
 #include "pycore_runtime.h"
@@ -15,14 +16,56 @@
 
 static int init_state(_Py_ownership_state *state)
 {
-    state->is_initialized = true;
+    state->module_locks = NULL;
+    state->blocking_on = NULL;
+
 #ifdef Py_OWNERSHIP_INVARIANT
     state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
 #endif
+
+    state->is_initialized = true;
+
     return 0;
 }
 
-static _Py_ownership_state* get_ownership_state()
+static int init_import_state(_Py_ownership_state *state) {
+    PyObject* frozen_importlib = PyImport_ImportModule("_frozen_importlib");
+    if (frozen_importlib == NULL) {
+        return -1;
+    }
+
+    state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
+    if (state->module_locks == NULL) {
+        Py_DECREF(frozen_importlib);
+        return -1;
+    }
+
+    state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
+    if (state->blocking_on == NULL) {
+        Py_DECREF(frozen_importlib);
+        return -1;
+    }
+
+    Py_DECREF(frozen_importlib);
+    return 0;
+}
+
+// This is separate to the previous init as it depends on the traceback
+// module being available, and can cause a circular import if it is
+// called during register freezable.
+static
+void init_traceback_state(_Py_ownership_state *state)
+{
+#ifdef Py_DEBUG
+    PyObject *traceback_module = PyImport_ImportModule("traceback");
+    if (traceback_module != NULL) {
+        state->traceback_func = PyObject_GetAttrString(traceback_module, "format_stack");
+        Py_DECREF(traceback_module);
+    }
+#endif
+}
+
+static _Py_ownership_state* get_ownership_state(void)
 {
     PyInterpreterState *interp = PyInterpreterState_Get();
     if (interp == NULL) {
@@ -41,6 +84,23 @@ static _Py_ownership_state* get_ownership_state()
     return state;
 }
 
+static _Py_ownership_state* get_ownership_state_for_traverse(void)
+{
+    _Py_ownership_state* state = get_ownership_state();
+    if (state == NULL) {
+        return 0;
+    }
+
+    if (state->blocking_on == NULL) {
+        if (init_import_state(state) != 0) {
+            PyErr_SetString(PyExc_RuntimeError, "Failed to initialize ownership state for traverse");
+            return NULL;
+        }
+    }
+
+    return state;
+}
+
 /* This function returns true for C wrappers around functions, types and
  * all kinds of wrappers around C with immutable state. For ownership these
  * can be seen as immutable, meaning they can be referenced from immutable
@@ -48,6 +108,38 @@ static _Py_ownership_state* get_ownership_state()
  */
 int _PyOwnership_is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
+}
+
+static int push(PyObject* s, PyObject* item) {
+    if (item == NULL) {
+        return 0;
+    }
+
+    if (!PyList_Check(s)) {
+        PyErr_SetString(PyExc_TypeError, "Expected a list");
+        return -1;
+    }
+
+    return _PyList_AppendTakeRef(_PyList_CAST(s), Py_NewRef(item));
+}
+
+static PyObject* pop(PyObject* s) {
+    PyObject* item;
+    Py_ssize_t size = PyList_Size(s);
+    if (size == 0) {
+        return NULL;
+    }
+
+    item = PyList_GetItem(s, size - 1);
+    if (item == NULL) {
+        return NULL;
+    }
+
+    if (PyList_SetSlice(s, size - 1, size, NULL)) {
+        return NULL;
+    }
+
+    return item;
 }
 
 /**
@@ -218,6 +310,44 @@ nomemory:
     return -1;
 }
 
+typedef struct ownership_traverse_state {
+    PyObject *source;
+    PyObject *dfs_stack;
+
+    ownershipvisitproc caller_visit;
+    void *caller_state;
+} ownership_traverse_state;
+
+static int ownership_visit(PyObject* target, void* traverse_state_void)
+{
+    // References to NULL can be ignored
+    if (target == NULL)
+        return 0;
+
+    // Cast the state for easier access
+    ownership_traverse_state *traverse_state =
+        (ownership_traverse_state*)traverse_state_void;
+
+    // Call the visit function
+    int result = (traverse_state->caller_visit)(
+            traverse_state->source,
+            target,
+            traverse_state->caller_state
+        );
+
+    // Enqueue the target if it should be traversed
+    if (result == Py_OWNERSHIP_TRAVERSE_VISIT) {
+        result = Py_OWNERSHIP_TRAVERSE_SKIP;
+
+        if (push(traverse_state->dfs_stack, target)) {
+            PyErr_NoMemory();
+            return -1;
+        }
+    }
+
+    return result;
+}
+
 /* This function calls the `visit` function for the fields of the `obj`
  * which should be effected by ownership. The `data` pointer will be
  * passed along as the second argument to `visit`.
@@ -254,11 +384,11 @@ error:
 }
 
 /* This prepares the given object to be frozen or moved into a region. The
- * object is then traversed using `_PyOwnership_traverse_obj`
+ * object is then traversed using `_PyOwnership_traverse_obj`.
  */
-int _PyOwnership_prep_and_traverse_obj(PyObject* obj, visitproc visit, void *data)
+int _PyOwnership_prep_and_traverse_obj(PyObject* obj, void *data)
 {
-    if(_PyOwnership_is_c_wrapper(obj)) {
+    if (_PyOwnership_is_c_wrapper(obj)) {
         // C functions are not mutable
         // Types are manually traversed
         return 0;
@@ -267,15 +397,157 @@ int _PyOwnership_prep_and_traverse_obj(PyObject* obj, visitproc visit, void *dat
     // Function require some work to freeze, so we do not freeze the
     // world as they mention globals and builtins.  This will shadow what they
     // use, and then we can freeze the those components.
-    if(PyFunction_Check(obj)){
+    if (PyFunction_Check(obj)) {
         SUCCEEDS(shadow_function_globals(obj));
     }
 
-    SUCCEEDS(_PyOwnership_traverse_obj(obj, visit, data));
+    SUCCEEDS(_PyOwnership_traverse_obj(obj, ownership_visit, data));
 
     return 0;
 error:
     return -1;
+}
+
+static int init_traverse_state(
+    ownership_traverse_state *state,
+    ownershipvisitproc caller_visit,
+    void *caller_state
+) {
+    state->dfs_stack = NULL;
+    state->dfs_stack = PyList_New(0);
+    if (state->dfs_stack == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to create DFS stack for object graph traversal");
+        return -1;
+    }
+
+    state->caller_visit = caller_visit;
+    state->caller_state = caller_state;
+
+    return 0;
+}
+
+/* This function traverses the object graph reachable from the given object.
+ *
+ * For every object it will call the `caller_check` function to determine if
+ * the object should be traversed. For every outgoing reference it will then
+ * call `caller_visit` which indicates if the referenced object should be
+ * traversed.
+ *
+ * This function will also store the current stacktrace in debug builds.
+ */
+int _PyOwnership_traverse_object_graph(
+    PyObject *obj,
+    ownershipcheckproc caller_check,
+    ownershipvisitproc caller_visit,
+    void *caller_state
+) {
+    int result = 0;
+
+#ifdef Py_DEBUG
+    // This has to be declared early to support the `Py_XDECREF` if any of the
+    // `SUCCEEDS` fails
+    PyObject* location = NULL;
+#endif
+
+    // Enable the invariant. It has to be enabled at the beginning to allow
+    // reentry and failure in internal calls.
+    SUCCEEDS(_PyOwnership_invariant_enable());
+    // This function incrementally marks new objects as frozen. During this
+    // process it is possible that frozen objects point to mutable ones. This
+    // therefore needs to pause the invariant. Otherwise we might get an
+    // exception when freezing calls into Python and triggers the invariant.
+    SUCCEEDS(_PyOwnership_invariant_pause());
+
+    // Initialize the traverse state
+    ownership_traverse_state traverse_state;
+    SUCCEEDS(init_traverse_state(&traverse_state, caller_visit, caller_state));
+
+    // Initialize ownership state
+    _Py_ownership_state *ownership_state = get_ownership_state_for_traverse();
+    if (ownership_state == NULL) {
+        goto error;
+    }
+
+#ifdef Py_DEBUG
+    // In debug mode, we can set a freeze location for debugging purposes.
+    // Get a traceback object to use as the freeze location.
+    if (ownership_state->traceback_func == NULL) {
+        init_traceback_state(ownership_state);
+    }
+
+    if (ownership_state->traceback_func != NULL) {
+        PyObject *stack = PyObject_CallFunctionObjArgs(ownership_state->traceback_func, NULL);
+        if (stack != NULL) {
+            // Add the type name to the top of the stack, can be useful.
+            PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(obj)), "__name__");
+            push(stack, typename);
+            location = stack;
+        }
+    }
+#endif
+
+    // Push the current object to the pending stack
+    SUCCEEDS(push(traverse_state.dfs_stack, obj));
+
+    // While there is an object in the pending stack, check it
+    while(PyList_Size(traverse_state.dfs_stack) != 0){
+        PyObject* item = pop(traverse_state.dfs_stack);
+
+        // The `blocking_on` and `mutable_locks` should never be visited
+        if (item == ownership_state->blocking_on ||
+           item == ownership_state->module_locks
+        ) {
+            continue;
+        }
+
+        switch (caller_check(item, caller_state)) {
+            // The object is fine, but shouldn't be traversed
+            case Py_OWNERSHIP_TRAVERSE_SKIP:
+                continue;
+
+            // The object is okat and should be traversed
+            case Py_OWNERSHIP_TRAVERSE_VISIT:
+                SUCCEEDS(_PyOwnership_prep_and_traverse_obj(
+                    item,
+                    (void*)&traverse_state));
+                break;
+
+            // An error occured
+            default:
+                goto error;
+        }
+
+#ifdef Py_DEBUG
+        if (location != NULL) {
+            // Some objects don't have attributes that can be set.
+            // As this is a Debug only feature, we could potentially increase the object
+            // size to allow this to be stored directly on the object.
+            if (PyObject_SetAttrString(item, "__ownership_location__", location) < 0) {
+                // Ignore failure to set _freeze_location
+                PyErr_Clear();
+                // We still want to freeze the object, so we continue
+            }
+        }
+#endif
+    }
+
+    goto finally;
+
+error:
+    result = -1;
+
+finally:
+#ifdef Py_DEBUG
+    Py_XDECREF(location);
+#endif
+    Py_XDECREF(traverse_state.dfs_stack);
+    // Indicate that this funciton no longer requires the invariant to be paused.
+    // This can't use the `SUCCEEDS` macro, since that one would jump to the
+    // `error` label above.
+    if (_PyOwnership_invariant_resume() != 0) {
+        result = -1;
+    }
+    return result;
 }
 
 // All code belonging to the invariant

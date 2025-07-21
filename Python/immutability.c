@@ -44,49 +44,12 @@ type_weakref(struct _Py_immutability_state *state, PyObject *obj)
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    PyObject* frozen_importlib = NULL;
-
-    frozen_importlib = PyImport_ImportModule("_frozen_importlib");
-    if(frozen_importlib == NULL){
-        return -1;
-    }
-
-    state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
-    if(state->module_locks == NULL){
-        Py_DECREF(frozen_importlib);
-        return -1;
-    }
-
-    state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
-    if(state->blocking_on == NULL){
-        Py_DECREF(frozen_importlib);
-        return -1;
-    }
-
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
-        Py_DECREF(frozen_importlib);
         return -1;
     }
 
-    Py_DECREF(frozen_importlib);
-
     return 0;
-}
-
-// This is separate to the previous init as it depends on the traceback
-// module being available, and can cause a circular import if it is
-// called during register freezable.
-static
-void init_traceback_state(struct _Py_immutability_state *state)
-{
-#ifdef Py_DEBUG
-    PyObject *traceback_module = PyImport_ImportModule("traceback");
-    if (traceback_module != NULL) {
-        state->traceback_func = PyObject_GetAttrString(traceback_module, "format_stack");
-        Py_DECREF(traceback_module);
-    }
-#endif
 }
 
 static struct _Py_immutability_state* get_immutable_state(void)
@@ -265,8 +228,7 @@ struct FreezeState {
     PyGC_Head visited_untracked; // Set of objects that have been visited and are immortal
 #endif
     PyObject* visited_list; // Some objects don't have GC space, so we need to track them separately.
-
-    PyObject* dfs; // The DFS stack used to traverse the object graph during freezing.
+    struct _Py_immutability_state *imm_state;
 };
 
 
@@ -276,19 +238,16 @@ struct FreezeState {
 int
 init_freeze_state(struct FreezeState *state)
 {
+    state->imm_state = get_immutable_state();
+    if (state->imm_state == NULL) {
+        return -1;
+    }
+
 #ifndef Py_GIL_DISABLED
     gc_list_init(&(state->visited));
     gc_list_init(&(state->visited_untracked));
 #endif
     state->visited_list = NULL;
-    state->dfs = NULL;
-
-    state->dfs = PyList_New(0);
-    if (state->dfs == NULL) {
-        PyErr_SetString(PyExc_RuntimeError, "Failed to create DFS stack for freeze operation");
-        return -1;
-    }
-
     return 0;
 }
 
@@ -303,7 +262,7 @@ if(op) {
     }
 }
 
-int has_visited(struct FreezeState *state, PyObject *op)
+int has_visited(PyObject *op, struct FreezeState *state)
 {
     // Not currently using state, but will need this for NoGIL builds.
     (void)state;
@@ -365,8 +324,6 @@ error:
 // This unsets the immutability of all the objects that were visited.
 void fail_freeze(struct FreezeState *state)
 {
-    Py_XDECREF(state->dfs);
-
 #ifndef Py_GIL_DISABLED
     PyGC_Head *gc;
     for (gc = _PyGCHead_NEXT(&(state->visited)); gc != &(state->visited); gc = _PyGCHead_NEXT(gc)) {
@@ -427,23 +384,6 @@ void finish_freeze(struct FreezeState *state)
 #endif
 
     Py_XDECREF(state->visited_list);
-    Py_XDECREF(state->dfs);
-}
-
-static int freeze_visit(PyObject* obj, void* dfs)
-{
-    if (obj == NULL)
-        return 0;
-
-    if (_Py_IsImmutable(obj))
-        return 0;
-
-    if(push(dfs, obj)){
-        PyErr_NoMemory();
-        return -1;
-    }
-
-    return 0;
 }
 
 static bool
@@ -602,105 +542,63 @@ int _Py_DecRef_Immutable(PyObject *op)
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
+static
+int freeze_check_obj(PyObject *obj, void *state_void) {
+    struct FreezeState *state = (struct FreezeState*)state_void;
+
+    // Immuable objects should be skipped
+    if (_Py_IsImmutable(obj)) {
+        return Py_OWNERSHIP_TRAVERSE_SKIP;
+    }
+
+    // Check if the object was already visited
+    if (has_visited(obj, state)) {
+        return Py_OWNERSHIP_TRAVERSE_SKIP;
+    }
+
+    // Check if the object can be frozen
+    SUCCEEDS(check_freezable(state->imm_state, obj));
+
+    // Mark the object as immutable and visited
+    SUCCEEDS(add_visited_set(state, obj));
+
+    // The object should be traversed, if everything passed until here
+    return Py_OWNERSHIP_TRAVERSE_VISIT;
+
+error:
+    return Py_OWNERSHIP_TRAVERSE_ERR;
+}
+
+static
+int freeze_visit(PyObject *src, PyObject *obj, void *state_void) {
+    // The source is not needed in this function. This prevents warnings.
+    (void)src;
+
+    if (_Py_IsImmutable(obj)) {
+        return Py_OWNERSHIP_TRAVERSE_SKIP;
+    }
+
+    return Py_OWNERSHIP_TRAVERSE_VISIT;
+}
+
 // Main entry point to freeze an object and everything it can reach.
 int _PyImmutability_Freeze(PyObject* obj)
 {
     if(_Py_IsImmutable(obj)){
         return 0;
     }
-    int result = 0;
 
-#ifdef Py_DEBUG
-    // This has to be declared early to support the `Py_XDECREF` if any of the
-    // `SUCCEEDS` fails
-    PyObject* freeze_location = NULL;
-#endif
-
-    // Enable the invariant. It has to be enabled at the beginning to allow
-    // reentry and failure in internal calls.
-    SUCCEEDS(_PyOwnership_invariant_enable());
-    // This function incrementally marks new objects as frozen. During this
-    // process it is possible that frozen objects point to mutable ones. This
-    // therefore needs to pause the invariant. Otherwise we might get an
-    // exception when freezing calls into Python and triggers the invariant.
-    SUCCEEDS(_PyOwnership_invariant_pause());
-
-    struct FreezeState freeze_state;
     // Initialize the freeze state
+    struct FreezeState freeze_state;
     SUCCEEDS(init_freeze_state(&freeze_state));
 
-    struct _Py_immutability_state* state = get_immutable_state();
-    if(state == NULL){
-        goto error;
-    }
-
-#ifdef Py_DEBUG
-    // In debug mode, we can set a freeze location for debugging purposes.
-    // Get a traceback object to use as the freeze location.
-    if (state->traceback_func == NULL) {
-        init_traceback_state(state);
-    }
-
-    if (state->traceback_func != NULL) {
-        PyObject *stack = PyObject_CallFunctionObjArgs(state->traceback_func, NULL);
-        if (stack != NULL) {
-            // Add the type name to the top of the stack, can be useful.
-            PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(obj)), "__name__");
-            push(stack, typename);
-            freeze_location = stack;
-        }
-    }
-#endif
-
-    SUCCEEDS(push(freeze_state.dfs, obj));
-
-    while(PyList_Size(freeze_state.dfs) != 0){
-        PyObject* item = pop(freeze_state.dfs);
-
-        if(has_visited(&freeze_state, item)){
-            continue;
-        }
-
-        if(item == state->blocking_on ||
-           item == state->module_locks){
-            continue;
-        }
-
-        SUCCEEDS(check_freezable(state, item));
-
-#ifdef Py_DEBUG
-        if (freeze_location != NULL) {
-            // Some objects don't have attributes that can be set.
-            // As this is a Debug only feature, we could potentially increase the object
-            // size to allow this to be stored directly on the object.
-            if (PyObject_SetAttrString(item, "__freeze_location__", freeze_location) < 0) {
-                // Ignore failure to set _freeze_location
-                PyErr_Clear();
-                // We still want to freeze the object, so we continue
-            }
-        }
-#endif
-        SUCCEEDS(add_visited_set(&freeze_state, item));
-
-        SUCCEEDS(_PyOwnership_prep_and_traverse_obj(item, (visitproc)freeze_visit, (void*)freeze_state.dfs));
-    }
+    // Traverse the object graph
+    SUCCEEDS(_PyOwnership_traverse_object_graph(obj, freeze_check_obj, freeze_visit, (void*)&freeze_state));
 
     finish_freeze(&freeze_state);
-    goto finally;
+    return 0;
 
 error:
     fail_freeze(&freeze_state);
-    result = -1;
-
-finally:
-#ifdef Py_DEBUG
-    Py_XDECREF(freeze_location);
-#endif
-    // Indicate that this funciton no longer requires the invariant to be paused.
-    // This can't use the `SUCCEEDS` macro, since that one would jump to the
-    // `error` label above.
-    if (_PyOwnership_invariant_resume() != 0) {
-        result = -1;
-    }
-    return result;
+    return -1;
 }

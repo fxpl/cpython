@@ -9,10 +9,15 @@ extern "C" {
 #endif
 
 #include "exports.h"
+#include "object.h"
 
 typedef struct _Py_ownership_state {
     /* Temporary value until the state always has a field to indicate this. */
     int is_initialized;
+    // FIXME: xFrednet: Can we remove this special casing in favor of
+    //     unfreezable fields or thread local wrappers.
+    PyObject *module_locks;
+    PyObject *blocking_on;
 #ifdef Py_OWNERSHIP_INVARIANT
     /* Tracks the state of the ownership invariant. Some ownership-related
      * operations may temporarily violate the invariant. To handle this safely,
@@ -33,13 +38,49 @@ typedef struct _Py_ownership_state {
      */
     int invariant_state;
 #endif
+#ifdef Py_DEBUG
+    /* Function to create a traceback object in debug builds. This is only used
+     * for debugging and can be NULL
+     */
+    PyObject *traceback_func;
+#endif
 } _Py_ownership_state;
 
 PyAPI_FUNC(int) _PyOwnership_is_c_wrapper(PyObject *obj);
+/* Called for every object, to check what should be done with it. This
+ * can be used to implemented a set visited objects and avoid traversing
+ * objects multiple times.
+ * 
+ * The return value indicates success and if the object should be
+ * traversed. These are the return values:
+ *   -1) Failure
+ *    0) Ok, but don't traverse the object
+ *    1) Ok, and traverse the object
+ */
+typedef int (*ownershipcheckproc)(PyObject* obj, void *state);
 
-PyAPI_FUNC(int) _PyOwnership_traverse_obj(PyObject *obj, visitproc visit, void *data);
+/* Like `visitproc` for `_PyOwnership_traverse_object_graph`. The first
+ * argument is the source of the reference and the second one is the
+ * referenced object.
+ * 
+ * The return value indicates success and if the target object should be
+ * traversed. These are the return values:
+ *   -1) Failure, stop traversal
+ *    0) Ok, but don't traverse the target object
+ *    1) Ok, and traverse the target object
+ */
+typedef int (*ownershipvisitproc)(PyObject* src, PyObject* tgt, void *state);
 
-int _PyOwnership_prep_and_traverse_obj(PyObject* obj, visitproc visit, void *data);
+#define Py_OWNERSHIP_TRAVERSE_ERR   -1
+#define Py_OWNERSHIP_TRAVERSE_SKIP   0
+#define Py_OWNERSHIP_TRAVERSE_VISIT  1
+
+PyAPI_FUNC(int) _PyOwnership_traverse_object_graph(
+    PyObject *obj,
+    ownershipcheckproc caller_check,
+    ownershipvisitproc caller_visit,
+    void *caller_state
+);
 
 #ifdef Py_OWNERSHIP_INVARIANT
 
