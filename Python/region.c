@@ -1115,3 +1115,11 @@ int _Py_RegionAddLocalRef(PyObject *tgt) {
 int _Py_RegionRemoveLocalRef(PyObject *tgt) {
     return regiondata_dec_lrc(_Py_Region(tgt));
 }
+
+// TODO(regions): xFrednet: PyRegionObject
+// TODO(regions): xFrednet: Invariant for Regions
+// TODO(regions): xFrednet: Write Barrier in: Bytecode
+// TODO(regions): xFrednet: Write Barrier in: Dictionary
+// TODO(regions): xFrednet: Dirty on C code
+// TODO(regions): xFrednet: Cowns
+// TODO(regions): xFrednet: Weak Region Reference
