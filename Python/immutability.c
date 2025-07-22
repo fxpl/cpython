@@ -339,6 +339,7 @@ void fail_freeze(struct FreezeState *state)
     PyGC_Head *gc;
     for (gc = _PyGCHead_NEXT(&(state->visited)); gc != &(state->visited); gc = _PyGCHead_NEXT(gc)) {
         _Py_CLEAR_IMMUTABLE(_Py_FROM_GC(gc));
+        _Py_RegionRemoveFromImmuable(_Py_FROM_GC(gc));
     }
     struct _gc_runtime_state* gc_state = get_gc_state();
     // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
@@ -349,6 +350,7 @@ void fail_freeze(struct FreezeState *state)
     for (gc = _PyGCHead_NEXT(&(state->visited_untracked)); gc != &(state->visited_untracked); gc = next) {
         next = _PyGCHead_NEXT(gc);
         _Py_CLEAR_IMMUTABLE(_Py_FROM_GC(gc));
+        _Py_RegionRemoveFromImmuable(_Py_FROM_GC(gc));
         // Object was not tracked in the GC, so we don't need to merge it back.
         _PyGCHead_SET_PREV(gc, NULL);
         _PyGCHead_SET_NEXT(gc, NULL);
@@ -364,6 +366,7 @@ void fail_freeze(struct FreezeState *state)
         // as we didn't change anything.
         PyObject* item = pop(state->visited_list);
         _Py_CLEAR_IMMUTABLE(item);
+        _Py_RegionRemoveFromImmuable(item);
     }
 
     // Tidy up the visited set

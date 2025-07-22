@@ -40,7 +40,14 @@ typedef struct regiondata regiondata;
 #define ASSERT_REGION_HAS_NO_TAG(region) assert((region & OWNER_PTR_MASK) == region)
 
 struct regiondata {
-    /* The number of references coming in from the local region. */
+    /* The number of references coming in from the local region.
+     *
+     * This value should always be >= 0 with the exception of
+     * the `add_to_region` process. This can create a temporary
+     * region, which will be merged into the target region. The
+     * LRC can be negative, if the merge should decrease the LRC
+     * of the target region.
+     */
     Py_ssize_t lrc;
 
     /* The number of open subregions. */
@@ -128,6 +135,16 @@ static void throw_region_error(
     // Py_XINCREF(tgt);
     // exc->target = tgt;
     // PyErr_SetRaisedException(_PyObject_CAST(exc));
+}
+
+static Py_region_t regiondata_new() {
+    regiondata* data = (regiondata*)calloc(1, sizeof(regiondata));
+    if (data == NULL) {
+        return NULL_REGION;
+    }
+
+    data->rc = 1;
+    return (Py_region_t)data;
 }
 
 static void regiondata_inc_rc(Py_region_t region) {
@@ -350,7 +367,7 @@ static int regiondata_open(Py_region_t region) {
 
     // Notify the owner
     if (HAS_OWNER_TAG(region, OWNER_TAG_COWN)) {
-        // TODO: xFrednet: Implement this branch
+        // TODO: xFrednet: Implement this branch, probably just an assert
         assert(false);
     } else if (regiondata_get_parent(region) != 0) {
         SUCCEEDS(regiondata_open(regiondata_get_parent(region)));
@@ -488,6 +505,64 @@ static int regiondata_check_close(Py_region_t region) {
 
     // Nothing needs to be done, and everything is fine
     return 0;
+}
+
+/* This increases the local reference count.
+ *
+ * This might open this and parent regions, which can fail. See
+ * `regiondata_open` for possible failures.
+ * */
+static int regiondata_inc_lrc(Py_region_t region) {
+    // Invariant:
+    ASSERT_IS_UNION_ROOT(region);
+
+    // Static regions don't need to be updated
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    // Attempt to mark the region as open
+    if (regiondata_open(region)) {
+        return 1;
+    }
+
+    // Update the LRC, once the region is open
+    regiondata *data = (regiondata*)region;
+    data->lrc += 1;
+
+    return 0;
+}
+
+/* This decreases the local reference count.
+ *
+ * This might close this and parent regions, which can fail. See
+ * `regiondata_close` for possible failures.
+ * */
+static int regiondata_dec_lrc(Py_region_t region) {
+    // Invariant:
+    ASSERT_IS_UNION_ROOT(region);
+
+    // Static regions don't need to be updated
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    // Update the OSC
+    regiondata *data = (regiondata*)region;
+    data->lrc -= 1;
+
+    // Check the region state to determine if it should be closed.
+    SUCCEEDS(regiondata_check_close(region));
+
+    // Return 0 on success
+    return 0;
+
+error:
+    // Undo the LRC decrement
+    data->lrc += 1;
+
+    // Propagate the failure information
+    return 1;
 }
 
 /* This increases the open-subregion count. (This does not update RC)
@@ -671,7 +746,7 @@ static bool regiondata_is_bridge(Py_region_t region, PyObject *obj) {
     }
 
     regiondata *data = (regiondata*)region;
-    
+
     return data->bridge == obj;
 }
 
@@ -693,6 +768,179 @@ static void PyObject_SetRegion(PyObject* obj, Py_region_t new_region) {
     regiondata_dec_rc(old_region);
 }
 
+// Add the transitive closure of objects in the local region reachable from obj to region
+// static PyObject *add_to_region(PyObject *obj, Py_region_ptr_t region) {}
+typedef struct AddRegionState {
+    Py_region_t merge_region;
+    Py_region_t subject_region;
+} AddRegionState;
+
+static
+int _add_to_region_check_obj(PyObject *obj, void *state_void) {
+    // AddRegionState *state = (AddRegionState*)state_void;
+
+    // Py_region_t obj_region = _Py_Region(obj);
+
+    // // Skip the object, if it's already part of the merge region
+    // if (obj_region == state->merge_region) {
+    //     return Py_OWNERSHIP_TRAVERSE_SKIP;
+    // }
+
+    // // Add the object to the merge region, this will also prevent it
+    // // from being traversed again.
+    // PyObject_SetRegion(obj, state->merge_region);
+
+    // Sanity Check, all objects given to this function should be in the
+    // merge region
+    assert(_Py_Region(obj) == ((AddRegionState*)state_void)->merge_region);
+
+    // `_add_to_region_visit` already does the filtering and ensures that only
+    // new objects are traversed. This is therefore a no-op indicateing that
+    // the object should be traversed.
+    return Py_OWNERSHIP_TRAVERSE_VISIT;
+}
+
+static
+int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
+    AddRegionState *state = (AddRegionState*)state_void;
+
+    Py_region_t tgt_region = _Py_Region(tgt);
+
+    // These regerences are allowed and should not be followed
+    if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
+        return Py_OWNERSHIP_TRAVERSE_SKIP;
+    }
+
+    regiondata *merge_data = (regiondata*)state->merge_region;
+
+    // Take ownership of local objects
+    if (IS_LOCAL_REGION(tgt_region)) {
+        // Add incoming references to the LRC
+        // -1 for the reference this call came from
+        //
+        // FIXME(regions): xFrednet: Handle weak references
+        merge_data->lrc += Py_REFCNT(tgt) - 1;
+
+        // Add the object to the merge region, this will also prevent it
+        // from being traversed again.
+        PyObject_SetRegion(tgt, state->merge_region);
+
+        // FIXME(regions): xFrednet: Handle RC of immortal objects
+        assert(!_Py_IsImmortal(tgt));
+
+        // Return and notify that `tgt` should also be traversed
+        return Py_OWNERSHIP_TRAVERSE_VISIT;
+    }
+
+    // The target was previously in the local region but has already been
+    // added to the merge region by a previous iteration. This therefore only
+    // adjusts the LRC
+    if (tgt_region == state->merge_region || tgt_region == state->subject_region) {
+        // The LRC of the merge region can go negative by this operation as
+        // this also includes references which should be subtract from the
+        // LRC of the subject region.
+        merge_data->lrc -= 1;
+
+        // The object should not be traversed.
+        return Py_OWNERSHIP_TRAVERSE_SKIP;
+    }
+
+    // At this point, we know that target is in another region.
+    // If target is in a different region, it has to be a bridge object.
+    // References to contained objects are forbidden.
+    if (!regiondata_is_bridge(tgt_region, tgt)) {
+        // TODO: Better error message
+        throw_region_error("References to objects in other regions are forbidden", Py_None, src, tgt);
+
+        return Py_OWNERSHIP_TRAVERSE_ERR;
+    }
+
+    // The target is a bridge object from another region. This is allowed, if
+    // the region doesn't have a parent
+    if (regiondata_has_parent(tgt_region)) {
+        // TODO: Better error message
+        throw_region_error("Regions are not allowed to have multiple parents", Py_None, src, tgt);
+
+        return Py_OWNERSHIP_TRAVERSE_ERR;
+    }
+
+    if (regiondata_is_ancestor(state->subject_region, tgt_region)) {
+        // TODO: Better error message
+        throw_region_error("Regions are not allowed to create cycles in the ancestor tree", Py_None, src, tgt);
+
+        return Py_OWNERSHIP_TRAVERSE_ERR;
+    }
+
+    // From the previous checks it is know that `tgt` is the bridge object
+    // of a free region. Thus we can make it a sub region and allow the
+    // reference.
+    //
+    // `regiondata_set_parent` will also ensure that the `osc` is updated.
+    regiondata_set_parent(tgt_region, state->merge_region);
+
+    // The object reference was accepted, but the target should not be traversed
+    return Py_OWNERSHIP_TRAVERSE_SKIP;
+}
+
+// Main entry point to freeze an object and everything it can reach.
+int _add_to_region(PyObject* obj, Py_region_t subject_region)
+{
+    // Invariant:
+    ASSERT_IS_UNION_ROOT(subject_region);
+
+    // Trivial Accept
+    if (_Py_Region(obj) == subject_region) {
+        return 0;
+    }
+
+    int result = 0;
+
+    // Initialize the state
+    AddRegionState add_state;
+    add_state.subject_region = subject_region;
+    add_state.merge_region = regiondata_new();
+    if (add_state.merge_region) {
+        PyErr_NoMemory();
+        goto error;
+    }
+
+    // Manually call visit with `obj` as the target to ensure that it is
+    // correctly added to the merge region or throws an error
+    result = _add_to_region_visit(NULL, obj, (void*)&add_state);
+
+    switch (result)
+    {
+    case Py_OWNERSHIP_TRAVERSE_VISIT:
+        // Traverse the object graph
+        SUCCEEDS(_PyOwnership_traverse_object_graph(obj, _add_to_region_check_obj, _add_to_region_visit, (void*)&add_state));
+    case Py_OWNERSHIP_TRAVERSE_SKIP:
+        // Indicate success
+        result = 0;
+        break;
+    default:
+        goto error;
+    }
+
+    // Merge the region into the subject region since all objects could be added
+    SUCCEEDS(regiondata_union_merge(add_state.merge_region, subject_region));
+    goto finally;
+
+error:
+    // Merge the region into local, to undo any ownership changes
+    regiondata_union_merge(add_state.merge_region, _Py_LOCAL_REGION);
+    result = -1;
+
+finally:
+    regiondata_dec_rc(add_state.merge_region);
+    return result;
+}
+
+/* ====================================
+ * Exported functions
+ * ====================================
+ */
+
+
 /* Returns the region of the given object. This is the slow path of `_Py_Region`.
  *
  * This function can't be inlined as it requires additional metadata to check
@@ -708,6 +956,21 @@ Py_region_t _Py_RegionGetSlow(PyObject *obj) {
     }
 
     return region;
+}
+
+/* Returns the bridge object belonging to the region of the given object.
+ */
+PyObject* _Py_RegionBridge(PyObject *obj) {
+    Py_region_t region = _Py_Region(obj);
+
+    // Regions without data don't have a bridge
+    if (!HAS_DATA(region)) {
+        // Return None, since NULL would indicate an exception
+        Py_RETURN_NONE;
+    }
+
+    regiondata *data = (regiondata*)region;
+    return data->bridge;
 }
 
 /* Moves the given object into the immutable region. This will mark
@@ -727,9 +990,11 @@ int _Py_RegionMoveToImmuable(PyObject *obj) {
     }
 
     if (regiondata_is_bridge(region, obj)) {
-        // Set the parent to update the OSC of the parent.
-        // The parent can remain clean afterwards
-        SUCCEEDS(regiondata_set_parent(region, NULL_REGION));
+        // Freezing the brigde object might invalidate the OSC of the parent.
+        // Ideally, we could just unparent the region to prevent the dirty
+        // mark, but freezing might fail. And if it fails, we would want to
+        // reconstruct the region and keep the parent relationship.
+        regiondata_mark_as_dirty(regiondata_get_parent(region));
     }
 
     // The moved object might have been referenced from the local region
@@ -747,5 +1012,106 @@ error:
     return 1;
 }
 
-// Add the transitive closure of objects in the local region reachable from obj to region
-// static PyObject *add_to_region(PyObject *obj, Py_region_ptr_t region) {}
+/* This attempts to move the object back into the local region
+ */
+int _Py_RegionRemoveFromImmuable(PyObject *obj) {
+    assert(IS_IMMUTABLE_REGION(_Py_Region(obj)));
+
+    // Set the region back to local. Any regions referencing this object
+    // should have been marked as dirty and will take ownership again during
+    // the cleaning process.
+    //
+    // FIXME(regions): xFrednet: This currently has no special handling for regions.
+    // which will basically merge them into their parent region.
+    PyObject_SetRegion(obj, _Py_LOCAL_REGION);
+
+    // Always succeeds
+    return 0;
+}
+
+/* Checks if a reference from `src` to `tgt` is allowed and updates the
+ * internal region state accordingly.
+ *
+ * Returns 0 on success.
+ */
+int _Py_RegionAddRef(PyObject *src, PyObject *tgt) {
+    // FIXME(regions): xFrednet: It might be worth to put the fast path into
+    // the header and allow inlining
+
+    Py_region_t src_region = _Py_Region(src);
+    Py_region_t tgt_region = _Py_Region(tgt);
+
+    if (src_region == tgt_region) {
+        // Intra-region references are always permitted and not tracket
+        return 0;
+    }
+
+    if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
+        // References to immutable objects or cowns are always permitted
+        return 0;
+    }
+
+    if (IS_LOCAL_REGION(src_region)) {
+        // References from the local region are allowed, but need to be registered
+        return regiondata_inc_lrc(tgt_region);
+    }
+
+    // Attempt to slurp the target object into the source region
+    return _add_to_region(tgt, src_region);
+}
+
+/* Removes the reference from `src` to `tgt` and updates the internal state of
+ * the regions.
+ *
+ * Returns 0 on success.
+ */
+int _Py_RegionRemoveRef(PyObject *src, PyObject *tgt) {
+    Py_region_t src_region = _Py_Region(src);
+    Py_region_t tgt_region = _Py_Region(tgt);
+
+    if (src_region == tgt_region) {
+        // Intra-region references are always permitted and not tracket
+        return 0;
+    }
+
+    if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
+        // References to immutable objects or cowns are always permitted
+        return 0;
+    }
+
+    if (IS_LOCAL_REGION(src_region)) {
+        // Decrease the target region LRC since this reference came from
+        // the local region
+        return regiondata_dec_lrc(tgt_region);
+    }
+
+    if (regiondata_is_bridge(tgt_region, tgt)
+        && regiondata_get_parent(tgt_region) == src_region
+    ) {
+        // The removed reference was the owning references. The target region
+        // gets unparented and is now free.
+        return regiondata_set_parent(tgt_region, NULL_REGION);
+    } else {
+        // The reference came from `src` to `tgt` while the target region
+        // already had a parent. This is not allowed but can happend in
+        // unaware code. The two regions therefore have to be marked as dirty
+        assert(regiondata_is_dirty(src_region));
+        assert(regiondata_is_dirty(tgt_region));
+
+        // The two regions are marked as dirty. This is an additional safety net
+        // for builds without asserts.
+        regiondata_mark_as_dirty(src_region);
+        regiondata_mark_as_dirty(tgt_region);
+
+        // Still return 0, since the reference could be should be removed.
+        return 0;
+    }
+}
+
+int _Py_RegionAddLocalRef(PyObject *tgt) {
+    return regiondata_inc_lrc(_Py_Region(tgt));
+}
+
+int _Py_RegionRemoveLocalRef(PyObject *tgt) {
+    return regiondata_dec_lrc(_Py_Region(tgt));
+}
