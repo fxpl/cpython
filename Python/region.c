@@ -6,6 +6,7 @@
 #include "pycore_ownership.h"
 #include "pycore_pyerrors.h"
 #include "pycore_region.h"
+#include "pycore_runtime.h"    // _Py_ID
 
 #include <stdbool.h>
 
@@ -120,21 +121,16 @@ static void throw_region_error(
 
     PyErr_Format(PyExc_RuntimeError, format_str, format_args);
 
-    // TODO: xFrednet: The rest of this function:
-    (void) src;
-    (void) tgt;
-    //
-    // // Create the error, this sets the error value in `tstate`
-    // PyErr_Format(PyExc_RegionError, format_str, format_args);
-    //
-    // // Set source and target fields
-    // PyRegionErrorObject* exc = _Py_CAST(PyRegionErrorObject*,
-    //                                     PyErr_GetRaisedException());
-    // Py_XINCREF(src);
-    // exc->source = src;
-    // Py_XINCREF(tgt);
-    // exc->target = tgt;
-    // PyErr_SetRaisedException(_PyObject_CAST(exc));
+    // Set source and target fields
+    // Get the current exception (should be a RuntimeError)
+    PyObject *exc = PyErr_GetRaisedException();
+    assert(exc && PyObject_TypeCheck(exc, (PyTypeObject *)PyExc_RuntimeError));
+
+    // Add 'source' and 'target' attributes to the exception
+    PyObject_SetAttr(exc, &_Py_ID(source), src ? src : Py_None);
+    PyObject_SetAttr(exc, &_Py_ID(target), tgt ? tgt : Py_None);
+
+    PyErr_SetRaisedException((PyObject*)exc);
 }
 
 static Py_region_t regiondata_new() {
@@ -779,7 +775,7 @@ static
 int _add_to_region_check_obj(PyObject *obj, void *state_void) {
     // AddRegionState *state = (AddRegionState*)state_void;
 
-    // Py_region_t obj_region = _Py_Region(obj);
+    // Py_region_t obj_region = _PyRegion_Get(obj);
 
     // // Skip the object, if it's already part of the merge region
     // if (obj_region == state->merge_region) {
@@ -792,7 +788,7 @@ int _add_to_region_check_obj(PyObject *obj, void *state_void) {
 
     // Sanity Check, all objects given to this function should be in the
     // merge region
-    assert(_Py_Region(obj) == ((AddRegionState*)state_void)->merge_region);
+    assert(_PyRegion_Get(obj) == ((AddRegionState*)state_void)->merge_region);
 
     // `_add_to_region_visit` already does the filtering and ensures that only
     // new objects are traversed. This is therefore a no-op indicateing that
@@ -804,7 +800,7 @@ static
 int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     AddRegionState *state = (AddRegionState*)state_void;
 
-    Py_region_t tgt_region = _Py_Region(tgt);
+    Py_region_t tgt_region = _PyRegion_Get(tgt);
 
     // These regerences are allowed and should not be followed
     if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
@@ -889,7 +885,7 @@ int _add_to_region(PyObject* obj, Py_region_t subject_region)
     ASSERT_IS_UNION_ROOT(subject_region);
 
     // Trivial Accept
-    if (_Py_Region(obj) == subject_region) {
+    if (_PyRegion_Get(obj) == subject_region) {
         return 0;
     }
 
@@ -941,12 +937,12 @@ finally:
  */
 
 
-/* Returns the region of the given object. This is the slow path of `_Py_Region`.
+/* Returns the region of the given object. This is the slow path of `_PyRegion_`.
  *
  * This function can't be inlined as it requires additional metadata to check
  * if the region of the object was merged with another one.
  */
-Py_region_t _Py_RegionGetSlow(PyObject *obj) {
+Py_region_t _PyRegion_GetSlow(PyObject *obj) {
     Py_region_t region = regiondata_union_root(obj->ob_region);
 
     // Check if the region should be updated, this can happen if the object
@@ -958,10 +954,20 @@ Py_region_t _Py_RegionGetSlow(PyObject *obj) {
     return region;
 }
 
+/* Returns true, if the given region is marked as dirty
+ */
+int _PyRegion_IsDirty(Py_region_t region) {
+    return regiondata_is_dirty(region);
+}
+
+int _PyRegion_IsParent(Py_region_t child, Py_region_t parent) {
+    return regiondata_get_parent(child) == parent;
+}
+
 /* Returns the bridge object belonging to the region of the given object.
  */
-PyObject* _Py_RegionBridge(PyObject *obj) {
-    Py_region_t region = _Py_Region(obj);
+PyObject* _PyRegion_Bridge(PyObject *obj) {
+    Py_region_t region = _PyRegion_Get(obj);
 
     // Regions without data don't have a bridge
     if (!HAS_DATA(region)) {
@@ -980,8 +986,8 @@ PyObject* _Py_RegionBridge(PyObject *obj) {
  * This function can fail, if the move closes a parent region. See
  * `regiondata_close` for possible failures.
  */
-int _Py_RegionMoveToImmuable(PyObject *obj) {
-    Py_region_t region = _Py_Region(obj);
+int _PyRegion_MoveToImmuable(PyObject *obj) {
+    Py_region_t region = _PyRegion_Get(obj);
 
     // Moving an object from a static region is trivial
     if (!HAS_DATA(region)) {
@@ -1014,8 +1020,8 @@ error:
 
 /* This attempts to move the object back into the local region
  */
-int _Py_RegionRemoveFromImmuable(PyObject *obj) {
-    assert(IS_IMMUTABLE_REGION(_Py_Region(obj)));
+int _PyRegion_RemoveFromImmuable(PyObject *obj) {
+    assert(IS_IMMUTABLE_REGION(_PyRegion_Get(obj)));
 
     // Set the region back to local. Any regions referencing this object
     // should have been marked as dirty and will take ownership again during
@@ -1034,12 +1040,12 @@ int _Py_RegionRemoveFromImmuable(PyObject *obj) {
  *
  * Returns 0 on success.
  */
-int _Py_RegionAddRef(PyObject *src, PyObject *tgt) {
+int _PyRegion_AddRef(PyObject *src, PyObject *tgt) {
     // FIXME(regions): xFrednet: It might be worth to put the fast path into
     // the header and allow inlining
 
-    Py_region_t src_region = _Py_Region(src);
-    Py_region_t tgt_region = _Py_Region(tgt);
+    Py_region_t src_region = _PyRegion_Get(src);
+    Py_region_t tgt_region = _PyRegion_Get(tgt);
 
     if (src_region == tgt_region) {
         // Intra-region references are always permitted and not tracket
@@ -1065,9 +1071,9 @@ int _Py_RegionAddRef(PyObject *src, PyObject *tgt) {
  *
  * Returns 0 on success.
  */
-int _Py_RegionRemoveRef(PyObject *src, PyObject *tgt) {
-    Py_region_t src_region = _Py_Region(src);
-    Py_region_t tgt_region = _Py_Region(tgt);
+int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
+    Py_region_t src_region = _PyRegion_Get(src);
+    Py_region_t tgt_region = _PyRegion_Get(tgt);
 
     if (src_region == tgt_region) {
         // Intra-region references are always permitted and not tracket
@@ -1108,16 +1114,15 @@ int _Py_RegionRemoveRef(PyObject *src, PyObject *tgt) {
     }
 }
 
-int _Py_RegionAddLocalRef(PyObject *tgt) {
-    return regiondata_inc_lrc(_Py_Region(tgt));
+int _PyRegion_AddLocalRef(PyObject *tgt) {
+    return regiondata_inc_lrc(_PyRegion_Get(tgt));
 }
 
-int _Py_RegionRemoveLocalRef(PyObject *tgt) {
-    return regiondata_dec_lrc(_Py_Region(tgt));
+int _PyRegion_RemoveLocalRef(PyObject *tgt) {
+    return regiondata_dec_lrc(_PyRegion_Get(tgt));
 }
 
 // TODO(regions): xFrednet: PyRegionObject
-// TODO(regions): xFrednet: Invariant for Regions
 // TODO(regions): xFrednet: Write Barrier in: Bytecode
 // TODO(regions): xFrednet: Write Barrier in: Dictionary
 // TODO(regions): xFrednet: Dirty on C code

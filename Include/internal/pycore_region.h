@@ -11,11 +11,11 @@ extern "C" {
 #include "object.h"
 
 
-PyAPI_FUNC(Py_region_t) _Py_RegionGetSlow(PyObject *obj);
+PyAPI_FUNC(Py_region_t) _PyRegion_GetSlow(PyObject *obj);
 
 /* Returns the region of the given object.
  */
-static inline Py_ssize_t _Py_Region(PyObject *obj) {
+static inline Py_ssize_t _PyRegion_Get(PyObject *obj) {
     assert(obj);
 
     // Fast path, almost every object should be in one of these regions
@@ -26,26 +26,34 @@ static inline Py_ssize_t _Py_Region(PyObject *obj) {
         return obj->ob_region;
     }
 
-    return _Py_RegionGetSlow(obj);
+    return _PyRegion_GetSlow(obj);
 }
 
-PyAPI_FUNC(PyObject*) _Py_RegionBridge(PyObject *obj);
+static inline int _Py_IsLocal(PyObject *obj) {
+    return _PyRegion_Get(obj) == _Py_LOCAL_REGION;
+}
+#define _Py_IsLocal(obj) _Py_IsLocal(_PyObject_CAST(obj))
 
-PyAPI_FUNC(int) _Py_RegionMoveToImmuable(PyObject *obj);
-PyAPI_FUNC(int) _Py_RegionRemoveFromImmuable(PyObject *obj);
+PyAPI_FUNC(int) _PyRegion_IsDirty(Py_region_t region);
+PyAPI_FUNC(int) _PyRegion_IsParent(Py_region_t child, Py_region_t parent);
 
-PyAPI_FUNC(int) _Py_RegionAddRef(PyObject *src, PyObject *tgt);
-#define _Py_REGIONADDREF(src, tgt) _Py_RegionAddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+PyAPI_FUNC(PyObject*) _PyRegion_Bridge(PyObject *obj);
 
-PyAPI_FUNC(int) _Py_RegionRemoveRef(PyObject *src, PyObject *tgt);
-#define _Py_REGIONREMOVEREF(src, tgt) _Py_RegionRemoveRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+PyAPI_FUNC(int) _PyRegion_MoveToImmuable(PyObject *obj);
+PyAPI_FUNC(int) _PyRegion_RemoveFromImmuable(PyObject *obj);
 
-PyAPI_FUNC(int) _Py_RegionAddLocalRef(PyObject *tgt);
-#define _Py_REGIONADDLOCALREF(tgt) _Py_RegionAddLocalRef(_PyObject_CAST(tgt))
+PyAPI_FUNC(int) _PyRegion_AddRef(PyObject *src, PyObject *tgt);
+#define _Py_REGIONADDREF(src, tgt) _PyRegion_AddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
 
-PyAPI_FUNC(int) _Py_RegionRemoveLocalRef(PyObject *tgt);
-#define _Py_REGIONREMOVELOCALREF(tgt) _Py_RegionRemoveLocalRef(_PyObject_CAST(tgt))
- 
+PyAPI_FUNC(int) _PyRegion_RemoveRef(PyObject *src, PyObject *tgt);
+#define _Py_REGIONREMOVEREF(src, tgt) _PyRegion_RemoveRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+
+PyAPI_FUNC(int) _PyRegion_AddLocalRef(PyObject *tgt);
+#define _Py_REGIONADDLOCALREF(tgt) _PyRegion_AddLocalRef(_PyObject_CAST(tgt))
+
+PyAPI_FUNC(int) _PyRegion_RemoveLocalRef(PyObject *tgt);
+#define _Py_REGIONREMOVELOCALREF(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))
+
 #ifdef __cplusplus
 }
 #endif

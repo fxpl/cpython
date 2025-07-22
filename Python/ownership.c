@@ -7,7 +7,8 @@
 #include "pycore_list.h"
 #include "pycore_ownership.h"
 #include "pycore_pyerrors.h"
-#include "pycore_runtime.h"
+#include "pycore_runtime.h"     // _Py_ID
+#include "pycore_region.h"      // _PyRegion_Get(), Py_Region
 #include "pyerrors.h"
 #include "refcount.h"
 
@@ -625,6 +626,19 @@ typedef struct _gc_runtime_state GCState;
 #define FROM_GC _Py_FROM_GC
 //******************************** */
 
+static int check_invariant_validate_immutable(PyObject* obj) {
+    // Immutable objects should be in the immutable region
+    if (_PyRegion_Get(obj) == _Py_IMMUTABLE_REGION) {
+        throw_invariant_error(
+            obj, NULL,
+            "Invariant Error: Immutable objects should be in the immutable region",
+            Py_None);
+        return -1;
+    }
+
+    return 0;
+}
+
 static int check_invariant_visit_immutable(PyObject* tgt, void* src_void) {
     PyObject* src = (PyObject*)src_void;
 
@@ -638,6 +652,57 @@ static int check_invariant_visit_immutable(PyObject* tgt, void* src_void) {
         throw_invariant_error(
             src, tgt,
             "Invariant Error: An immutable objects points to a mutable one",
+            Py_None);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int check_invariant_visit_owned(PyObject* tgt, void* src_void) {
+    PyObject* src = (PyObject*)src_void;
+
+    Py_region_t src_region = _PyRegion_Get(src);
+    Py_region_t tgt_region = _PyRegion_Get(tgt);
+
+    // C wrappers are special and allowed
+    if (_PyOwnership_is_c_wrapper(tgt)) {
+        return 0;
+    }
+
+    // References to objects in the cown and immutable regions are allowed
+    if (tgt_region == _Py_IMMUTABLE_REGION || tgt_region == _Py_COWN_REGION) {
+        return 0;
+    }
+
+    // Intra-region references are allowed
+    if (src_region == tgt_region) {
+        return 0;
+    }
+
+    // Dirty regions are basically allowed to do anything
+    if (_PyRegion_IsDirty(src_region)) {
+        // Dirty regions can be checked, if PY_OWNERSHIP_INVARIANT_CHECK_DIRTY is set
+        const char* env = Py_GETENV("PY_OWNERSHIP_INVARIANT_CHECK_DIRTY");
+        if (!env) {
+            return 0;
+        }
+    }
+
+    // Objects inside a region are not allowed to reference local objects
+    if (tgt_region == _Py_LOCAL_REGION) {
+        throw_invariant_error(
+            src, tgt,
+            "Invariant Error: A owned object is referencing a local object", Py_None);
+        return -1;
+    }
+
+    // If the object references another region, it has to be the bridge object
+    // and this object needs to be the parent.
+    if (_PyRegion_Bridge(tgt) != tgt || !_PyRegion_IsParent(tgt_region, src_region)) {
+        throw_invariant_error(
+            src, tgt,
+            "Invariant Error: A owned object is referencing a foreign contained object",
             Py_None);
         return -1;
     }
@@ -694,8 +759,11 @@ int _PyOwnership_check_invariant(PyThreadState *tstate) {
             // current object.
             visitproc visit = NULL;
             if (_Py_IsImmutable(ob)) {
+                check_invariant_validate_immutable(ob);
                 visit = (visitproc)check_invariant_visit_immutable;
-            } else {
+            } else if (!_Py_IsLocal(ob)) {
+                visit = (visitproc)check_invariant_visit_owned;
+            } else if (_Py_IsLocal(ob)) {
                 // Mutable objects are allowed to reference all other objects
                 // (regardless if mutable or not). These therefore don't need
                 // to be traversed.

@@ -89,7 +89,7 @@ PyAPI_FUNC(int) _PyOwnership_is_c_wrapper(PyObject *obj);
 /* Called for every object, to check what should be done with it. This
  * can be used to implemented a set visited objects and avoid traversing
  * objects multiple times.
- * 
+ *
  * The return value indicates success and if the object should be
  * traversed. These are the return values:
  *   -1) Failure
@@ -101,7 +101,7 @@ typedef int (*ownershipcheckproc)(PyObject* obj, void *state);
 /* Like `visitproc` for `_PyOwnership_traverse_object_graph`. The first
  * argument is the source of the reference and the second one is the
  * referenced object.
- * 
+ *
  * The return value indicates success and if the target object should be
  * traversed. These are the return values:
  *   -1) Failure, stop traversal
