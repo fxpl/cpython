@@ -176,6 +176,7 @@ struct _object {
     uint32_t ob_ref_local;      // local reference count
     Py_ssize_t ob_ref_shared;   // shared (atomic) reference count
     PyTypeObject *ob_type;
+    Py_region_t ob_region;
 };
 #endif
 

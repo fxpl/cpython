@@ -966,7 +966,7 @@ int _PyRegion_IsParent(Py_region_t child, Py_region_t parent) {
 
 /* Returns the bridge object belonging to the region of the given object.
  */
-PyObject* _PyRegion_Bridge(PyObject *obj) {
+PyObject* _PyRegion_GetBridge(PyObject *obj) {
     Py_region_t region = _PyRegion_Get(obj);
 
     // Regions without data don't have a bridge
@@ -979,14 +979,14 @@ PyObject* _PyRegion_Bridge(PyObject *obj) {
     return data->bridge;
 }
 
-/* Moves the given object into the immutable region. This will mark
- * the previously owning region as dirty as the LRC or OSC might be
- * invalidated by this move.
+/* Notifys the contianing region that the given object is now immutable.
+ * This will mark the previously owning region as dirty as the LRC or OSC
+ * might be invalidated by this move.
  *
  * This function can fail, if the move closes a parent region. See
  * `regiondata_close` for possible failures.
  */
-int _PyRegion_MoveToImmuable(PyObject *obj) {
+int _PyRegion_SignalImmutable(PyObject *obj) {
     Py_region_t region = _PyRegion_Get(obj);
 
     // Moving an object from a static region is trivial
@@ -1009,29 +1009,6 @@ int _PyRegion_MoveToImmuable(PyObject *obj) {
     // as dirty, and these counts are only reestablished when needed.
     regiondata_mark_as_dirty(region);
 
-    // Set the region last, as the RC change might free the region object
-    PyObject_SetRegion(obj, _Py_IMMUTABLE_REGION);
-
-    return 0;
-
-error:
-    return 1;
-}
-
-/* This attempts to move the object back into the local region
- */
-int _PyRegion_RemoveFromImmuable(PyObject *obj) {
-    assert(IS_IMMUTABLE_REGION(_PyRegion_Get(obj)));
-
-    // Set the region back to local. Any regions referencing this object
-    // should have been marked as dirty and will take ownership again during
-    // the cleaning process.
-    //
-    // FIXME(regions): xFrednet: This currently has no special handling for regions.
-    // which will basically merge them into their parent region.
-    PyObject_SetRegion(obj, _Py_LOCAL_REGION);
-
-    // Always succeeds
     return 0;
 }
 

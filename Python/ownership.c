@@ -699,7 +699,7 @@ static int check_invariant_visit_owned(PyObject* tgt, void* src_void) {
 
     // If the object references another region, it has to be the bridge object
     // and this object needs to be the parent.
-    if (_PyRegion_Bridge(tgt) != tgt || !_PyRegion_IsParent(tgt_region, src_region)) {
+    if (_PyRegion_GetBridge(tgt) != tgt || !_PyRegion_IsParent(tgt_region, src_region)) {
         throw_invariant_error(
             src, tgt,
             "Invariant Error: A owned object is referencing a foreign contained object",

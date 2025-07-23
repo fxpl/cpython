@@ -257,7 +257,7 @@ init_freeze_state(struct FreezeState *state)
 static inline int _Py_SetImmutable(PyObject *op)
 {
     if(op) {
-        SUCCEEDS(_PyRegion_MoveToImmuable(op));
+        SUCCEEDS(_PyRegion_SignalImmutable(op));
 
 #if SIZEOF_VOID_P > 4
         op->ob_flags |= _Py_IMMUTABLE_FLAG;
@@ -339,7 +339,6 @@ void fail_freeze(struct FreezeState *state)
     PyGC_Head *gc;
     for (gc = _PyGCHead_NEXT(&(state->visited)); gc != &(state->visited); gc = _PyGCHead_NEXT(gc)) {
         _Py_CLEAR_IMMUTABLE(_Py_FROM_GC(gc));
-        _PyRegion_RemoveFromImmuable(_Py_FROM_GC(gc));
     }
     struct _gc_runtime_state* gc_state = get_gc_state();
     // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
@@ -350,7 +349,6 @@ void fail_freeze(struct FreezeState *state)
     for (gc = _PyGCHead_NEXT(&(state->visited_untracked)); gc != &(state->visited_untracked); gc = next) {
         next = _PyGCHead_NEXT(gc);
         _Py_CLEAR_IMMUTABLE(_Py_FROM_GC(gc));
-        _PyRegion_RemoveFromImmuable(_Py_FROM_GC(gc));
         // Object was not tracked in the GC, so we don't need to merge it back.
         _PyGCHead_SET_PREV(gc, NULL);
         _PyGCHead_SET_NEXT(gc, NULL);
@@ -366,7 +364,6 @@ void fail_freeze(struct FreezeState *state)
         // as we didn't change anything.
         PyObject* item = pop(state->visited_list);
         _Py_CLEAR_IMMUTABLE(item);
-        _PyRegion_RemoveFromImmuable(item);
     }
 
     // Tidy up the visited set
