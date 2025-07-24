@@ -218,6 +218,7 @@ Modules/itertoolsmodule.c	Py_BUILD_CORE	1
 Modules/main.c	Py_BUILD_CORE	1
 Modules/mathmodule.c	Py_BUILD_CORE	1
 Modules/posixmodule.c	Py_BUILD_CORE	1
+Modules/regionsmodule.c	Py_BUILD_CORE	1
 Modules/sha256module.c	Py_BUILD_CORE	1
 Modules/sha512module.c	Py_BUILD_CORE	1
 Modules/signalmodule.c	Py_BUILD_CORE	1

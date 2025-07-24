@@ -158,6 +158,7 @@ PYTHONPATH=$(COREPYTHONPATH)
 #cmath cmathmodule.c
 #math mathmodule.c
 #mmap mmapmodule.c
+#regions regionsmodule.c
 #select selectmodule.c
 #_sysconfig _sysconfig.c
 

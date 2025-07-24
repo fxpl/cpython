@@ -483,6 +483,7 @@
     <ClCompile Include="..\Modules\_opcode.c" />
     <ClCompile Include="..\Modules\_operator.c" />
     <ClCompile Include="..\Modules\posixmodule.c" />
+    <ClCompile Include="..\Modules\regionsmodule.c" />
     <ClCompile Include="..\Modules\rotatingtree.c" />
     <ClCompile Include="..\Modules\sha1module.c" />
     <ClCompile Include="..\Modules\sha2module.c" />

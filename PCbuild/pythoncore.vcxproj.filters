@@ -1056,6 +1056,8 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\hmacmodule.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
     <ClCompile Include="..\Modules\immutablemodule.c" >
       <Filter>Modules</Filter>
     </ClCompile>
@@ -1081,6 +1083,9 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\posixmodule.c">
+      <Filter>Modules</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Modules\regionsmodule.c">
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\rotatingtree.c">
