@@ -15,9 +15,6 @@ typedef struct regiondata regiondata;
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
-/* Macros for readability */
-#define NULL_REGION 0
-
 /* Checks for predefined static regions without data */
 #define IS_LOCAL_REGION(r)        ((Py_region_t)(r) == _Py_LOCAL_REGION)
 #define IS_IMMUTABLE_REGION(r)    ((Py_region_t)(r) == _Py_IMMUTABLE_REGION)
@@ -884,6 +881,9 @@ int _add_to_region(PyObject* obj, Py_region_t subject_region)
     // Invariant:
     ASSERT_IS_UNION_ROOT(subject_region);
 
+    // Enable invariant
+    SUCCEEDS(_PyOwnership_invariant_enable());
+
     // Trivial Accept
     if (_PyRegion_Get(obj) == subject_region) {
         return 0;
@@ -895,7 +895,7 @@ int _add_to_region(PyObject* obj, Py_region_t subject_region)
     AddRegionState add_state;
     add_state.subject_region = subject_region;
     add_state.merge_region = regiondata_new();
-    if (add_state.merge_region) {
+    if (add_state.merge_region == NULL_REGION) {
         PyErr_NoMemory();
         goto error;
     }
@@ -943,6 +943,12 @@ finally:
  * if the region of the object was merged with another one.
  */
 Py_region_t _PyRegion_GetSlow(PyObject *obj) {
+    // Immutable objects can be shared across threads, it's not save to access
+    // the region information without synchronization.
+    if (_Py_IsImmutable(obj)) {
+        return _Py_IMMUTABLE_REGION;
+    }
+
     Py_region_t region = regiondata_union_root(obj->ob_region);
 
     // Check if the region should be updated, this can happen if the object
@@ -952,6 +958,32 @@ Py_region_t _PyRegion_GetSlow(PyObject *obj) {
     }
 
     return region;
+}
+
+/* Creates a new region and moves the bridge object into it. The new region
+ * will be returned.
+ */
+Py_region_t _PyRegion_New(PyObject *bridge) {
+    Py_region_t region = regiondata_new();
+    if (region == NULL_REGION) {
+        return NULL_REGION;
+    } 
+
+    regiondata *data = (regiondata*)region;
+
+    // A weak reference, the bridge will clear this pointer when it is
+    // being cleared
+    data->bridge = bridge;
+
+    _add_to_region(bridge, region);
+
+    return region;
+}
+
+/* Decrements the reference count of the region. This may deallocate the region.
+ */
+void _PyRegion_DecRc(Py_region_t region) {
+    regiondata_dec_rc(region);
 }
 
 /* Returns true, if the given region is marked as dirty

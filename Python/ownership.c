@@ -628,7 +628,7 @@ typedef struct _gc_runtime_state GCState;
 
 static int check_invariant_validate_immutable(PyObject* obj) {
     // Immutable objects should be in the immutable region
-    if (_PyRegion_Get(obj) == _Py_IMMUTABLE_REGION) {
+    if (_PyRegion_Get(obj) != _Py_IMMUTABLE_REGION) {
         throw_invariant_error(
             obj, NULL,
             "Invariant Error: Immutable objects should be in the immutable region",

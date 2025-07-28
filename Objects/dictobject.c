@@ -131,6 +131,7 @@ As a consequence of this, split keys have a maximum size of 16.
 #include "pycore_setobject.h"     // _PySet_NextEntry()
 #include "pycore_tuple.h"         // _PyTuple_Recycle()
 #include "pycore_unicodeobject.h" // _PyUnicode_InternImmortal()
+#include "pycore_region.h"        // _PyRegion_ADDREF
 
 #include "stringlib/eq.h"                // unicode_eq()
 #include <stdbool.h>
@@ -6870,10 +6871,15 @@ _PyObject_MaterializeManagedDict_LockHeld(PyObject *obj)
     else {
         dict = (PyDictObject *)PyDict_New();
     }
+
+    // TODO(Pyrona): Shouldn't this need error handling?
     if (_Py_IsImmutable(obj)) {
         // TODO(Immutable): For subinterpreters this will probably also need a lock!
         _PyImmutability_Freeze(_PyObject_CAST(dict));
+    } else {
+        _PyRegion_ADDREF(obj, dict);
     }
+
     FT_ATOMIC_STORE_PTR_RELEASE(_PyObject_ManagedDictPointer(obj)->dict,
                                 dict);
     return dict;
@@ -7588,10 +7594,15 @@ ensure_nonmanaged_dict(PyObject *obj, PyObject **dictptr)
         else {
             dict = PyDict_New();
         }
+
+        // TODO(Pyrona): Shouldn't this need error handling?
         if (_Py_IsImmutable(obj)) {
             // TODO(Immutable): For subinterpreters this will probably also need a lock!
-            _PyImmutability_Freeze(dict);
+            _PyImmutability_Freeze(_PyObject_CAST(dict));
+        } else {
+            _PyRegion_ADDREF(obj, dict);
         }
+
         FT_ATOMIC_STORE_PTR_RELEASE(*dictptr, dict);
 #ifdef Py_GIL_DISABLED
 done:

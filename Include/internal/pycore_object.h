@@ -534,6 +534,7 @@ _PyObject_Init(PyObject *op, PyTypeObject *typeobj)
     Py_SET_TYPE(op, typeobj);
     assert(_PyType_HasFeature(typeobj, Py_TPFLAGS_HEAPTYPE) || _Py_IsImmortal(typeobj));
     _Py_INCREF_TYPE(typeobj);
+    op->ob_region = _Py_LOCAL_REGION;
     _Py_NewReference(op);
 }
 
