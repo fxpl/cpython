@@ -813,7 +813,7 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     // probably shouldn't be owned in the first place.
     if (_Py_IsImmortal(tgt)) {
         assert(IS_LOCAL_REGION(tgt_region) && "At this point it would have to be local");
-    
+
         // FIXME(regions): xFrednet: For now this throws an exception, but this
         // might be a good location for implicit freezing.
         throw_region_error("Immortal objects can't be owned by a region, consider freezing it", Py_None, src, tgt);

@@ -82,8 +82,7 @@ PyType_Spec regions_error_spec = {
  * ===================
  */
 
-PyDoc_STRVAR(Region_doc,
-             "A breidge object representing a region");
+PyDoc_STRVAR(Region_doc, "TODO =^.^=");
 
 typedef struct RegionObject {
     PyObject_HEAD
@@ -92,12 +91,15 @@ typedef struct RegionObject {
      * already been cleared.
      */
     Py_region_t region;
-    // TODO(regions): xFrednet: Values in this dict are currently not listed
-    // when using `dir()` on the object. WHY???
     PyObject *dict;
 } RegionObject;
 
 #define RegionObject_CAST(op)  ((RegionObject *)(op))
+
+static PyMemberDef Region_members[] = {
+    {"__dict__", _Py_T_OBJECT, offsetof(RegionObject, dict), Py_READONLY},
+    {NULL}
+};
 
 // static RegionObject* newRegionObject(PyObject *module) {
 //     regions_state *state = get_state(module);
@@ -219,7 +221,7 @@ static PyTypeObject Region_Type = {
     // .tp_setattro = 0,
     // .tp_as_buffer = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE,
-    .tp_doc = "TODO =^.^=",
+    .tp_doc = Region_doc,
     .tp_traverse = (traverseproc)Region_traverse,
     .tp_clear = (inquiry)Region_clear,
     // .tp_richcompare = 0,
@@ -227,7 +229,7 @@ static PyTypeObject Region_Type = {
     // .tp_iter = 0,
     // .tp_iternext = 0,
     .tp_methods = Region_methods,
-    // .tp_members = 0,
+    .tp_members = Region_members,
     // .tp_getset = 0,
     // .tp_base = 0,
     // .tp_dict = 0,
