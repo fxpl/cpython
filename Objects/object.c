@@ -1456,6 +1456,7 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
     PyInterpreterState *interp = _PyInterpreterState_GET();
     _PyUnicode_InternMortal(interp, &name);
     if (tp->tp_setattro != NULL) {
+        // TODO(regions): xFrednet: If type not regions aware => dirty 
         if(Py_CHECKWRITE(v)){
             err = (*tp->tp_setattro)(v, name, value);
         }else{

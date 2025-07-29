@@ -116,6 +116,9 @@ typedef int (*ownershipvisitproc)(PyObject* src, PyObject* tgt, void *state);
 
 PyAPI_FUNC(int) _PyOwnership_traverse_object_graph(
     PyObject *obj,
+#ifdef Py_DEBUG
+    int freeze_location,
+#endif
     ownershipcheckproc caller_check,
     ownershipvisitproc caller_visit,
     void *caller_state

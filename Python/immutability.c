@@ -604,7 +604,15 @@ int _PyImmutability_Freeze(PyObject* obj)
     SUCCEEDS(init_freeze_state(&freeze_state));
 
     // Traverse the object graph
-    SUCCEEDS(_PyOwnership_traverse_object_graph(obj, freeze_check_obj, freeze_visit, (void*)&freeze_state));
+    SUCCEEDS(_PyOwnership_traverse_object_graph(
+        obj,
+#ifdef Py_DEBUG
+        false, /* freeze_location for debugging */
+#endif
+        freeze_check_obj,
+        freeze_visit,
+        (void*)&freeze_state
+    ));
 
     finish_freeze(&freeze_state);
     return 0;

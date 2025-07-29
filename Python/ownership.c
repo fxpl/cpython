@@ -480,6 +480,9 @@ static int init_traverse_state(
  */
 int _PyOwnership_traverse_object_graph(
     PyObject *obj,
+#ifdef Py_DEBUG
+    int freeze_location,
+#endif
     ownershipcheckproc caller_check,
     ownershipvisitproc caller_visit,
     void *caller_state
@@ -519,6 +522,11 @@ int _PyOwnership_traverse_object_graph(
             PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(obj)), "__name__");
             push(stack, typename);
             location = stack;
+
+            // Freezing the location allows all objects to reference it.
+            if (freeze_location) {
+                SUCCEEDS(_PyImmutability_Freeze(location));
+            }
         }
     }
 #endif
@@ -537,23 +545,8 @@ int _PyOwnership_traverse_object_graph(
             continue;
         }
 
-        switch (caller_check(item, caller_state)) {
-            // The object is fine, but shouldn't be traversed
-            case Py_OWNERSHIP_TRAVERSE_SKIP:
-                continue;
-
-            // The object is okat and should be traversed
-            case Py_OWNERSHIP_TRAVERSE_VISIT:
-                SUCCEEDS(_PyOwnership_prep_and_traverse_obj(
-                    item,
-                    (void*)&traverse_state));
-                break;
-
-            // An error occured
-            default:
-                goto error;
-        }
-
+        // The object needs to be modified before the object as visited, as it
+        // might become immutable or owned.
 #ifdef Py_DEBUG
         if (location != NULL) {
             // Some objects don't have attributes that can be set.
@@ -566,6 +559,24 @@ int _PyOwnership_traverse_object_graph(
             }
         }
 #endif
+
+        switch (caller_check(item, caller_state)) {
+            // The object is fine, but shouldn't be traversed
+            case Py_OWNERSHIP_TRAVERSE_SKIP:
+                continue;
+
+            // The object is okat and should be traversed
+            case Py_OWNERSHIP_TRAVERSE_VISIT:
+                traverse_state.source = item;
+                SUCCEEDS(_PyOwnership_prep_and_traverse_obj(
+                    item,
+                    (void*)&traverse_state));
+                break;
+
+            // An error occured
+            default:
+                goto error;
+        }
     }
 
     goto finally;
@@ -610,6 +621,10 @@ static void throw_invariant_error(
     PyObject *exc = PyErr_GetRaisedException();
     assert(exc && PyObject_TypeCheck(exc, (PyTypeObject *)PyExc_RuntimeError));
 
+    // printf("Source %p in %x (Is immutable: %d)\n", src, _PyRegion_Get(src), _Py_IsImmutable(src));
+    // printf("Source Type %p: %s\n", src->ob_type, src->ob_type->tp_name);
+    // printf("Target %p in %x\n", tgt, _PyRegion_Get(tgt));
+    // printf("Target Type %p: %s\n", tgt->ob_type, tgt->ob_type->tp_name);
     // Add 'source' and 'target' attributes to the exception
     PyObject_SetAttr(exc, &_Py_ID(source), src ? src : Py_None);
     PyObject_SetAttr(exc, &_Py_ID(target), tgt ? tgt : Py_None);
@@ -664,6 +679,10 @@ static int check_invariant_visit_owned(PyObject* tgt, void* src_void) {
 
     Py_region_t src_region = _PyRegion_Get(src);
     Py_region_t tgt_region = _PyRegion_Get(tgt);
+
+    // This should never happen, since immutable objects have their own visit
+    // funciton
+    assert(src_region != _Py_IMMUTABLE_REGION);
 
     // C wrappers are special and allowed
     if (_PyOwnership_is_c_wrapper(tgt)) {

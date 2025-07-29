@@ -92,6 +92,8 @@ typedef struct RegionObject {
      * already been cleared.
      */
     Py_region_t region;
+    // TODO(regions): xFrednet: Values in this dict are currently not listed
+    // when using `dir()` on the object. WHY???
     PyObject *dict;
 } RegionObject;
 
@@ -118,24 +120,24 @@ typedef struct RegionObject {
 //     return self;
 // }
 
-static RegionObject* Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
+static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
     // Parse optional parameter
     static char *kwlist[] = {"name", NULL};
     PyObject *name = NULL;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|U", kwlist, &name)) {
-        return NULL;
+        return -1;
     }
     assert(name == NULL && "TODO(region): xFrednet Handle Name");
 
     // Allocate the new region object
     self->region = _PyRegion_New(_PyObject_CAST(self));
     if (self->region == NULL_REGION) {
-        return NULL;
+        return -1;
     }
 
     // Check the object is alos correctly moved into the region
-    assert(_PyRegion_Get(self) == self->region);
-    assert(_PyRegion_GetBridge(self) == _PyObject_CAST(self));
+    assert(_PyRegion_Get(_PyObject_CAST(self)) == self->region);
+    assert(_PyRegion_GetBridge(_PyObject_CAST(self)) == _PyObject_CAST(self));
 
     // Everything is a-okay
     return 0;
@@ -281,8 +283,10 @@ regions_exec(PyObject *module) {
     if (PyType_Ready(&Region_Type) < 0) {
         return -1;
     }
+    if (_PyImmutability_Freeze(_PyObject_CAST(&Region_Type)) != 0) {
+        return -1;
+    }
     _Py_SetImmortalUntracked(_PyObject_CAST(&Region_Type));
-    _PyImmutability_Freeze(_PyObject_CAST(&Region_Type));
     if (PyModule_AddObject(module, "Region", _PyObject_CAST(&Region_Type)) < 0) {
         return -1;
     }

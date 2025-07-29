@@ -1913,6 +1913,14 @@ insert_to_emptydict(PyInterpreterState *interp, PyDictObject *mp,
         Py_DECREF(value);
         return -1;
     }
+
+    // Regions Write Barrier
+    if (_PyRegion_ADDREF(mp, key) != 0 || _PyRegion_ADDREF(mp, value) != 0) {
+        Py_DECREF(key);
+        Py_DECREF(value);
+        return -1;
+    }
+
     _PyDict_NotifyEvent(interp, PyDict_EVENT_ADDED, mp, key, value);
 
     /* We don't decref Py_EMPTY_KEYS here because it is immortal. */
@@ -7595,7 +7603,8 @@ ensure_nonmanaged_dict(PyObject *obj, PyObject **dictptr)
             dict = PyDict_New();
         }
 
-        // TODO(Pyrona): Shouldn't this need error handling?
+        // FIXME(Pyrona): xFrednet: These should always succeed, but could fail
+        // some assumption failed. Maybe add error handling?
         if (_Py_IsImmutable(obj)) {
             // TODO(Immutable): For subinterpreters this will probably also need a lock!
             _PyImmutability_Freeze(_PyObject_CAST(dict));

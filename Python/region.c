@@ -130,7 +130,7 @@ static void throw_region_error(
     PyErr_SetRaisedException((PyObject*)exc);
 }
 
-static Py_region_t regiondata_new() {
+static Py_region_t regiondata_new(void) {
     regiondata* data = (regiondata*)calloc(1, sizeof(regiondata));
     if (data == NULL) {
         return NULL_REGION;
@@ -793,6 +793,8 @@ int _add_to_region_check_obj(PyObject *obj, void *state_void) {
     return Py_OWNERSHIP_TRAVERSE_VISIT;
 }
 
+#include "immutability.h"
+
 static
 int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     AddRegionState *state = (AddRegionState*)state_void;
@@ -806,6 +808,18 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
 
     regiondata *merge_data = (regiondata*)state->merge_region;
 
+    // Immortal object have no real RC, this makes it infeasable to have them
+    // in a region and dynamically track their ownership. Immortal objects
+    // probably shouldn't be owned in the first place.
+    if (_Py_IsImmortal(tgt)) {
+        assert(IS_LOCAL_REGION(tgt_region) && "At this point it would have to be local");
+    
+        // FIXME(regions): xFrednet: For now this throws an exception, but this
+        // might be a good location for implicit freezing.
+        throw_region_error("Immortal objects can't be owned by a region, consider freezing it", Py_None, src, tgt);
+        return Py_OWNERSHIP_TRAVERSE_ERR;
+    }
+
     // Take ownership of local objects
     if (IS_LOCAL_REGION(tgt_region)) {
         // Add incoming references to the LRC
@@ -817,9 +831,6 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
         // Add the object to the merge region, this will also prevent it
         // from being traversed again.
         PyObject_SetRegion(tgt, state->merge_region);
-
-        // FIXME(regions): xFrednet: Handle RC of immortal objects
-        assert(!_Py_IsImmortal(tgt));
 
         // Return and notify that `tgt` should also be traversed
         return Py_OWNERSHIP_TRAVERSE_VISIT;
@@ -908,7 +919,14 @@ int _add_to_region(PyObject* obj, Py_region_t subject_region)
     {
     case Py_OWNERSHIP_TRAVERSE_VISIT:
         // Traverse the object graph
-        SUCCEEDS(_PyOwnership_traverse_object_graph(obj, _add_to_region_check_obj, _add_to_region_visit, (void*)&add_state));
+        SUCCEEDS(_PyOwnership_traverse_object_graph(
+            obj,
+#ifdef Py_DEBUG
+            true, /* freeze_location for debugging */
+#endif
+            _add_to_region_check_obj,
+            _add_to_region_visit,
+            (void*)&add_state));
     case Py_OWNERSHIP_TRAVERSE_SKIP:
         // Indicate success
         result = 0;
@@ -975,7 +993,14 @@ Py_region_t _PyRegion_New(PyObject *bridge) {
     // being cleared
     data->bridge = bridge;
 
-    _add_to_region(bridge, region);
+    // This can fail, if the given bridge object has some object which can't
+    // be moved.
+    if (_add_to_region(bridge, region)) {
+        // Cleanup
+        data->bridge = NULL;
+        regiondata_dec_rc(region);
+        return NULL_REGION;
+    }
 
     return region;
 }
@@ -1023,7 +1048,6 @@ int _PyRegion_SignalImmutable(PyObject *obj) {
 
     // Moving an object from a static region is trivial
     if (!HAS_DATA(region)) {
-        PyObject_SetRegion(obj, _Py_IMMUTABLE_REGION);
         return 0;
     }
 
