@@ -51,17 +51,26 @@ PyAPI_FUNC(PyObject*) _PyRegion_GetBridge(PyObject *obj);
 
 PyAPI_FUNC(int) _PyRegion_SignalImmutable(PyObject *obj);
 
+// Helper macros to count the number of arguments
+#define _PyRegion__COUNT_ARGS(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, N, ...) N
+#define _PyRegion_COUNT_ARGS(...) _PyRegion__COUNT_ARGS(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
+#define _PyRegion_MAX_ARG_COUNT 16
+
 PyAPI_FUNC(int) _PyRegion_AddRef(PyObject *src, PyObject *tgt);
+PyAPI_FUNC(int) _PyRegion_AddRefs(PyObject *src, int tgt_count, ...);
 #define _PyRegion_ADDREF(src, tgt) _PyRegion_AddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+#define _PyRegion_ADDREFS(src, ...) _PyRegion_AddRefs(_PyObject_CAST(src), _PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 PyAPI_FUNC(int) _PyRegion_RemoveRef(PyObject *src, PyObject *tgt);
 #define _PyRegion_REMOVEREF(src, tgt) _PyRegion_RemoveRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
 
 PyAPI_FUNC(int) _PyRegion_AddLocalRef(PyObject *tgt);
-#define _Py_REGIONADDLOCALREF(tgt) _PyRegion_AddLocalRef(_PyObject_CAST(tgt))
+PyAPI_FUNC(int) _PyRegion_AddLocalRefs(int tgt_count, ...);
+#define _PyRegion_ADDLOCALREF(tgt) _PyRegion_AddLocalRef(_PyObject_CAST(tgt))
+#define _PyRegion_ADDLOCALREFS(tgt) _PyRegion_AddLocalRefs(_PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 PyAPI_FUNC(int) _PyRegion_RemoveLocalRef(PyObject *tgt);
-#define _Py_REGIONREMOVELOCALREF(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))
+#define _PyRegion_REMOVELOCALREF(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))
 
 #ifdef __cplusplus
 }

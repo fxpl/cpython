@@ -809,15 +809,24 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     regiondata *merge_data = (regiondata*)state->merge_region;
 
     // Immortal object have no real RC, this makes it infeasable to have them
-    // in a region and dynamically track their ownership. Immortal objects
-    // probably shouldn't be owned in the first place.
+    // in a region and dynamically track their ownership. Immortal objects are
+    // intended to be immutable in Python, so it should be safe to implicitly
+    // freeze them.
     if (_Py_IsImmortal(tgt)) {
         assert(IS_LOCAL_REGION(tgt_region) && "At this point it would have to be local");
 
-        // FIXME(regions): xFrednet: For now this throws an exception, but this
-        // might be a good location for implicit freezing.
-        throw_region_error("Immortal objects can't be owned by a region, consider freezing it", Py_None, src, tgt);
-        return Py_OWNERSHIP_TRAVERSE_ERR;
+        // Check if we can just freeze it
+        if (_PyImmutability_Freeze(tgt) != 0) {
+            // Clear the error from freezing and throw our own
+            PyErr_Clear();
+
+            throw_region_error(
+                "An immportal object can't be part of a region, and implicit freezing failed",
+                Py_None, src, tgt);
+            return Py_OWNERSHIP_TRAVERSE_ERR;
+        }
+
+        return Py_OWNERSHIP_TRAVERSE_SKIP;
     }
 
     // Take ownership of local objects
@@ -886,19 +895,22 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     return Py_OWNERSHIP_TRAVERSE_SKIP;
 }
 
-// Main entry point to freeze an object and everything it can reach.
-int _add_to_region(PyObject* obj, Py_region_t subject_region)
+/* Attempts to add the given `targets` to the `subject_region`. The interal
+ * state is updated accordingly.
+ *
+ * The `src` argument is only used for error reporting and can be NULL.
+ */
+int regiondata_add_objects(Py_region_t subject_region, PyObject* src, int tgt_count, PyObject **targets)
 {
     // Invariant:
     ASSERT_IS_UNION_ROOT(subject_region);
 
-    // Enable invariant
-    SUCCEEDS(_PyOwnership_invariant_enable());
-
-    // Trivial Accept
-    if (_PyRegion_Get(obj) == subject_region) {
+    if (tgt_count == 0) {
         return 0;
     }
+
+    // Enable invariant
+    SUCCEEDS(_PyOwnership_invariant_enable());
 
     int result = 0;
 
@@ -911,28 +923,32 @@ int _add_to_region(PyObject* obj, Py_region_t subject_region)
         goto error;
     }
 
-    // Manually call visit with `obj` as the target to ensure that it is
-    // correctly added to the merge region or throws an error
-    result = _add_to_region_visit(NULL, obj, (void*)&add_state);
+    for (int tgt_i = 0; tgt_i < tgt_count; tgt_i += 1) {
+        PyObject *tgt = targets[tgt_i];
 
-    switch (result)
-    {
-    case Py_OWNERSHIP_TRAVERSE_VISIT:
-        // Traverse the object graph
-        SUCCEEDS(_PyOwnership_traverse_object_graph(
-            obj,
+        // Manually call visit with `tgt` as the target to ensure that it is
+        // correctly added to the merge region or throws an error
+        result = _add_to_region_visit(src, tgt, (void*)&add_state);
+    
+        switch (result)
+        {
+        case Py_OWNERSHIP_TRAVERSE_VISIT:
+            // Traverse the object graph
+            SUCCEEDS(_PyOwnership_traverse_object_graph(
+                tgt,
 #ifdef Py_DEBUG
-            true, /* freeze_location for debugging */
+                true, /* freeze_location for debugging */
 #endif
-            _add_to_region_check_obj,
-            _add_to_region_visit,
-            (void*)&add_state));
-    case Py_OWNERSHIP_TRAVERSE_SKIP:
-        // Indicate success
-        result = 0;
-        break;
-    default:
-        goto error;
+                _add_to_region_check_obj,
+                _add_to_region_visit,
+                (void*)&add_state));
+        case Py_OWNERSHIP_TRAVERSE_SKIP:
+            // Indicate success
+            result = 0;
+            break;
+        default:
+            goto error;
+        }
     }
 
     // Merge the region into the subject region since all objects could be added
@@ -947,6 +963,11 @@ error:
 finally:
     regiondata_dec_rc(add_state.merge_region);
     return result;
+}
+
+/* Simple wrapper to call `regiondata_add_object` with one target */
+int regiondata_add_object(Py_region_t subject_region, PyObject* src, PyObject *target) {
+    return regiondata_add_objects(subject_region, src, 1, &target);
 }
 
 /* ====================================
@@ -995,7 +1016,7 @@ Py_region_t _PyRegion_New(PyObject *bridge) {
 
     // This can fail, if the given bridge object has some object which can't
     // be moved.
-    if (_add_to_region(bridge, region)) {
+    if (regiondata_add_object(region, NULL, bridge)) {
         // Cleanup
         data->bridge = NULL;
         regiondata_dec_rc(region);
@@ -1072,6 +1093,8 @@ int _PyRegion_SignalImmutable(PyObject *obj) {
  * internal region state accordingly.
  *
  * Returns 0 on success.
+ * 
+ * This is the fast path of `_PyRegion_AddRefs` for single references
  */
 int _PyRegion_AddRef(PyObject *src, PyObject *tgt) {
     // FIXME(regions): xFrednet: It might be worth to put the fast path into
@@ -1096,7 +1119,82 @@ int _PyRegion_AddRef(PyObject *src, PyObject *tgt) {
     }
 
     // Attempt to slurp the target object into the source region
-    return _add_to_region(tgt, src_region);
+    return regiondata_add_object(src_region, src, tgt);
+}
+
+/* This informs the regions of the targets about a new incoming local reference.
+ * 
+ * The `src` argument is only used for error reporting and can be NULL.
+ */
+static int _add_local_refs(PyObject *src, int tgt_count, PyObject **targets) {
+    int result = 0;
+    int arg_i = 0;
+
+    for (arg_i = 0; arg_i < tgt_count; arg_i += 1) {
+        PyObject* tgt = targets[arg_i];
+        result = regiondata_inc_lrc(_PyRegion_Get(tgt));
+
+        if (result != 0) {
+            goto error;
+        }
+    }
+
+    return 0;
+
+error:
+    for (int undo_i = 0; undo_i < arg_i; undo_i += 1) {
+        PyObject* tgt = targets[undo_i];
+        result |= regiondata_dec_lrc(_PyRegion_Get(tgt));
+    }
+    return result;
+}
+
+/* Checks if the references from `src` to the targets are allowed and
+ * updates the internal region state accordingly.
+ *
+ * Returns 0 if all references are allowed. Failure will undo the operation.
+ */
+int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
+    va_list args;
+    va_start(args, argc);
+
+    assert(argc <= _PyRegion_MAX_ARG_COUNT);
+
+    // Objects which need to be processed further
+    PyObject *batch[_PyRegion_MAX_ARG_COUNT];
+    int batch_size = 0;
+
+    Py_region_t src_region = _PyRegion_Get(src);
+    for (int arg_i = 0; arg_i < argc; arg_i += 1) {
+        PyObject* tgt = va_arg(args, PyObject*);
+        Py_region_t tgt_region = _PyRegion_Get(tgt);
+
+        if (src_region == tgt_region) {
+            // Intra-region references are always permitted and not tracket
+            continue;
+        }
+
+        if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
+            // References to immutable objects or cowns are always permitted
+            continue;
+        }
+
+        // Save the arguments, to be added as a batch
+        batch[batch_size] = tgt;
+        batch_size += 1;
+    }
+    va_end(args);
+
+    // Return if all references have been trivial
+    if (batch_size == 0) {
+        return 0;
+    }
+
+    if (IS_LOCAL_REGION(src_region)) {
+        return _add_local_refs(src, batch_size, batch);
+    }
+
+    return regiondata_add_objects(src_region, src, batch_size, batch);
 }
 
 /* Removes the reference from `src` to `tgt` and updates the internal state of
@@ -1151,13 +1249,46 @@ int _PyRegion_AddLocalRef(PyObject *tgt) {
     return regiondata_inc_lrc(_PyRegion_Get(tgt));
 }
 
+int _PyRegion_AddLocalRefs(int argc, ...) {
+    va_list args;
+    va_start(args, argc);
+
+    assert(argc <= _PyRegion_MAX_ARG_COUNT);
+
+    // Objects which need to be processed further
+    PyObject *list[_PyRegion_MAX_ARG_COUNT];
+    int list_size = 0;
+
+    for (int arg_i = 0; arg_i < argc; arg_i += 1) {
+        PyObject* tgt = va_arg(args, PyObject*);
+
+        if (!HAS_DATA(_PyRegion_Get(tgt))) {
+            continue;
+        }
+
+        // Save the arguments, to be added as a batch
+        list[list_size] = tgt;
+        list_size += 1;
+    }
+    va_end(args);
+
+    // Return if all references have been trivial
+    if (list_size == 0) {
+        return 0;
+    }
+
+    return _add_local_refs(NULL, list_size, list);
+}
+
 int _PyRegion_RemoveLocalRef(PyObject *tgt) {
     return regiondata_dec_lrc(_PyRegion_Get(tgt));
 }
 
-// TODO(regions): xFrednet: PyRegionObject
 // TODO(regions): xFrednet: Write Barrier in: Bytecode
 // TODO(regions): xFrednet: Write Barrier in: Dictionary
 // TODO(regions): xFrednet: Dirty on C code
 // TODO(regions): xFrednet: Cowns
-// TODO(regions): xFrednet: Weak Region Reference
+// TODO(regions): xFrednet: Track Weak Reference in LRC
+// TODO(regions): xFrednet: Weak Reference into regions
+// TODO(regions): xFrednet: Merging a region into the local region should open
+//                          subregions, if the merge didn't happend for error handling

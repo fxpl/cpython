@@ -131,7 +131,7 @@ As a consequence of this, split keys have a maximum size of 16.
 #include "pycore_setobject.h"     // _PySet_NextEntry()
 #include "pycore_tuple.h"         // _PyTuple_Recycle()
 #include "pycore_unicodeobject.h" // _PyUnicode_InternImmortal()
-#include "pycore_region.h"        // _PyRegion_ADDREF
+#include "pycore_region.h"        // _PyRegion_ADDREFS
 
 #include "stringlib/eq.h"                // unicode_eq()
 #include <stdbool.h>
@@ -1731,6 +1731,11 @@ insert_combined_dict(PyInterpreterState *interp, PyDictObject *mp,
         }
     }
 
+    // Regions Write Barrier
+    if (_PyRegion_ADDREFS(mp, key, value) != 0) {
+        return -1;
+    }
+
     _PyDict_NotifyEvent(interp, PyDict_EVENT_ADDED, mp, key, value);
     FT_ATOMIC_STORE_UINT32_RELAXED(mp->ma_keys->dk_version, 0);
 
@@ -1915,7 +1920,7 @@ insert_to_emptydict(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     // Regions Write Barrier
-    if (_PyRegion_ADDREF(mp, key) != 0 || _PyRegion_ADDREF(mp, value) != 0) {
+    if (_PyRegion_ADDREFS(mp, key, value) != 0) {
         Py_DECREF(key);
         Py_DECREF(value);
         return -1;
