@@ -285,9 +285,9 @@ regions_exec(PyObject *module) {
     if (PyType_Ready(&Region_Type) < 0) {
         return -1;
     }
-    if (_PyImmutability_Freeze(_PyObject_CAST(&Region_Type)) != 0) {
-        return -1;
-    }
+    // if (_PyImmutability_Freeze(_PyObject_CAST(&Region_Type)) != 0) {
+    //     return -1;
+    // }
     _Py_SetImmortalUntracked(_PyObject_CAST(&Region_Type));
     if (PyModule_AddObject(module, "Region", _PyObject_CAST(&Region_Type)) < 0) {
         return -1;
