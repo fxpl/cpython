@@ -17,6 +17,8 @@ module regions
 [clinic start generated code]*/
 /*[clinic end generated code: output=da39a3ee5e6b4b0d input=38ff706d605d1871]*/
 
+#include "clinic/regionsmodule.c.h"
+
 /*
  * ===================
  * Module State
@@ -106,7 +108,7 @@ static PyMemberDef Region_members[] = {
 //     if (state == NULL) {
 //         return NULL;
 //     }
-    
+
 //     RegionObject *self;
 //     self = PyObject_GC_New(RegionObject, (PyTypeObject*)state->region_type);
 //     if (self == NULL) {
@@ -145,7 +147,7 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
     return 0;
 }
 
-static PyObject *Region_owns_object(RegionObject *self, PyObject *other) {
+static PyObject *Region_owns(RegionObject *self, PyObject *other) {
     if (_PyRegion_Get(_PyObject_CAST(self)) == _PyRegion_Get(other)) {
         Py_RETURN_TRUE;
     } else {
@@ -191,7 +193,7 @@ Region_dealloc(PyObject *self)
 }
 
 static PyMethodDef Region_methods[] = {
-    {"owns_object", _PyCFunction_CAST(Region_owns_object), METH_O,
+    {"owns", _PyCFunction_CAST(Region_owns), METH_O,
         "Check if object is owned by the region."},
     {NULL,              NULL}           /* sentinel */
 };
@@ -249,7 +251,23 @@ static PyTypeObject Region_Type = {
 
 PyDoc_STRVAR(regions_module_doc, "");
 
+/*[clinic input]
+regions.is_local -> bool
+    obj: object
+    /
+
+Return True the object is in the local region.
+[clinic start generated code]*/
+
+static int
+regions_is_local_impl(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=e113b6b045da92b4 input=17b3dedc5693f308]*/
+{
+    return _Py_IsLocal(obj);
+}
+
 static struct PyMethodDef regions_methods[] = {
+    REGIONS_IS_LOCAL_METHODDEF
     { NULL, NULL }
 };
 
