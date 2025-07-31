@@ -5,15 +5,21 @@
 #include "pycore_gc.h"          // _PyGCHead_NEXT, _PyGCHead_PREV, _Py_FROM_GC
 #include "pycore_interp.h"      // PyThreadState_Get
 #include "pycore_list.h"
+#include "pycore_object.h"
 #include "pycore_ownership.h"
 #include "pycore_pyerrors.h"
 #include "pycore_runtime.h"     // _Py_ID
 #include "pycore_region.h"      // _PyRegion_Get(), Py_Region
+#include "pycore_unicodeobject.h"
 #include "pyerrors.h"
 #include "refcount.h"
 
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
+
+#define _Py_region_data_CAST(region) _Py_CAST(_Py_region_data*, region)
+
+#define REGIO_SENTINEL_VALUE 0x12345678
 
 static int init_state(_Py_ownership_state *state)
 {
@@ -56,6 +62,19 @@ static int init_import_state(_Py_ownership_state *state) {
         state->traceback_func = PyObject_GetAttrString(traceback_module, "format_stack");
         Py_DECREF(traceback_module);
     }
+
+    state->location_key = PyUnicode_FromString("__ownership_location__");
+    if (state->location_key == NULL) {
+        return -1;
+    }
+
+    PyInterpreterState *interp = PyInterpreterState_Get();
+    if (interp == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to get the interpreter state");
+        return -1;
+    }
+
+    _PyUnicode_InternImmortal(interp, &state->location_key);
 #endif
 
     return 0;
@@ -526,6 +545,7 @@ int _PyOwnership_traverse_object_graph(
             // Freezing the location allows all objects to reference it.
             if (freeze_location) {
                 SUCCEEDS(_PyImmutability_Freeze(location));
+                SUCCEEDS(_PyImmutability_Freeze(ownership_state->location_key));
             }
         }
     }
@@ -552,7 +572,7 @@ int _PyOwnership_traverse_object_graph(
             // Some objects don't have attributes that can be set.
             // As this is a Debug only feature, we could potentially increase the object
             // size to allow this to be stored directly on the object.
-            if (PyObject_SetAttrString(item, "__ownership_location__", location) < 0) {
+            if (PyObject_SetAttr(item, ownership_state->location_key, location) < 0) {
                 // Ignore failure to set _freeze_location
                 PyErr_Clear();
                 // We still want to freeze the object, so we continue
@@ -641,6 +661,96 @@ typedef struct _gc_runtime_state GCState;
 #define FROM_GC _Py_FROM_GC
 //******************************** */
 
+typedef struct _check_invariant_state {
+    PyObject *src;
+    // A list of regions which have been checked during this pass.
+    Py_region_t regions;
+} _check_invariant_state;
+
+static void _check_invariant_state_track(_check_invariant_state *state, Py_region_t region) {
+    if (region == _Py_LOCAL_REGION
+        || region == _Py_IMMUTABLE_REGION
+        || region == _Py_COWN_REGION
+    ) {
+        return;
+    }
+
+    _Py_region_data *data = _Py_region_data_CAST(region);
+
+    // Each region should only be added once
+    if (data->invariant_data.next != NULL_REGION) {
+        return;
+    }
+
+    // Add the region to the linked list
+    data->invariant_data.next = state->regions;
+    state->regions = region;
+}
+
+static int validate_check_invariant_state(_check_invariant_state* state) {
+    // Validate the visited region
+    Py_region_t region = state->regions;
+    while (region != REGIO_SENTINEL_VALUE) {
+        _Py_region_data *data = _Py_region_data_CAST(region);
+
+        if (_PyRegion_IsDirty(region)) {
+            // Dirty regions can be checked, if PY_OWNERSHIP_INVARIANT_CHECK_DIRTY is set
+            const char* env = Py_GETENV("PY_OWNERSHIP_INVARIANT_CHECK_DIRTY");
+            if (!env) {
+                goto next;
+            }
+        }
+
+        if ((data->invariant_data.lrc != 0 || data->invariant_data.osc != 0)
+            && _PyRegion_IsOpen(region)
+        ) {
+            throw_invariant_error(
+                data->bridge, NULL,
+                "Invariant Error: The region in `source` should be open",
+                Py_None);
+            return -1;
+        }
+
+        if (data->lrc != data->invariant_data.lrc) {
+            throw_invariant_error(
+                data->bridge, NULL,
+                "Invariant Error: The LRC of the region in `source` is wrong",
+                Py_None);
+            return -1;
+        }
+
+        if (data->osc != data->invariant_data.osc) {
+            throw_invariant_error(
+                data->bridge, NULL,
+                "Invariant Error: The OSC of the region in `source` is wrong",
+                Py_None);
+            return -1;
+        }
+
+    next:
+        // Get the next region
+        region = data->invariant_data.next;
+    }
+
+    return 0;
+}
+
+static void clear_check_invariant_state(_check_invariant_state* state) {
+    // Clear temporary region data
+    while (state->regions != REGIO_SENTINEL_VALUE)
+    {
+        _Py_region_data *data = _Py_region_data_CAST(state->regions);
+
+        // Get the next region
+        state->regions = data->invariant_data.next;
+
+        // Clear data
+        data->invariant_data.lrc = 0;
+        data->invariant_data.osc = 0;
+        data->invariant_data.next = NULL_REGION;
+    }
+}
+
 static int check_invariant_validate_immutable(PyObject* obj) {
     // Immutable objects should be in the immutable region
     if (_PyRegion_Get(obj) != _Py_IMMUTABLE_REGION) {
@@ -654,8 +764,8 @@ static int check_invariant_validate_immutable(PyObject* obj) {
     return 0;
 }
 
-static int check_invariant_visit_immutable(PyObject* tgt, void* src_void) {
-    PyObject* src = (PyObject*)src_void;
+static int check_invariant_visit_immutable(PyObject* tgt, _check_invariant_state* state) {
+    PyObject* src = state->src;
 
     // C wrappers are special and allowed
     if (_PyOwnership_is_c_wrapper(tgt)) {
@@ -674,8 +784,8 @@ static int check_invariant_visit_immutable(PyObject* tgt, void* src_void) {
     return 0;
 }
 
-static int check_invariant_visit_owned(PyObject* tgt, void* src_void) {
-    PyObject* src = (PyObject*)src_void;
+static int check_invariant_visit_owned(PyObject* tgt, _check_invariant_state* state) {
+    PyObject* src = state->src;
 
     Py_region_t src_region = _PyRegion_Get(src);
     Py_region_t tgt_region = _PyRegion_Get(tgt);
@@ -699,6 +809,8 @@ static int check_invariant_visit_owned(PyObject* tgt, void* src_void) {
         return 0;
     }
 
+    _check_invariant_state_track(state, tgt_region);
+
     // Dirty regions are basically allowed to do anything
     if (_PyRegion_IsDirty(src_region)) {
         // Dirty regions can be checked, if PY_OWNERSHIP_INVARIANT_CHECK_DIRTY is set
@@ -718,26 +830,66 @@ static int check_invariant_visit_owned(PyObject* tgt, void* src_void) {
 
     // If the object references another region, it has to be the bridge object
     // and this object needs to be the parent.
-    if (_PyRegion_GetBridge(tgt) != tgt || !_PyRegion_IsParent(tgt_region, src_region)) {
+    if (_PyRegion_GetBridge(tgt) != tgt) {
         throw_invariant_error(
             src, tgt,
             "Invariant Error: A owned object is referencing a foreign contained object",
             Py_None);
         return -1;
     }
+    
+    // This is the owning reference to the target region, but target doesn't know about it
+    if (_PyRegion_GetBridge(tgt) == tgt && !_PyRegion_IsParent(tgt_region, src_region)) {
+        throw_invariant_error(
+            src, tgt,
+            "Invariant Error: A sub region doesn't know about it's parent",
+            Py_None);
+        return -1;
+    }
+
+    // Update the invariant OSC to check the source region data
+    if (_PyRegion_GetBridge(tgt) == tgt && _PyRegion_IsOpen(tgt_region)) {
+        _Py_region_data *src_data = _Py_region_data_CAST(src_region);
+        src_data->invariant_data.osc += 1;
+    }
+
+    return 0;
+}
+static int check_invariant_visit_local(PyObject* tgt, _check_invariant_state* state) {
+    PyObject* src = state->src;
+
+    Py_region_t src_region = _PyRegion_Get(src);
+    Py_region_t tgt_region = _PyRegion_Get(tgt);
+
+    // This should never happen, since immutable objects have their own visit
+    // funciton
+    assert(src_region == _Py_LOCAL_REGION);
+
+    // References to static regions are trivially fine
+    if (tgt_region == _Py_LOCAL_REGION
+        || tgt_region == _Py_IMMUTABLE_REGION
+        || tgt_region == _Py_COWN_REGION
+    ) {
+        return 0;
+    }
+
+    _check_invariant_state_track(state, tgt_region);
+
+    _Py_region_data *tgt_data = _Py_region_data_CAST(tgt_region);
+    tgt_data->invariant_data.lrc += 1;
 
     return 0;
 }
 
 int _PyOwnership_check_invariant(PyThreadState *tstate) {
-    _Py_ownership_state *state = get_ownership_state();
-    if (state == NULL) {
+    _Py_ownership_state *ownership_state = get_ownership_state();
+    if (ownership_state == NULL) {
         return -1;
     }
 
     // Only run the invariant if it's actully enabled and there is no
     // function which paused the invariant
-    if (state->invariant_state != Py_OWNERSHIP_INVARIANT_ENABLED) {
+    if (ownership_state->invariant_state != Py_OWNERSHIP_INVARIANT_ENABLED) {
         return 0;
     }
 
@@ -745,7 +897,7 @@ int _PyOwnership_check_invariant(PyThreadState *tstate) {
     // and any breakage will not really matter, since this universe is at
     // its end.
     if (Py_IsFinalizing()) {
-        state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
+        ownership_state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
         return 0;
     }
 
@@ -754,9 +906,16 @@ int _PyOwnership_check_invariant(PyThreadState *tstate) {
         return 0;
     }
 
+    int result = 0;
+
     // Use the GC data to find all the objects, and traverse them to
     // confirm all their references satisfy the invariant.
     GCState *gcstate = &tstate->interp->gc;
+
+    _check_invariant_state check_state = {
+        .src = NULL,
+        .regions = REGIO_SENTINEL_VALUE
+    };
 
     // There is an cyclic doubly linked list per generation of all the objects
     // in that generation.
@@ -774,6 +933,9 @@ int _PyOwnership_check_invariant(PyThreadState *tstate) {
                 continue;
             }
 
+            // Prepare the check state
+            check_state.src = ob;
+
             // Select which validation function should be used, based on the
             // current object.
             visitproc visit = NULL;
@@ -781,26 +943,30 @@ int _PyOwnership_check_invariant(PyThreadState *tstate) {
                 check_invariant_validate_immutable(ob);
                 visit = (visitproc)check_invariant_visit_immutable;
             } else if (!_Py_IsLocal(ob)) {
+                _check_invariant_state_track(&check_state, _PyRegion_Get(ob));
                 visit = (visitproc)check_invariant_visit_owned;
             } else if (_Py_IsLocal(ob)) {
-                // Mutable objects are allowed to reference all other objects
-                // (regardless if mutable or not). These therefore don't need
-                // to be traversed.
-                continue;
+                visit = (visitproc)check_invariant_visit_local;
             }
 
             // Use traverse proceduce to visit each field of the object.
-            SUCCEEDS(_PyOwnership_traverse_obj(ob, visit, ob));
+            SUCCEEDS(_PyOwnership_traverse_obj(ob, visit, &check_state));
         }
     }
 
-    return 0;
+    SUCCEEDS(validate_check_invariant_state(&check_state));
+
+    goto finally;
 
 error:
     // Disable the invariant
-    state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
+    ownership_state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
     // Return -1 to indicate an error
-    return -1;
+    result = -1;
+
+finally:
+    clear_check_invariant_state(&check_state);
+    return result;
 }
 
 int _PyOwnership_invariant_enable(void) {

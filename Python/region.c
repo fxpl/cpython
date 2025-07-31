@@ -10,8 +10,6 @@
 
 #include <stdbool.h>
 
-typedef struct regiondata regiondata;
-
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
@@ -21,7 +19,7 @@ typedef struct regiondata regiondata;
 #define IS_COWN_REGION(r)         ((Py_region_t)(r) == _Py_COWN_REGION)
 #define HAS_DATA(r)               (!IS_LOCAL_REGION(r) && !IS_IMMUTABLE_REGION(r) && !IS_COWN_REGION(r))
 
-/* Magic values for `regiondata.open_tick` */
+/* Magic values for `_Py_region_data.open_tick` */
 #define OPEN_TICK_CLOSED 0
 #define OPEM_TICK_DIRTY 1
 
@@ -29,7 +27,7 @@ typedef struct regiondata regiondata;
 #define OWNER_TAG_COWN              ((Py_uintptr_t)0x1)
 #define OWNER_TAG_MERGED            ((Py_uintptr_t)0x2)
 #define OWNER_PTR_MASK              (~(OWNER_TAG_COWN | OWNER_TAG_MERGED))
-#define GET_OWNER_WITH_TAG(data)    (((regiondata*)(data))->owner)
+#define GET_OWNER_WITH_TAG(data)    (((_Py_region_data*)(data))->owner)
 #define GET_OWNER_PTR(data)         (GET_OWNER_WITH_TAG(data) & OWNER_PTR_MASK)
 #define HAS_OWNER_TAG(data, tag)    (GET_OWNER_WITH_TAG(data) & tag)
 
@@ -37,73 +35,13 @@ typedef struct regiondata regiondata;
 #define ASSERT_IS_UNION_ROOT(region) assert(!HAS_DATA(region) || !HAS_OWNER_TAG(region, OWNER_TAG_MERGED))
 #define ASSERT_REGION_HAS_NO_TAG(region) assert((region & OWNER_PTR_MASK) == region)
 
-struct regiondata {
-    /* The number of references coming in from the local region.
-     *
-     * This value should always be >= 0 with the exception of
-     * the `add_to_region` process. This can create a temporary
-     * region, which will be merged into the target region. The
-     * LRC can be negative, if the merge should decrease the LRC
-     * of the target region.
-     */
-    Py_ssize_t lrc;
-
-    /* The number of open subregions. */
-    Py_ssize_t osc;
-
-    /* Snapshot of the ownership tick, when the region was opened. This
-     * is used to track if the region is open and if the region is clean.
-     *
-     * If the region is clean, it means the LRC and OSC can be trusted to
-     * securely close the region. However, these values might be incorrect,
-     * if the region is dirty. This can happen, when we call untrusted C
-     * code. A dirty region first has to be cleaned, before it can be closed.
-     *
-     * See `_Py_ownership_state.tick` for an explaination of the tick counter.
-     *
-     * This value indicates the following states:
-     * - (0) => The region is closed
-     * - (1) => The region is open and dirty
-     * - (N) if N == state.tick => The region is open and clean, since the
-     *                             ownership and open tick are the same
-     * - (N) if N != state.tick => The region is open but dirty, since an
-     *                             ownership tick was triggered.
-     *
-     * Invariant: The open tick should always be 1 or an even number.
-     */
-    Py_ssize_t open_tick;
-
-    /* The number of references to this object */
-    Py_ssize_t rc;
-
-    /* A tagged pointer to the owner of this region. The tag indicates the
-     * type of owner and relationship:
-     *
-     * These are the possible tags:
-     * - 0b00 => The pointer points to the parent region (or is null)
-     * - 0b01 => The pointer points to the cown owing this region
-     * - 0b10 => The pointer points to the parent in the union-find forest
-     */
-    Py_uintptr_t owner;
-
-    /* The bridge object belonging to this regiondata. This pointer can be
-     * NULL, when the bridge was already deallocated but some objects retain
-     * a reference to the `regiondata` object.
-     *
-     * This is a weak reference to the brige, meaning the RC is not updated
-     * by writes to this field.
-     */
-    PyObject* bridge;
-    // TODO: Probably not safe rn, since name could be removed by the GC
-    PyObject *name;
-};
-
 // Prototyes
 static int regiondata_inc_osc(Py_region_t region);
 static int regiondata_dec_osc(Py_region_t region);
 static int regiondata_is_open(Py_region_t data);
 static Py_region_t regiondata_get_parent(Py_region_t region);
 static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent);
+static int regiondata_check_status(Py_region_t region);
 
 // This uses the given arguments to create and throw a `RegionError`
 static void throw_region_error(
@@ -131,7 +69,7 @@ static void throw_region_error(
 }
 
 static Py_region_t regiondata_new(void) {
-    regiondata* data = (regiondata*)calloc(1, sizeof(regiondata));
+    _Py_region_data* data = (_Py_region_data*)calloc(1, sizeof(_Py_region_data));
     if (data == NULL) {
         return NULL_REGION;
     }
@@ -146,7 +84,7 @@ static void regiondata_inc_rc(Py_region_t region) {
     }
 
     // Change RC
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->rc += 1;
 }
 
@@ -156,7 +94,7 @@ static void regiondata_dec_rc(Py_region_t region) {
     }
 
     // Change RC
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->rc -= 1;
 
     // Dealloc if needed
@@ -195,7 +133,7 @@ static Py_region_t regiondata_union_root(Py_region_t region) {
     regiondata_inc_rc(region);
 
     // Keep the child pointer to reassign the owner and correct the RC
-    regiondata *child = (regiondata*)region;
+    _Py_region_data *child = (_Py_region_data*)region;
     region = GET_OWNER_PTR(region);
 
     // Walk the union-find until the root is reached
@@ -204,14 +142,14 @@ static Py_region_t regiondata_union_root(Py_region_t region) {
         // root is search for. This results in an amortized time of O(1).
         child->owner = GET_OWNER_WITH_TAG(region);
 
-        // The RC of the `regiondata` which was previously the owner of
+        // The RC of the `_Py_region_data` which was previously the owner of
         // `child` has to be decremented. However, this might deallocate
         // the object. This code therefore wait until the next iteration
         // when the `region` is stored in `child` to decrement the RC.
         regiondata_dec_rc((Py_region_t)child);
 
         // Prepare `child` and `region` values for the next iteration.
-        child = (regiondata*)region;
+        child = (_Py_region_data*)region;
         region = GET_OWNER_PTR(region);
     }
 
@@ -275,13 +213,13 @@ static int regiondata_union_merge(
     }
 
     // Set the owner to the target with the merged tag
-    regiondata *source_data = (regiondata*) source;
+    _Py_region_data *source_data = (_Py_region_data*) source;
     regiondata_inc_rc(target);
     source_data->owner = target | OWNER_TAG_MERGED;
 
     // Merge stats into the `target`
     if (HAS_DATA(target)) {
-        regiondata *target_data = (regiondata*) target;
+        _Py_region_data *target_data = (_Py_region_data*) target;
         target_data->lrc += source_data->lrc;
         target_data->osc += source_data->osc;
 
@@ -291,6 +229,8 @@ static int regiondata_union_merge(
             // might have opened it. Taking the `open_tick` from `source`
             // puts target into the right state.
             target_data->open_tick = source_data->open_tick;
+        } else if (source_data->open_tick == OPEN_TICK_CLOSED) {
+            // It's fine if the target is open but source is closed
         } else if (target_data->open_tick != source_data->open_tick) {
             // At least one of the regions was dirty since the `open_tick`
             // is mismatching.
@@ -298,6 +238,9 @@ static int regiondata_union_merge(
         } else {
             // The open ticks are equal, nothing needs to be done
         }
+
+        // Check if the region can be opened or closed.
+        regiondata_check_status(target);
     }
 
     // Remove information from `source`
@@ -347,7 +290,7 @@ static int regiondata_open(Py_region_t region) {
     }
 
     // Mark the region as open.
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->open_tick = _PyOwnership_get_open_region_tick();
 
     // Check if opening the region was successful
@@ -384,7 +327,7 @@ static int regiondata_is_open(Py_region_t region) {
         return true;
     }
 
-    return ((regiondata*)region)->open_tick != OPEN_TICK_CLOSED;
+    return ((_Py_region_data*)region)->open_tick != OPEN_TICK_CLOSED;
 }
 
 static void regiondata_mark_as_dirty(Py_region_t region) {
@@ -400,7 +343,7 @@ static void regiondata_mark_as_dirty(Py_region_t region) {
     assert(regiondata_is_open(region));
 
     // Mark region as dirty
-    regiondata* data = (regiondata*)region;
+    _Py_region_data* data = (_Py_region_data*)region;
     data->open_tick = OPEM_TICK_DIRTY;
 }
 
@@ -419,7 +362,7 @@ static int regiondata_is_dirty(Py_region_t region) {
     }
 
     // Check if the region is open and already marked as dirty
-    regiondata* data = (regiondata*)region;
+    _Py_region_data* data = (_Py_region_data*)region;
     if (data->open_tick == OPEM_TICK_DIRTY) {
         return true;
     }
@@ -431,7 +374,7 @@ static int regiondata_is_dirty(Py_region_t region) {
     }
 
     // Set to dirty constant for quicker lookup
-    data->open_tick = OPEM_TICK_DIRTY;
+    regiondata_mark_as_dirty(region);
 
     return true;
 }
@@ -461,7 +404,7 @@ static int regiondata_close(Py_region_t region) {
     }
 
     // Mark the region as closed.
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->open_tick = OPEN_TICK_CLOSED;
 
     // Notify the owner
@@ -490,7 +433,7 @@ static int regiondata_check_close(Py_region_t region) {
     }
 
     // Check if the region can currently be closed
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     if (data->lrc == 0 && data->osc == 0 && !regiondata_is_dirty(region)) {
         // Propagate the result
         return regiondata_close(region);
@@ -498,6 +441,41 @@ static int regiondata_check_close(Py_region_t region) {
 
     // Nothing needs to be done, and everything is fine
     return 0;
+}
+
+/* This uses the inner state of the region to check if it needs to be opened.
+ *
+ * This can fail if the region gets opened, see `regiondata_open`.
+ */
+static int regiondata_check_open(Py_region_t region) {
+    // Invariant:
+    ASSERT_IS_UNION_ROOT(region);
+
+    // Static regions can't be opened
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    // Check if the region can currently be closed
+    _Py_region_data *data = (_Py_region_data*)region;
+    if (data->lrc != 0 && data->osc != 0 && !regiondata_is_dirty(region)) {
+        // Propagate the result
+        return regiondata_open(region);
+    }
+
+    // Nothing needs to be done, and everything is fine
+    return 0;
+}
+
+/* This uses the inner state of the region to check if it should be opened
+ * or closed
+ */
+static int regiondata_check_status(Py_region_t region) {
+    if (regiondata_is_open(region)) {
+        return regiondata_check_close(region);
+    } else {
+        return regiondata_check_open(region);
+    }
 }
 
 /* This increases the local reference count.
@@ -520,7 +498,7 @@ static int regiondata_inc_lrc(Py_region_t region) {
     }
 
     // Update the LRC, once the region is open
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->lrc += 1;
 
     return 0;
@@ -541,7 +519,7 @@ static int regiondata_dec_lrc(Py_region_t region) {
     }
 
     // Update the OSC
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->lrc -= 1;
 
     // Check the region state to determine if it should be closed.
@@ -578,7 +556,7 @@ static int regiondata_inc_osc(Py_region_t region) {
     }
 
     // Update the OSC, once the region is open
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->osc += 1;
 
     return 0;
@@ -599,7 +577,7 @@ static int regiondata_dec_osc(Py_region_t region) {
     }
 
     // Update the OSC
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     data->osc -= 1;
 
     // Check the region state to determine if it should be closed.
@@ -632,7 +610,7 @@ static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent) {
     ASSERT_REGION_HAS_NO_TAG(GET_OWNER_WITH_TAG(region));
 
     // Get the old parent
-    regiondata* data = (regiondata*) region;
+    _Py_region_data* data = (_Py_region_data*) region;
     Py_region_t old_parent = GET_OWNER_PTR(data);
 
     // Notify the parents, if this region is open.
@@ -680,7 +658,7 @@ static Py_region_t regiondata_get_parent(Py_region_t region) {
     // If the parent was merged with another region we want to update the
     // owner to point at the root.
     if (parent_field != parent_root) {
-        regiondata* data = (regiondata*) region;
+        _Py_region_data* data = (_Py_region_data*) region;
         data->owner = parent_root;
         regiondata_inc_rc(parent_root);
         regiondata_dec_rc(parent_field);
@@ -738,7 +716,7 @@ static bool regiondata_is_bridge(Py_region_t region, PyObject *obj) {
         return false;
     }
 
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
 
     return data->bridge == obj;
 }
@@ -806,7 +784,7 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
         return Py_OWNERSHIP_TRAVERSE_SKIP;
     }
 
-    regiondata *merge_data = (regiondata*)state->merge_region;
+    _Py_region_data *merge_data = (_Py_region_data*)state->merge_region;
 
     // Immortal object have no real RC, this makes it infeasable to have them
     // in a region and dynamically track their ownership. Immortal objects are
@@ -853,6 +831,9 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
         // this also includes references which should be subtract from the
         // LRC of the subject region.
         merge_data->lrc -= 1;
+        // Problem, dictionary gets populated by the set attribute, the visit then
+        // subtracts for this reference. Just freeze dict and don't use the default
+        // write barrier for population.
 
         // The object should not be traversed.
         return Py_OWNERSHIP_TRAVERSE_SKIP;
@@ -911,6 +892,7 @@ int regiondata_add_objects(Py_region_t subject_region, PyObject* src, int tgt_co
 
     // Enable invariant
     SUCCEEDS(_PyOwnership_invariant_enable());
+    SUCCEEDS(_PyOwnership_invariant_pause());
 
     int result = 0;
 
@@ -961,6 +943,7 @@ error:
     result = -1;
 
 finally:
+    SUCCEEDS(_PyOwnership_invariant_resume());
     regiondata_dec_rc(add_state.merge_region);
     return result;
 }
@@ -1008,11 +991,16 @@ Py_region_t _PyRegion_New(PyObject *bridge) {
         return NULL_REGION;
     } 
 
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
 
     // A weak reference, the bridge will clear this pointer when it is
     // being cleared
     data->bridge = bridge;
+
+    // The region starts with an LRC of 1, due to the local reference to the
+    // bridge object
+    regiondata_inc_lrc(region);
+    regiondata_open(region);
 
     // This can fail, if the given bridge object has some object which can't
     // be moved.
@@ -1030,6 +1018,12 @@ Py_region_t _PyRegion_New(PyObject *bridge) {
  */
 void _PyRegion_DecRc(Py_region_t region) {
     regiondata_dec_rc(region);
+}
+
+/* Returns true, if the given region is marked as dirty
+ */
+int _PyRegion_IsOpen(Py_region_t region) {
+    return regiondata_is_open(region);
 }
 
 /* Returns true, if the given region is marked as dirty
@@ -1053,7 +1047,7 @@ PyObject* _PyRegion_GetBridge(PyObject *obj) {
         Py_RETURN_NONE;
     }
 
-    regiondata *data = (regiondata*)region;
+    _Py_region_data *data = (_Py_region_data*)region;
     return data->bridge;
 }
 
@@ -1153,6 +1147,10 @@ error:
  * updates the internal region state accordingly.
  *
  * Returns 0 if all references are allowed. Failure will undo the operation.
+ * 
+ * The function assumes that the RC of the targets has already been increased.
+ * Meaning it should be the RC value the value will have, if the operation
+ * succeeds.
  */
 int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
     va_list args;

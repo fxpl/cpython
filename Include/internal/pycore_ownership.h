@@ -11,6 +11,9 @@ extern "C" {
 #include "exports.h"
 #include "object.h"
 
+// TODO REMOVE
+#define Py_OWNERSHIP_INVARIANT 1
+
 typedef struct _Py_ownership_state {
     /* The global ownership tick used to mark open regions as dirty, if their
     * invariant might broken. This can happen if untrusted C code is called
@@ -31,7 +34,7 @@ typedef struct _Py_ownership_state {
     * change.
     *
     * Invariant: The tick counter should always be greater or equal to two
-    * as the values 0 and 1 are reserved values by `regiondata.open_tick`.
+    * as the values 0 and 1 are reserved values by `_Py_region_data.open_tick`.
     * */
     Py_ssize_t tick;
     // FIXME: xFrednet: Can we remove this special casing in favor of
@@ -63,6 +66,7 @@ typedef struct _Py_ownership_state {
      * for debugging and can be NULL
      */
     PyObject *traceback_func;
+    PyObject *location_key;
 #endif
 } _Py_ownership_state;
 
@@ -142,6 +146,12 @@ PyAPI_FUNC(int) _PyOwnership_check_invariant(PyThreadState *tstate);
 PyAPI_FUNC(int) _PyOwnership_invariant_enable(void);
 PyAPI_FUNC(int) _PyOwnership_invariant_pause(void);
 PyAPI_FUNC(int) _PyOwnership_invariant_resume(void);
+
+typedef struct _Py_ownership_invariant_region_data {
+    Py_region_t next;
+    Py_ssize_t lrc;
+    Py_ssize_t osc;
+} _Py_ownership_invariant_region_data;
 
 #else
 #   define _PyOwnership_invariant_enable() 0 /* success */

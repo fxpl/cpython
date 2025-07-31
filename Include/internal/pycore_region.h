@@ -9,9 +9,75 @@ extern "C" {
 #endif
 
 #include "object.h"
+#include "pycore_ownership.h"
 
 /* Macros for readability */
 #define NULL_REGION 0
+
+typedef struct _Py_region_data {
+    /* The number of references coming in from the local region.
+     *
+     * This value should always be >= 0 with the exception of
+     * the `add_to_region` process. This can create a temporary
+     * region, which will be merged into the target region. The
+     * LRC can be negative, if the merge should decrease the LRC
+     * of the target region.
+     */
+    Py_ssize_t lrc;
+
+    /* The number of open subregions. */
+    Py_ssize_t osc;
+
+    /* Snapshot of the ownership tick, when the region was opened. This
+     * is used to track if the region is open and if the region is clean.
+     *
+     * If the region is clean, it means the LRC and OSC can be trusted to
+     * securely close the region. However, these values might be incorrect,
+     * if the region is dirty. This can happen, when we call untrusted C
+     * code. A dirty region first has to be cleaned, before it can be closed.
+     *
+     * See `_Py_ownership_state.tick` for an explaination of the tick counter.
+     *
+     * This value indicates the following states:
+     * - (0) => The region is closed
+     * - (1) => The region is open and dirty
+     * - (N) if N == state.tick => The region is open and clean, since the
+     *                             ownership and open tick are the same
+     * - (N) if N != state.tick => The region is open but dirty, since an
+     *                             ownership tick was triggered.
+     *
+     * Invariant: The open tick should always be 1 or an even number.
+     */
+    Py_ssize_t open_tick;
+
+    /* The number of references to this object */
+    Py_ssize_t rc;
+
+    /* A tagged pointer to the owner of this region. The tag indicates the
+     * type of owner and relationship:
+     *
+     * These are the possible tags:
+     * - 0b00 => The pointer points to the parent region (or is null)
+     * - 0b01 => The pointer points to the cown owing this region
+     * - 0b10 => The pointer points to the parent in the union-find forest
+     */
+    Py_uintptr_t owner;
+
+    /* The bridge object belonging to this _Py_region_data. This pointer can be
+     * NULL, when the bridge was already deallocated but some objects retain
+     * a reference to the `_Py_region_data` object.
+     *
+     * This is a weak reference to the brige, meaning the RC is not updated
+     * by writes to this field.
+     */
+    PyObject* bridge;
+    // TODO: Probably not safe rn, since name could be removed by the GC
+    PyObject *name;
+
+#ifdef Py_OWNERSHIP_INVARIANT
+    _Py_ownership_invariant_region_data invariant_data;
+#endif
+} _Py_region_data;
 
 PyAPI_FUNC(Py_region_t) _PyRegion_GetSlow(PyObject *obj);
 
@@ -44,6 +110,7 @@ static inline int _Py_IsLocal(PyObject *obj) {
 PyAPI_FUNC(Py_region_t) _PyRegion_New(PyObject *bridge);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
 
+PyAPI_FUNC(int) _PyRegion_IsOpen(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsDirty(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsParent(Py_region_t child, Py_region_t parent);
 
