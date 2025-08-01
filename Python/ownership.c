@@ -500,7 +500,7 @@ static int init_traverse_state(
 int _PyOwnership_traverse_object_graph(
     PyObject *obj,
 #ifdef Py_DEBUG
-    int freeze_location,
+    int is_region_traversal,
 #endif
     ownershipcheckproc caller_check,
     ownershipvisitproc caller_visit,
@@ -543,7 +543,7 @@ int _PyOwnership_traverse_object_graph(
             location = stack;
 
             // Freezing the location allows all objects to reference it.
-            if (freeze_location) {
+            if (is_region_traversal) {
                 SUCCEEDS(_PyImmutability_Freeze(location));
                 SUCCEEDS(_PyImmutability_Freeze(ownership_state->location_key));
             }
@@ -565,17 +565,15 @@ int _PyOwnership_traverse_object_graph(
             continue;
         }
 
-        // The object needs to be modified before the object as visited, as it
-        // might become immutable or owned.
 #ifdef Py_DEBUG
-        if (location != NULL) {
+        // Set the location early for freezing calles
+        if (location != NULL && !is_region_traversal) {
             // Some objects don't have attributes that can be set.
             // As this is a Debug only feature, we could potentially increase the object
             // size to allow this to be stored directly on the object.
             if (PyObject_SetAttr(item, ownership_state->location_key, location) < 0) {
                 // Ignore failure to set _freeze_location
                 PyErr_Clear();
-                // We still want to freeze the object, so we continue
             }
         }
 #endif
@@ -597,6 +595,16 @@ int _PyOwnership_traverse_object_graph(
             default:
                 goto error;
         }
+
+#ifdef Py_DEBUG
+        // Set the location late for region calles
+        if (location != NULL && is_region_traversal) {
+            if (PyObject_SetAttr(item, ownership_state->location_key, location) < 0) {
+                // Ignore failure to set _freeze_location
+                PyErr_Clear();
+            }
+        }
+#endif
     }
 
     goto finally;
@@ -702,27 +710,31 @@ static int validate_check_invariant_state(_check_invariant_state* state) {
         }
 
         if ((data->invariant_data.lrc != 0 || data->invariant_data.osc != 0)
-            && _PyRegion_IsOpen(region)
+            && !_PyRegion_IsOpen(region)
         ) {
             throw_invariant_error(
                 data->bridge, NULL,
-                "Invariant Error: The region in `source` should be open",
+                "Invariant Error: References into `source` were found, but the region is closed",
                 Py_None);
             return -1;
         }
 
-        if (data->lrc != data->invariant_data.lrc) {
+        // This value is just an upper bound, since there can be references
+        // from non GC objects, for example on the stack
+        if (data->lrc < data->invariant_data.lrc) {
             throw_invariant_error(
                 data->bridge, NULL,
-                "Invariant Error: The LRC of the region in `source` is wrong",
+                "Invariant Error: The LRC of the region in `source` is too high",
                 Py_None);
             return -1;
         }
 
-        if (data->osc != data->invariant_data.osc) {
+        // This value is just an upper bound, since there can be references
+        // from non GC objects, for example on the stack
+        if (data->osc < data->invariant_data.osc) {
             throw_invariant_error(
                 data->bridge, NULL,
-                "Invariant Error: The OSC of the region in `source` is wrong",
+                "Invariant Error: The OSC of the region in `source` is too high",
                 Py_None);
             return -1;
         }
@@ -978,6 +990,17 @@ int _PyOwnership_invariant_enable(void) {
     if (state->invariant_state == Py_OWNERSHIP_INVARIANT_DISABLED) {
         state->invariant_state = Py_OWNERSHIP_INVARIANT_ENABLED;
     }
+
+    return 0;
+}
+
+int _PyOwnership_invariant_disable(void) {
+    _Py_ownership_state *state = get_ownership_state();
+    if (state == NULL) {
+        return -1;
+    }
+
+    state->invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
 
     return 0;
 }

@@ -303,13 +303,21 @@ regions_exec(PyObject *module) {
     if (PyType_Ready(&Region_Type) < 0) {
         return -1;
     }
-    // if (_PyImmutability_Freeze(_PyObject_CAST(&Region_Type)) != 0) {
-    //     return -1;
-    // }
+    if (_PyImmutability_Freeze(_PyObject_CAST(&Region_Type)) != 0) {
+        return -1;
+    }
     _Py_SetImmortalUntracked(_PyObject_CAST(&Region_Type));
     if (PyModule_AddObject(module, "Region", _PyObject_CAST(&Region_Type)) < 0) {
         return -1;
     }
+
+    // Freeze the dict type, to allow dictionaries to be used across regions.
+    if (_PyImmutability_Freeze(_PyObject_CAST(&PyDict_Type)) != 0) {
+        return -1;
+    }
+
+    // Disable the invariant again, since it slows Python down so much
+    _PyOwnership_invariant_disable();
 
     return 0;
 }

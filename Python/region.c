@@ -726,7 +726,7 @@ static bool regiondata_is_bridge(Py_region_t region, PyObject *obj) {
  * This will just update the RC of the old and new region, all other state,
  * like the LRC, has to be updated separatly.
  */
-static void PyObject_SetRegion(PyObject* obj, Py_region_t new_region) {
+static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
     // Invariant:
     assert(obj);
     ASSERT_IS_UNION_ROOT(new_region);
@@ -748,19 +748,6 @@ typedef struct AddRegionState {
 
 static
 int _add_to_region_check_obj(PyObject *obj, void *state_void) {
-    // AddRegionState *state = (AddRegionState*)state_void;
-
-    // Py_region_t obj_region = _PyRegion_Get(obj);
-
-    // // Skip the object, if it's already part of the merge region
-    // if (obj_region == state->merge_region) {
-    //     return Py_OWNERSHIP_TRAVERSE_SKIP;
-    // }
-
-    // // Add the object to the merge region, this will also prevent it
-    // // from being traversed again.
-    // PyObject_SetRegion(obj, state->merge_region);
-
     // Sanity Check, all objects given to this function should be in the
     // merge region
     assert(_PyRegion_Get(obj) == ((AddRegionState*)state_void)->merge_region);
@@ -817,7 +804,7 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
 
         // Add the object to the merge region, this will also prevent it
         // from being traversed again.
-        PyObject_SetRegion(tgt, state->merge_region);
+        _PyRegion_Set(tgt, state->merge_region);
 
         // Return and notify that `tgt` should also be traversed
         return Py_OWNERSHIP_TRAVERSE_VISIT;
@@ -976,7 +963,7 @@ Py_region_t _PyRegion_GetSlow(PyObject *obj) {
     // Check if the region should be updated, this can happen if the object
     // region was merged into another region.
     if (obj->ob_region != region) {
-        PyObject_SetRegion(obj, region);
+        _PyRegion_Set(obj, region);
     }
 
     return region;

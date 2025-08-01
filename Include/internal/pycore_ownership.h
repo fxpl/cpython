@@ -11,9 +11,6 @@ extern "C" {
 #include "exports.h"
 #include "object.h"
 
-// TODO REMOVE
-#define Py_OWNERSHIP_INVARIANT 1
-
 typedef struct _Py_ownership_state {
     /* The global ownership tick used to mark open regions as dirty, if their
     * invariant might broken. This can happen if untrusted C code is called
@@ -146,6 +143,7 @@ PyAPI_FUNC(int) _PyOwnership_check_invariant(PyThreadState *tstate);
 PyAPI_FUNC(int) _PyOwnership_invariant_enable(void);
 PyAPI_FUNC(int) _PyOwnership_invariant_pause(void);
 PyAPI_FUNC(int) _PyOwnership_invariant_resume(void);
+PyAPI_FUNC(int) _PyOwnership_invariant_disable(void);
 
 typedef struct _Py_ownership_invariant_region_data {
     Py_region_t next;
@@ -157,6 +155,7 @@ typedef struct _Py_ownership_invariant_region_data {
 #   define _PyOwnership_invariant_enable() 0 /* success */
 #   define _PyOwnership_invariant_pause() 0 /* success */
 #   define _PyOwnership_invariant_resume() 0 /* success */
+#   define _PyOwnership_invariant_disable() 0 /* success */
 #endif
 
 #ifdef __cplusplus
