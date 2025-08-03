@@ -1007,6 +1007,33 @@ void _PyRegion_DecRc(Py_region_t region) {
     regiondata_dec_rc(region);
 }
 
+int _PyRegion_GetLrc(Py_region_t region) {
+    // Sanity Check
+    ASSERT_IS_UNION_ROOT(region);
+
+    // Return 0 for regions without data
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    _Py_region_data *data = (_Py_region_data*)region;
+    return data->lrc;
+}
+
+// FIXME: Should return a Py_ssize_t
+int _PyRegion_GetOsc(Py_region_t region) {
+    // Sanity Check
+    ASSERT_IS_UNION_ROOT(region);
+
+    // Return 0 for regions without data
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    _Py_region_data *data = (_Py_region_data*)region;
+    return data->osc;
+}
+
 /* Returns true, if the given region is marked as dirty
  */
 int _PyRegion_IsOpen(Py_region_t region) {

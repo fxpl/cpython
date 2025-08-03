@@ -27,7 +27,6 @@ module regions
 
 typedef struct regions_state {
     PyObject *region_error_obj;
-    PyObject *region_type;
 } regions_state;
 
 static struct PyModuleDef regionsmodule;
@@ -78,6 +77,13 @@ PyType_Spec regions_error_spec = {
     .slots = region_error_slots,
 };
 
+void RegionErr_NoBridge(void) {
+    // TODO Static RegionError and call
+    PyErr_Format(
+        PyExc_RuntimeError,
+        "a region method was called on a non-bridge object");
+}
+
 /*
  * ===================
  * Region Object
@@ -103,27 +109,6 @@ static PyMemberDef Region_members[] = {
     {NULL}
 };
 
-// static RegionObject* newRegionObject(PyObject *module) {
-//     regions_state *state = get_state(module);
-//     if (state == NULL) {
-//         return NULL;
-//     }
-
-//     RegionObject *self;
-//     self = PyObject_GC_New(RegionObject, (PyTypeObject*)state->region_type);
-//     if (self == NULL) {
-//         return NULL;
-//     }
-
-//     self->region = _PyRegion_New(_PyObject_CAST(self));
-//     if (region == NULL_REGION) {
-//         PyObject_GC_Del(self);
-//         return NULL;
-//     }
-
-//     return self;
-// }
-
 static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
     // Parse optional parameter
     static char *kwlist[] = {"name", NULL};
@@ -147,12 +132,16 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
     return 0;
 }
 
-static PyObject* Region_owns(RegionObject *self, PyObject *other) {
-    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
-        Py_RETURN_FALSE;
+#define CHECK_BRIDGE(self) \
+    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) { \
+        RegionErr_NoBridge(); \
+        return NULL; \
     }
 
-    Py_region_t self_region = _PyRegion_Get(_PyObject_CAST(self));
+static PyObject* Region_owns(PyObject *self, PyObject *other) {
+    CHECK_BRIDGE(self);
+
+    Py_region_t self_region = _PyRegion_Get(self);
     Py_region_t other_region = _PyRegion_Get(other);
     return PyBool_FromLong(self_region == other_region);
 }
@@ -163,39 +152,53 @@ static PyMethodDef Region_methods[] = {
     {NULL,              NULL}           /* sentinel */
 };
 
-static PyObject* Region_is_open(RegionObject *self, void *closure) {
-    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
-        Py_RETURN_FALSE;
-    }
+static PyObject* Region_is_open(PyObject *self, void *closure) {
+    CHECK_BRIDGE(self);
 
-    int is_open = _PyRegion_IsOpen(_PyRegion_Get(_PyObject_CAST(self)));
+    int is_open = _PyRegion_IsOpen(_PyRegion_Get(self));
     return PyBool_FromLong(is_open);
 }
 
-static PyObject* Region_is_dirty(RegionObject *self, void *closure) {
-    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
-        Py_RETURN_FALSE;
-    }
+static PyObject* Region_is_dirty(PyObject *self, void *closure) {
+    CHECK_BRIDGE(self);
 
-    int is_dirty = _PyRegion_IsDirty(_PyRegion_Get(_PyObject_CAST(self)));
+    int is_dirty = _PyRegion_IsDirty(_PyRegion_Get(self));
     return PyBool_FromLong(is_dirty);
 }
 
+static PyObject* Region_get_parent(PyObject *self, void *closure) {
+    CHECK_BRIDGE(self);
 
-static PyObject* Region_get_parent(RegionObject *self, void *closure) {
-    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
-        Py_RETURN_NONE;
-    }
-
-    Py_region_t parent_region = _PyRegion_GetParent(_PyRegion_Get(_PyObject_CAST(self)));
+    Py_region_t parent_region = _PyRegion_GetParent(_PyRegion_Get(self));
     return _Py_NewRef(_PyRegion_GetBridge(parent_region));
 }
 
+static PyObject* Region_get__lrc(PyObject* self, void* closure) {
+    CHECK_BRIDGE(self);
+
+    int lrc = _PyRegion_GetLrc(_PyRegion_Get(self));
+    return PyLong_FromInt32(lrc);
+}
+
+static PyObject* Region_get__osc(PyObject* self, void* closure) {
+    CHECK_BRIDGE(self);
+
+    int osc = _PyRegion_GetOsc(_PyRegion_Get(self));
+    return PyLong_FromInt32(osc);
+}
+
 static PyGetSetDef Region_getset[] = {
-    {"is_open", (getter)Region_is_open, NULL, "indicates if the region is currently open or closed", NULL},
-    {"is_dirty", (getter)Region_is_dirty, NULL, "indicates if the region is currently dirty", NULL},
-    {"parent", (getter)Region_get_parent, NULL, "the parent of the region", NULL},
-    {NULL, NULL, NULL, NULL}
+    {"is_open", (getter)Region_is_open, NULL,
+        "indicates if the region is currently open or closed", NULL},
+    {"is_dirty", (getter)Region_is_dirty, NULL,
+        "indicates if the region is currently dirty", NULL},
+    {"parent", (getter)Region_get_parent, NULL,
+        "the parent of the region", NULL},
+    {"_lrc", (getter)Region_get__lrc, NULL, 
+        "the local-reference count, mainly intended for debugging", NULL},
+    {"_osc", (getter)Region_get__osc, NULL, 
+        "the open-subregion count, mainly intended for debugging", NULL},
+    {NULL, NULL, NULL, NULL, NULL}
 };
 
 static int
@@ -238,6 +241,10 @@ Region_dealloc(PyObject *self)
 /* The region type is intentionally static and immutable to allow save sharing
  * across subinterpreters. Declaring it as static allows type comparisons to
  * work automatically.
+ *
+ * One downside is, that the normal `PyType_GetModuleState` function doesn't
+ * work for static types. So everthing needs to either use static types or
+ * look up the `regions` module dynamically at runtime.
  */
 static PyTypeObject Region_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
@@ -272,7 +279,6 @@ static PyTypeObject Region_Type = {
     .tp_members = Region_members,
     // .tp_getset = 0,
     // .tp_base = 0,
-    // .tp_dict = 0,
     // .tp_descr_get = 0,
     // .tp_descr_set = 0,
     .tp_dictoffset = offsetof(RegionObject, dict),

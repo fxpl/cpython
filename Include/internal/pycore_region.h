@@ -110,11 +110,12 @@ static inline int _Py_IsLocal(PyObject *obj) {
 PyAPI_FUNC(Py_region_t) _PyRegion_New(PyObject *bridge);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
 
+PyAPI_FUNC(int) _PyRegion_GetLrc(Py_region_t region);
+PyAPI_FUNC(int) _PyRegion_GetOsc(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsOpen(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsDirty(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsParent(Py_region_t child, Py_region_t parent);
 PyAPI_FUNC(Py_region_t) _PyRegion_GetParent(Py_region_t child);
-
 
 PyAPI_FUNC(int) _PyRegion_IsBridge(PyObject *obj);
 PyAPI_FUNC(PyObject*) _PyRegion_GetBridge(Py_region_t region);
