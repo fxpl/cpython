@@ -1840,6 +1840,9 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     if (_PyDict_HasSplitTable(mp)) {
+        if (_PyRegion_ADDREF(mp, key) != 0) {
+            goto Fail;
+        }
         Py_ssize_t ix = insert_split_key(mp->ma_keys, key, hash);
         if (ix != DKIX_EMPTY) {
             insert_split_value(interp, mp, key, value, ix);
@@ -1862,6 +1865,7 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
         assert(!_PyDict_HasSplitTable(mp));
         /* Insert into new slot. */
         assert(old_value == NULL);
+        // TODO(regions): xFrednet: WB?
         if (insert_combined_dict(interp, mp, hash, key, value) < 0) {
             goto Fail;
         }
@@ -1871,6 +1875,10 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     if (old_value != value) {
+        if (_PyRegion_ADDREFS(mp, value) != 0) {
+         goto Fail;
+        }
+
         _PyDict_NotifyEvent(interp, PyDict_EVENT_MODIFIED, mp, key, value);
         assert(old_value != NULL);
         assert(!_PyDict_HasSplitTable(mp));
@@ -1883,6 +1891,7 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
             STORE_VALUE(ep, value);
         }
     }
+    _PyRegion_REMOVEREF(mp, old_value);
     Py_XDECREF(old_value); /* which **CAN** re-enter (see issue #22653) */
     ASSERT_CONSISTENT(mp);
     Py_DECREF(key);

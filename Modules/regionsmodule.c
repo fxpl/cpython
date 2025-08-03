@@ -141,19 +141,62 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
 
     // Check the object is alos correctly moved into the region
     assert(_PyRegion_Get(_PyObject_CAST(self)) == self->region);
-    assert(_PyRegion_GetBridge(_PyObject_CAST(self)) == _PyObject_CAST(self));
+    assert(_PyRegion_IsBridge(_PyObject_CAST(self)));
 
     // Everything is a-okay
     return 0;
 }
 
-static PyObject *Region_owns(RegionObject *self, PyObject *other) {
-    if (_PyRegion_Get(_PyObject_CAST(self)) == _PyRegion_Get(other)) {
-        Py_RETURN_TRUE;
-    } else {
+static PyObject* Region_owns(RegionObject *self, PyObject *other) {
+    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
         Py_RETURN_FALSE;
     }
+
+    Py_region_t self_region = _PyRegion_Get(_PyObject_CAST(self));
+    Py_region_t other_region = _PyRegion_Get(other);
+    return PyBool_FromLong(self_region == other_region);
 }
+
+static PyMethodDef Region_methods[] = {
+    {"owns", _PyCFunction_CAST(Region_owns), METH_O,
+        "Check if object is owned by the region."},
+    {NULL,              NULL}           /* sentinel */
+};
+
+static PyObject* Region_is_open(RegionObject *self, void *closure) {
+    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
+        Py_RETURN_FALSE;
+    }
+
+    int is_open = _PyRegion_IsOpen(_PyRegion_Get(_PyObject_CAST(self)));
+    return PyBool_FromLong(is_open);
+}
+
+static PyObject* Region_is_dirty(RegionObject *self, void *closure) {
+    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
+        Py_RETURN_FALSE;
+    }
+
+    int is_dirty = _PyRegion_IsDirty(_PyRegion_Get(_PyObject_CAST(self)));
+    return PyBool_FromLong(is_dirty);
+}
+
+
+static PyObject* Region_get_parent(RegionObject *self, void *closure) {
+    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
+        Py_RETURN_NONE;
+    }
+
+    Py_region_t parent_region = _PyRegion_GetParent(_PyRegion_Get(_PyObject_CAST(self)));
+    return _Py_NewRef(_PyRegion_GetBridge(parent_region));
+}
+
+static PyGetSetDef Region_getset[] = {
+    {"is_open", (getter)Region_is_open, NULL, "indicates if the region is currently open or closed", NULL},
+    {"is_dirty", (getter)Region_is_dirty, NULL, "indicates if the region is currently dirty", NULL},
+    {"parent", (getter)Region_get_parent, NULL, "the parent of the region", NULL},
+    {NULL, NULL, NULL, NULL}
+};
 
 static int
 Region_traverse(PyObject *op, visitproc visit, void *arg)
@@ -192,12 +235,6 @@ Region_dealloc(PyObject *self)
     Py_DECREF(tp);
 }
 
-static PyMethodDef Region_methods[] = {
-    {"owns", _PyCFunction_CAST(Region_owns), METH_O,
-        "Check if object is owned by the region."},
-    {NULL,              NULL}           /* sentinel */
-};
-
 /* The region type is intentionally static and immutable to allow save sharing
  * across subinterpreters. Declaring it as static allows type comparisons to
  * work automatically.
@@ -208,6 +245,7 @@ static PyTypeObject Region_Type = {
     .tp_basicsize = sizeof(RegionObject),
     // .tp_itemsize = 0,
     .tp_dealloc = (destructor)Region_dealloc,
+    .tp_getset = Region_getset,
     // .tp_vectorcall_offset = 0,
     // .tp_getattr = 0,
     // .tp_setattr = 0,

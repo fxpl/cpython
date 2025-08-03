@@ -642,7 +642,7 @@ static Py_region_t regiondata_get_parent(Py_region_t region) {
     ASSERT_IS_UNION_ROOT(region);
 
     // Static regions never have a parent
-    if (HAS_DATA(region)) {
+    if (!HAS_DATA(region)) {
         return 0;
     }
 
@@ -1023,17 +1023,24 @@ int _PyRegion_IsParent(Py_region_t child, Py_region_t parent) {
     return regiondata_get_parent(child) == parent;
 }
 
+Py_region_t _PyRegion_GetParent(Py_region_t child) {
+    return regiondata_get_parent(child);
+}
+
+int _PyRegion_IsBridge(PyObject *obj) {
+    return _PyRegion_GetBridge(_PyRegion_Get(obj)) == obj;
+}
+
 /* Returns the bridge object belonging to the region of the given object.
  */
-PyObject* _PyRegion_GetBridge(PyObject *obj) {
-    Py_region_t region = _PyRegion_Get(obj);
-
+PyObject* _PyRegion_GetBridge(Py_region_t region) {
     // Regions without data don't have a bridge
     if (!HAS_DATA(region)) {
         // Return None, since NULL would indicate an exception
         Py_RETURN_NONE;
     }
 
+    // TODO refactor all uses of this
     _Py_region_data *data = (_Py_region_data*)region;
     return data->bridge;
 }

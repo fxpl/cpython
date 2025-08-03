@@ -12,6 +12,28 @@ class TestBasicRegionObject(unittest.TestCase):
         # A region should own its dict
         self.assertTrue(r.owns(r.__dict__))
 
+        # The region should be open since r points into it
+        self.assertTrue(r.is_open)
+
+        # A new region should be clean
+        self.assertFalse(r.is_dirty)
+
+        # A new region has no parent
+        self.assertIsNone(r.parent)
+
+    def test_fields_read_only(self):
+        r = Region()
+
+        # Check the exception on assignment
+        with self.assertRaises(AttributeError):
+            r.is_open = False
+
+        with self.assertRaises(AttributeError):
+            r.is_dirty = False
+
+        with self.assertRaises(AttributeError):
+            r.parent = None
+
 class ImplicitFreezingForImmortal(unittest.TestCase):
     def test_implicit_freeze_importal(self):
         # This would ideally check that the immortal objects
@@ -133,3 +155,19 @@ class TestInterRegionRelations(unittest.TestCase):
         # Object a and b should remain local
         self.assertTrue(is_local(a))
         self.assertTrue(is_local(a.b))
+
+    def test_get_parent(self):
+        r1 = Region()
+        r2 = Region()
+
+        # Make r2 a child of r1
+        r1.r2 = r2
+
+        # Check that r2 knows ab out this
+        self.assertEqual(r2.parent, r1)
+
+        # Unparent r2 again
+        r1.r2 = None
+
+        # Check that r2 has no parent
+        self.assertIsNone(r2.parent)

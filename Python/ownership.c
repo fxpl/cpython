@@ -842,7 +842,7 @@ static int check_invariant_visit_owned(PyObject* tgt, _check_invariant_state* st
 
     // If the object references another region, it has to be the bridge object
     // and this object needs to be the parent.
-    if (_PyRegion_GetBridge(tgt) != tgt) {
+    if (!_PyRegion_IsBridge(tgt)) {
         throw_invariant_error(
             src, tgt,
             "Invariant Error: A owned object is referencing a foreign contained object",
@@ -851,7 +851,7 @@ static int check_invariant_visit_owned(PyObject* tgt, _check_invariant_state* st
     }
     
     // This is the owning reference to the target region, but target doesn't know about it
-    if (_PyRegion_GetBridge(tgt) == tgt && !_PyRegion_IsParent(tgt_region, src_region)) {
+    if (_PyRegion_IsBridge(tgt) && !_PyRegion_IsParent(tgt_region, src_region)) {
         throw_invariant_error(
             src, tgt,
             "Invariant Error: A sub region doesn't know about it's parent",
@@ -860,7 +860,7 @@ static int check_invariant_visit_owned(PyObject* tgt, _check_invariant_state* st
     }
 
     // Update the invariant OSC to check the source region data
-    if (_PyRegion_GetBridge(tgt) == tgt && _PyRegion_IsOpen(tgt_region)) {
+    if (_PyRegion_IsBridge(tgt) && _PyRegion_IsOpen(tgt_region)) {
         _Py_region_data *src_data = _Py_region_data_CAST(src_region);
         src_data->invariant_data.osc += 1;
     }
