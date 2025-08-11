@@ -659,8 +659,13 @@ _PyInterpreterState_New(PyThreadState *tstate, PyInterpreterState **pinterp)
             status = _PyStatus_NO_MEMORY();
             goto error;
         }
+
+        // Temporarily save the _malloced field as it will be overwritten by the
+        // call to `memcpy`.
+        void* _malloced = interp->_malloced;
         // Set to _PyInterpreterState_INIT.
         memcpy(interp, &initial._main_interpreter, sizeof(*interp));
+        interp->_malloced = _malloced; // restore the _malloced field
 
         if (id < 0) {
             /* overflow or Py_Initialize() not called yet! */
