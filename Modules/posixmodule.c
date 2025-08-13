@@ -15408,41 +15408,7 @@ static PyObject *
 os_cpu_count_impl(PyObject *module)
 /*[clinic end generated code: output=5fc29463c3936a9c input=ba2f6f8980a0e2eb]*/
 {
-    const PyConfig *config = _Py_GetConfig();
-    if (config->cpu_count > 0) {
-        return PyLong_FromLong(config->cpu_count);
-    }
-
-    int ncpu = 0;
-#ifdef MS_WINDOWS
-# ifdef MS_WINDOWS_DESKTOP
-    ncpu = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-# else
-    ncpu = 0;
-# endif
-
-#elif defined(__hpux)
-    ncpu = mpctl(MPC_GETNUMSPUS, NULL, NULL);
-
-#elif defined(HAVE_SYSCONF) && defined(_SC_NPROCESSORS_ONLN)
-    ncpu = sysconf(_SC_NPROCESSORS_ONLN);
-
-#elif defined(__VXWORKS__)
-    ncpu = _Py_popcount32(vxCpuEnabledGet());
-
-#elif defined(__DragonFly__) || \
-      defined(__OpenBSD__)   || \
-      defined(__FreeBSD__)   || \
-      defined(__NetBSD__)    || \
-      defined(__APPLE__)
-    ncpu = 0;
-    size_t len = sizeof(ncpu);
-    int mib[2] = {CTL_HW, HW_NCPU};
-    if (sysctl(mib, 2, &ncpu, &len, NULL, 0) != 0) {
-        ncpu = 0;
-    }
-#endif
-
+    int ncpu = _cpu_count();
     if (ncpu < 1) {
         Py_RETURN_NONE;
     }
