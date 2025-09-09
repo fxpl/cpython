@@ -71,7 +71,13 @@ typedef struct _Py_region_data {
      * by writes to this field.
      */
     PyObject* bridge;
-    // TODO: Probably not safe rn, since name could be removed by the GC
+    
+    /* The name of the region.
+     *
+     * This object will be visited from the bridge object to make sure it is
+     * marked as reachable by the GC. This object will be cleared when the
+     * bridge is deallocated. 
+     */
     PyObject *name;
 
 #ifdef Py_OWNERSHIP_INVARIANT
@@ -107,11 +113,14 @@ static inline int _Py_IsLocal(PyObject *obj) {
 }
 #define _Py_IsLocal(obj) _Py_IsLocal(_PyObject_CAST(obj))
 
-PyAPI_FUNC(Py_region_t) _PyRegion_New(PyObject *bridge);
+PyAPI_FUNC(Py_region_t) _PyRegion_New(PyObject *bridge, PyObject *name);
+PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
+PyAPI_FUNC(void) _PyRegion_Clear(Py_region_t region);
 
-PyAPI_FUNC(int) _PyRegion_GetLrc(Py_region_t region);
-PyAPI_FUNC(int) _PyRegion_GetOsc(Py_region_t region);
+PyAPI_FUNC(PyObject*) _PyRegion_GetName(Py_region_t region);
+PyAPI_FUNC(Py_ssize_t) _PyRegion_GetLrc(Py_region_t region);
+PyAPI_FUNC(Py_ssize_t) _PyRegion_GetOsc(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsOpen(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsDirty(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsParent(Py_region_t child, Py_region_t parent);

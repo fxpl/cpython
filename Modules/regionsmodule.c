@@ -116,10 +116,9 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|U", kwlist, &name)) {
         return -1;
     }
-    assert(name == NULL && "TODO(region): xFrednet Handle Name");
 
     // Allocate the new region object
-    self->region = _PyRegion_New(_PyObject_CAST(self));
+    self->region = _PyRegion_New(_PyObject_CAST(self), name);
     if (self->region == NULL_REGION) {
         return -1;
     }
@@ -130,6 +129,36 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
 
     // Everything is a-okay
     return 0;
+}
+
+static PyObject *
+Region_repr(PyObject *self)
+{
+    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
+        return PyUnicode_FromString("<Region (merged)>");;
+    }
+
+    Py_region_t region = _PyRegion_Get(self);
+    PyObject *name = _PyRegion_GetName(region);
+
+    PyObject *repr = NULL;
+#ifdef Py_DEBUG
+    repr = PyUnicode_FromFormat(
+        "<Region name=%R _lrc=%zu _osc=%zu is_dirty=%s>",
+        _PyRegion_GetName(region),
+        _PyRegion_GetLrc(region),
+        _PyRegion_GetOsc(region),
+        _PyRegion_IsDirty(region) ? "True" : "False"
+    );
+#else
+    repr = PyUnicode_FromFormat(
+        "<Region name=%R>",
+        _PyRegion_GetName(region),
+    );
+#endif
+
+    Py_DECREF(name);
+    return repr;
 }
 
 #define CHECK_BRIDGE(self) \
@@ -173,18 +202,24 @@ static PyObject* Region_get_parent(PyObject *self, void *closure) {
     return _Py_NewRef(_PyRegion_GetBridge(parent_region));
 }
 
+static PyObject* Region_get_name(PyObject *self, void *closure) {
+    CHECK_BRIDGE(self);
+
+    return _PyRegion_GetName(_PyRegion_Get(self));
+}
+
 static PyObject* Region_get__lrc(PyObject* self, void* closure) {
     CHECK_BRIDGE(self);
 
-    int lrc = _PyRegion_GetLrc(_PyRegion_Get(self));
-    return PyLong_FromInt32(lrc);
+    Py_ssize_t lrc = _PyRegion_GetLrc(_PyRegion_Get(self));
+    return PyLong_FromSize_t(lrc);
 }
 
 static PyObject* Region_get__osc(PyObject* self, void* closure) {
     CHECK_BRIDGE(self);
 
-    int osc = _PyRegion_GetOsc(_PyRegion_Get(self));
-    return PyLong_FromInt32(osc);
+    Py_ssize_t osc = _PyRegion_GetOsc(_PyRegion_Get(self));
+    return PyLong_FromSize_t(osc);
 }
 
 static PyGetSetDef Region_getset[] = {
@@ -194,6 +229,8 @@ static PyGetSetDef Region_getset[] = {
         "indicates if the region is currently dirty", NULL},
     {"parent", (getter)Region_get_parent, NULL,
         "the parent of the region", NULL},
+    {"name", (getter)Region_get_name, NULL,
+        "the name of the region", NULL},
     {"_lrc", (getter)Region_get__lrc, NULL, 
         "the local-reference count, mainly intended for debugging", NULL},
     {"_osc", (getter)Region_get__osc, NULL, 
@@ -206,6 +243,13 @@ Region_traverse(PyObject *op, visitproc visit, void *arg)
 {
     // Visit the type
     Py_VISIT(Py_TYPE(op));
+
+    // Only visit the name from the root bridge object
+    if (_PyRegion_IsBridge(op)) {
+        PyObject *name = _PyRegion_GetName(_PyRegion_Get(op));
+        Py_VISIT(name);
+        Py_DECREF(name);
+    }
 
     // Visit the attribute dict
     RegionObject *self = RegionObject_CAST(op);
@@ -220,6 +264,7 @@ Region_clear(PyObject *op)
 
     // Clear the region, this uses the internal region pointer
     // since `_PyRegion_Get` might be different or already cleared.
+    _PyRegion_Clear(self->region);
     _PyRegion_DecRc(self->region);
     self->region = NULL_REGION;
 
@@ -257,7 +302,7 @@ static PyTypeObject Region_Type = {
     // .tp_getattr = 0,
     // .tp_setattr = 0,
     // .tp_as_async = 0,
-    // .tp_repr = (reprfunc)PyRegion_repr,
+    .tp_repr = (reprfunc)Region_repr,
     // .tp_as_number = 0,
     // .tp_as_sequence = 0,
     // .tp_as_mapping = 0,
