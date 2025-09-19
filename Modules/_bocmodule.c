@@ -703,6 +703,7 @@ cown_set_value(shared_cown_t *cown, PyObject *val)
         < 0) {
         return -1;
     }
+    assert(serialised_val != NULL);
 
     // Delete the old value if it exists.
     if (cown->val != NULL) {
@@ -1235,6 +1236,7 @@ when_block_run(mod_state *m,
     PyObject *cowns = NULL;
     size_t initialised_cowns = 0;
     PyObject *retval = NULL;
+    PyObject *exception = NULL;
 
     func = _PyXIData_NewObject(serialised_func);
     if (func == NULL) {
@@ -1258,7 +1260,9 @@ when_block_run(mod_state *m,
 
         cown->cown = shared_cowns[i];
         cown_incref(cown->cown);
+        assert(cown->cown->val != NULL);
         cown->val = _PyXIData_NewObject(cown->cown->val);
+        assert(cown->cown->val != NULL);
         if (cown->val == NULL) {
             Py_DECREF(cown);
             error = true;
@@ -1273,9 +1277,21 @@ when_block_run(mod_state *m,
 
     retval = PyObject_Call(func, cowns, NULL);
     if (retval == NULL) {
-        assert(PyErr_Occurred());
+        // Set the exception in the ret_val_cown.
+        exception = PyErr_GetRaisedException();
+        assert(exception != NULL);
+        Py_INCREF(exception);
+
+        // Set the exception again to be able to print it.
+        PyErr_SetRaisedException(exception);
         PyErr_FormatUnraisable("BOC: Uncought exception in when block '%U'",
                                ((PyFunctionObject *)func)->func_name);
+
+        // Store the exception in `retval_cown`.
+        if (cown_set_value(retval_cown, exception) < 0) {
+            error = true;
+            goto finally;
+        }
     }
     else {
         if (cown_set_value(retval_cown, retval) < 0) {
@@ -1298,6 +1314,7 @@ finally:
 
     Py_XDECREF(func);
     Py_XDECREF(retval);
+    Py_XDECREF(exception);
 
     if (cowns != NULL) {
         for (size_t i = 0; i < initialised_cowns; i++) {

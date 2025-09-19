@@ -54,7 +54,7 @@ def mul2(c1: Cown):
 ```
 
 For convenience, a cown is automatically created with the same name as the decorated function,
-holding the return value of the when-block:
+holding the return value (or exception) of the when-block:
 
 ```python
 @when(c1, mul2)
