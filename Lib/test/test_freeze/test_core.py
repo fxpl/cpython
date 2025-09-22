@@ -1,5 +1,5 @@
 import unittest
-from immutable import freeze, NotFreezable, isfrozen
+from immutable import freeze, NotFreezable, isfrozen, register_freezable
 
 from .test_common import BaseNotFreezableTest, BaseObjectTest
 
@@ -27,6 +27,7 @@ class TestBasicObject(BaseObjectTest):
         pass
 
     def __init__(self, *args, **kwargs):
+        register_freezable(self.C)
         BaseObjectTest.__init__(self, *args, obj=self.C(), **kwargs)
 
 
@@ -47,6 +48,7 @@ class TestList(BaseObjectTest):
         pass
 
     def __init__(self, *args, **kwargs):
+        register_freezable(self.C)
         obj = [self.C(), self.C(), 1, "two", None]
         BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
 
@@ -108,6 +110,7 @@ class TestDict(BaseObjectTest):
         pass
 
     def __init__(self, *args, **kwargs):
+        register_freezable(self.C)
         obj = {1: self.C(), "two": self.C()}
         BaseObjectTest.__init__(self, *args, obj=obj, **kwargs)
 
@@ -179,6 +182,7 @@ class TestMultiLevel(unittest.TestCase):
         class C:
             const = 1
 
+        register_freezable(C)
         self.obj = C()
         self.obj.a = C()
         self.obj.a.b = "c"
