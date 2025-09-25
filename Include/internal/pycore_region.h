@@ -60,6 +60,10 @@ typedef struct _Py_region_data {
      * - 0b00 => The pointer points to the parent region (or is null)
      * - 0b01 => The pointer points to the cown owing this region
      * - 0b10 => The pointer points to the parent in the union-find forest
+     * - 0b11 => The pointer points to the parent in the union-fing forest, but the
+     *           merge is not confirmed yet. Meaning references should not updated.
+     *
+     * Use the macros in `regions.c` to access these
      */
     Py_uintptr_t owner;
 
@@ -84,6 +88,9 @@ typedef struct _Py_region_data {
     _Py_ownership_invariant_region_data invariant_data;
 #endif
 } _Py_region_data;
+
+typedef Py_uintptr_t PyRegion_staged_ref_t;
+#define PyRegion_staged_ref_ERR 0
 
 PyAPI_FUNC(Py_region_t) _PyRegion_GetSlow(PyObject *obj);
 
@@ -136,6 +143,11 @@ PyAPI_FUNC(int) _PyRegion_SignalImmutable(PyObject *obj);
 #define _PyRegion_COUNT_ARGS(...) _PyRegion__COUNT_ARGS(__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
 #define _PyRegion_MAX_ARG_COUNT 16
 
+PyAPI_FUNC(PyRegion_staged_ref_t) _PyRegion_StageRef(PyObject *src, PyObject *tgt);
+PyAPI_FUNC(void) _PyRegion_ResetStagedRef(PyRegion_staged_ref_t staged_ref);
+PyAPI_FUNC(void) _PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref);
+#define _PyRegion_STAGEREF(src, tgt) _PyRegion_StageRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+
 PyAPI_FUNC(int) _PyRegion_AddRef(PyObject *src, PyObject *tgt);
 PyAPI_FUNC(int) _PyRegion_AddRefs(PyObject *src, int tgt_count, ...);
 #define _PyRegion_ADDREF(src, tgt) _PyRegion_AddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
@@ -147,7 +159,7 @@ PyAPI_FUNC(int) _PyRegion_RemoveRef(PyObject *src, PyObject *tgt);
 PyAPI_FUNC(int) _PyRegion_AddLocalRef(PyObject *tgt);
 PyAPI_FUNC(int) _PyRegion_AddLocalRefs(int tgt_count, ...);
 #define _PyRegion_ADDLOCALREF(tgt) _PyRegion_AddLocalRef(_PyObject_CAST(tgt))
-#define _PyRegion_ADDLOCALREFS(tgt) _PyRegion_AddLocalRefs(_PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+#define _PyRegion_ADDLOCALREFS(...) _PyRegion_AddLocalRefs(_PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 PyAPI_FUNC(int) _PyRegion_RemoveLocalRef(PyObject *tgt);
 #define _PyRegion_REMOVELOCALREF(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))

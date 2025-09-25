@@ -24,16 +24,25 @@
 #define OPEM_TICK_DIRTY 1
 
 /* Macros to access the owner and check for tags */
-#define OWNER_TAG_COWN              ((Py_uintptr_t)0x1)
-#define OWNER_TAG_MERGED            ((Py_uintptr_t)0x2)
-#define OWNER_PTR_MASK              (~(OWNER_TAG_COWN | OWNER_TAG_MERGED))
+#define OWNER_TAG_COWN              ((Py_uintptr_t)0b01)
+#define OWNER_TAG_MERGED            ((Py_uintptr_t)0b10)
+#define OWNER_TAG_MERGE_PENDING     ((Py_uintptr_t)0b11)
+#define OWNER_TAG_MASK              (OWNER_TAG_COWN | OWNER_TAG_MERGED)
+#define OWNER_PTR_MASK              (~OWNER_TAG_MASK)
 #define GET_OWNER_WITH_TAG(data)    (((_Py_region_data*)(data))->owner)
 #define GET_OWNER_PTR(data)         (GET_OWNER_WITH_TAG(data) & OWNER_PTR_MASK)
-#define HAS_OWNER_TAG(data, tag)    (GET_OWNER_WITH_TAG(data) & tag)
+#define HAS_OWNER_TAG(data, tag)    ((GET_OWNER_WITH_TAG(data) & OWNER_TAG_MASK) == tag)
 
 /* Helper macros */
 #define ASSERT_IS_UNION_ROOT(region) assert(!HAS_DATA(region) || !HAS_OWNER_TAG(region, OWNER_TAG_MERGED))
 #define ASSERT_REGION_HAS_NO_TAG(region) assert((region & OWNER_PTR_MASK) == region)
+
+#define STAGED_REF_NOP_MERGE            ((Py_uintptr_t)0xbeef)
+#define STAGED_REF_LRC_TAG              ((Py_uintptr_t)0x1)
+#define STAGED_TAG_MASK                 (STAGED_REF_LRC_TAG)
+#define STAGED_PTR_MASK                 (~STAGED_REF_LRC_TAG)
+#define STAGED_HAS_TAG(staged, tag)     ((staged & STAGED_TAG_MASK) == tag)
+#define STAGED_AS_PTR(staged)           (staged & STAGED_PTR_MASK)
 
 // Prototyes
 static int regiondata_inc_osc(Py_region_t region);
@@ -118,10 +127,16 @@ static void regiondata_dec_rc(Py_region_t region) {
 
 /* Returns the root of the union-find tree that the given region is a part of
  */
-static Py_region_t regiondata_union_root(Py_region_t region) {
+static Py_region_t regiondata_union_root(Py_region_t region, bool *update_region) {
     // Regions without data are always roots of the union-find forest
     if (!HAS_DATA(region)) {
         return region;
+    }
+
+    // Act like the merge worked out
+    if (HAS_OWNER_TAG(region, OWNER_TAG_MERGE_PENDING)) {
+        *update_region = false;
+        return regiondata_union_root(GET_OWNER_PTR(region), update_region);
     }
 
     // Return if this if the root of the union-find
@@ -171,6 +186,14 @@ static int regiondata_union_merge(
     assert(HAS_DATA(source));
     ASSERT_IS_UNION_ROOT(source);
     ASSERT_IS_UNION_ROOT(target);
+
+    // Clear the pending tag if present
+    _Py_region_data *source_data = (_Py_region_data*) source;
+    if (HAS_OWNER_TAG(source, OWNER_TAG_MERGE_PENDING)) {
+        Py_region_t pending_target = GET_OWNER_PTR(source);
+        regiondata_dec_rc(pending_target);
+        source_data->owner = NULL_REGION;
+    }
     ASSERT_REGION_HAS_NO_TAG(target);
 
     int result = 0;
@@ -213,7 +236,6 @@ static int regiondata_union_merge(
     }
 
     // Set the owner to the target with the merged tag
-    _Py_region_data *source_data = (_Py_region_data*) source;
     regiondata_inc_rc(target);
     source_data->owner = target | OWNER_TAG_MERGED;
 
@@ -652,12 +674,13 @@ static Py_region_t regiondata_get_parent(Py_region_t region) {
     }
 
     // Get the parent
+    bool update_region = true;
     Py_region_t parent_field = GET_OWNER_PTR(region);
-    Py_region_t parent_root = regiondata_union_root(parent_field);
+    Py_region_t parent_root = regiondata_union_root(parent_field, &update_region);
 
     // If the parent was merged with another region we want to update the
     // owner to point at the root.
-    if (parent_field != parent_root) {
+    if (parent_field != parent_root && update_region) {
         _Py_region_data* data = (_Py_region_data*) region;
         data->owner = parent_root;
         regiondata_inc_rc(parent_root);
@@ -748,9 +771,9 @@ typedef struct AddRegionState {
 
 static
 int _add_to_region_check_obj(PyObject *obj, void *state_void) {
-    // Sanity Check, all objects given to this function should be in the
-    // merge region
-    assert(_PyRegion_Get(obj) == ((AddRegionState*)state_void)->merge_region);
+    // Sanity Check, all objects given to this function should act like they're
+    // in the subject region
+    assert(_PyRegion_Get(obj) == ((AddRegionState*)state_void)->subject_region);
 
     // `_add_to_region_visit` already does the filtering and ensures that only
     // new objects are traversed. This is therefore a no-op indicateing that
@@ -813,7 +836,7 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     // The target was previously in the local region but has already been
     // added to the merge region by a previous iteration. This therefore only
     // adjusts the LRC
-    if (tgt_region == state->merge_region || tgt_region == state->subject_region) {
+    if (tgt_region == state->subject_region) {
         // The LRC of the merge region can go negative by this operation as
         // this also includes references which should be subtract from the
         // LRC of the subject region.
@@ -868,20 +891,20 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
  *
  * The `src` argument is only used for error reporting and can be NULL.
  */
-int regiondata_add_objects(Py_region_t subject_region, PyObject* src, int tgt_count, PyObject **targets)
+PyRegion_staged_ref_t regiondata_stage_objects(Py_region_t subject_region, PyObject* src, int tgt_count, PyObject **targets)
 {
     // Invariant:
     ASSERT_IS_UNION_ROOT(subject_region);
-
     if (tgt_count == 0) {
-        return 0;
+        return STAGED_REF_NOP_MERGE;
     }
 
-    // Enable invariant
+    // Enable and pause invariant
     SUCCEEDS(_PyOwnership_invariant_enable());
     SUCCEEDS(_PyOwnership_invariant_pause());
 
     int result = 0;
+    PyRegion_staged_ref_t staged_res = STAGED_REF_NOP_MERGE;
 
     // Initialize the state
     AddRegionState add_state;
@@ -891,6 +914,9 @@ int regiondata_add_objects(Py_region_t subject_region, PyObject* src, int tgt_co
         PyErr_NoMemory();
         goto error;
     }
+    _Py_region_data* merge_data = (_Py_region_data*)add_state.merge_region;
+    regiondata_inc_rc(subject_region);
+    merge_data->owner = (subject_region | OWNER_TAG_MERGE_PENDING);
 
     for (int tgt_i = 0; tgt_i < tgt_count; tgt_i += 1) {
         PyObject *tgt = targets[tgt_i];
@@ -898,7 +924,7 @@ int regiondata_add_objects(Py_region_t subject_region, PyObject* src, int tgt_co
         // Manually call visit with `tgt` as the target to ensure that it is
         // correctly added to the merge region or throws an error
         result = _add_to_region_visit(src, tgt, (void*)&add_state);
-    
+
         switch (result)
         {
         case Py_OWNERSHIP_TRAVERSE_VISIT:
@@ -920,24 +946,95 @@ int regiondata_add_objects(Py_region_t subject_region, PyObject* src, int tgt_co
         }
     }
 
-    // Merge the region into the subject region since all objects could be added
-    SUCCEEDS(regiondata_union_merge(add_state.merge_region, subject_region));
+    // Return the staged region to be commited later
+    staged_res = (PyRegion_staged_ref_t)add_state.merge_region;
     goto finally;
 
 error:
     // Merge the region into local, to undo any ownership changes
     regiondata_union_merge(add_state.merge_region, _Py_LOCAL_REGION);
-    result = -1;
+    staged_res = PyRegion_staged_ref_ERR;
+    SUCCEEDS(_PyOwnership_invariant_resume());
 
 finally:
-    SUCCEEDS(_PyOwnership_invariant_resume());
-    regiondata_dec_rc(add_state.merge_region);
-    return result;
+    return staged_res;
+}
+
+
+void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
+    assert(staged_ref != PyRegion_staged_ref_ERR);
+    int res = 0;
+
+    // Everything is fine
+    if (staged_ref == STAGED_REF_NOP_MERGE) {
+        return;
+    }
+
+    // The LRC has to be decremented
+    if (STAGED_HAS_TAG(staged_ref, STAGED_REF_LRC_TAG)) {
+        Py_region_t region = STAGED_AS_PTR(staged_ref);
+        int res = regiondata_dec_lrc(region);
+        assert(res == 0);
+        return;
+    }
+
+    // Merge the pending region into local
+    Py_region_t staged_region = STAGED_AS_PTR(staged_ref);
+    assert(HAS_OWNER_TAG(staged_region, OWNER_TAG_MERGE_PENDING));
+    Py_region_t target = GET_OWNER_PTR(staged_region);
+
+    // This should never fail
+    res = regiondata_union_merge(staged_region, _Py_LOCAL_REGION);
+    assert(res == 0);
+    regiondata_dec_rc(staged_region);
+
+    res = _PyOwnership_invariant_resume();
+    assert(res == 0);
+}
+
+void staged_ref_commit(PyRegion_staged_ref_t staged_ref) {
+    assert(staged_ref != PyRegion_staged_ref_ERR);
+
+    // Everything is fine
+    if (staged_ref == STAGED_REF_NOP_MERGE) {
+        return;
+    }
+
+    // The LRC was already incremented and can stay that way
+    if (STAGED_HAS_TAG(staged_ref, STAGED_REF_LRC_TAG)) {
+        return;
+    }
+
+    // Mark the region as merged
+    Py_region_t staged_region = STAGED_AS_PTR(staged_ref);
+    assert(HAS_OWNER_TAG(staged_region, OWNER_TAG_MERGE_PENDING));
+    Py_region_t target = GET_OWNER_PTR(staged_region);
+
+    // This should never fail
+    int res = regiondata_union_merge(staged_region, target);
+    assert(res == 0);
+    regiondata_dec_rc(staged_region);
+
+    res = _PyOwnership_invariant_resume();
+    assert(res == 0);
 }
 
 /* Simple wrapper to call `regiondata_add_object` with one target */
-int regiondata_add_object(Py_region_t subject_region, PyObject* src, PyObject *target) {
-    return regiondata_add_objects(subject_region, src, 1, &target);
+PyRegion_staged_ref_t regiondata_stage_object(Py_region_t subject_region, PyObject* src, PyObject *target) {
+    return regiondata_stage_objects(subject_region, src, 1, &target);
+}
+
+/* Simple wrapper to call `regiondata_add_object` with one target */
+PyRegion_staged_ref_t regiondata_add_object(Py_region_t subject_region, PyObject* src, PyObject *target) {
+    // Stage the references to be addeds
+    PyRegion_staged_ref_t staged_ref = regiondata_stage_object(subject_region, src, target);
+    if (staged_ref == PyRegion_staged_ref_ERR) {
+        return -1;
+    }
+
+    // Should always succeed
+    staged_ref_commit(staged_ref);
+    return 0;
 }
 
 /* ====================================
@@ -958,11 +1055,12 @@ Py_region_t _PyRegion_GetSlow(PyObject *obj) {
         return _Py_IMMUTABLE_REGION;
     }
 
-    Py_region_t region = regiondata_union_root(obj->ob_region);
+    bool update_region = true;
+    Py_region_t region = regiondata_union_root(obj->ob_region, &update_region);
 
     // Check if the region should be updated, this can happen if the object
     // region was merged into another region.
-    if (obj->ob_region != region) {
+    if (obj->ob_region != region && update_region) {
         _PyRegion_Set(obj, region);
     }
 
@@ -1060,7 +1158,7 @@ PyObject* _PyRegion_GetName(Py_region_t region) {
     }
 
     _Py_region_data *data = (_Py_region_data*)region;
-    Py_INCREF(data->name);
+    Py_XINCREF(data->name);
     return data->name;
 }
 
@@ -1158,6 +1256,36 @@ int _PyRegion_SignalImmutable(PyObject *obj) {
     regiondata_mark_as_dirty(region);
 
     return 0;
+}
+
+PyRegion_staged_ref_t _PyRegion_StageRef(PyObject *src, PyObject *tgt) {
+    Py_region_t src_region = _PyRegion_Get(src);
+    Py_region_t tgt_region = _PyRegion_Get(tgt);
+
+    if (src_region == tgt_region) {
+        // Intra-region references are always permitted and not tracket
+        return STAGED_REF_NOP_MERGE;
+    }
+    
+    if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
+        // References to immutable objects or cowns are always permitted
+        return STAGED_REF_NOP_MERGE;
+    }
+
+    if (IS_LOCAL_REGION(src_region)) {
+        regiondata_inc_lrc(tgt_region);
+        return (tgt_region | STAGED_REF_LRC_TAG);
+    }
+
+    return regiondata_stage_object(src_region, src, tgt);
+}
+
+void _PyRegion_ResetStagedRef(PyRegion_staged_ref_t staged_ref) {
+    staged_ref_reset(staged_ref);
+}
+
+void _PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref) {
+    staged_ref_commit(staged_ref);
 }
 
 /* Checks if a reference from `src` to `tgt` is allowed and updates the
@@ -1269,7 +1397,15 @@ int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
         return _add_local_refs(src, batch_size, batch);
     }
 
-    return regiondata_add_objects(src_region, src, batch_size, batch);
+    // Stage the references to be addeds
+    PyRegion_staged_ref_t staged_ref = regiondata_stage_objects(src_region, src, batch_size, batch);
+    if (staged_ref == PyRegion_staged_ref_ERR) {
+        return -1;
+    }
+
+    // Should always succeed
+    _PyRegion_CommitStagedRef(staged_ref);
+    return 0;
 }
 
 /* Removes the reference from `src` to `tgt` and updates the internal state of

@@ -1865,7 +1865,7 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
         assert(!_PyDict_HasSplitTable(mp));
         /* Insert into new slot. */
         assert(old_value == NULL);
-        // TODO(regions): xFrednet: WB?
+        // Write Barrier called by `insert_combined_dict`
         if (insert_combined_dict(interp, mp, hash, key, value) < 0) {
             goto Fail;
         }
@@ -2695,8 +2695,22 @@ setitem_lock_held(PyDictObject *mp, PyObject *key, PyObject *value)
 {
     assert(key);
     assert(value);
-    return setitem_take2_lock_held(mp,
+    // This NewRef sucks.... and basically asks where do we add the WB?
+    // Answer, we need a commit and
+
+    //Py_region_ref_tooken_t toc = _PyRegion_ReserveRef(mp, key, value);
+    // if (toc == 0) {
+    //     return 0;
+    // }
+    int result = setitem_take2_lock_held(mp,
                                    Py_NewRef(key), Py_NewRef(value));
+
+    // if (result) {
+    //     _PyRegion_AddReservedRef(toc);
+    // } else {
+    //     _PyRegion_DropReservedRef(toc);
+    // }
+    return result;
 }
 
 

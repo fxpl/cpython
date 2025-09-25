@@ -248,7 +248,7 @@ Region_traverse(PyObject *op, visitproc visit, void *arg)
     if (_PyRegion_IsBridge(op)) {
         PyObject *name = _PyRegion_GetName(_PyRegion_Get(op));
         Py_VISIT(name);
-        Py_DECREF(name);
+        Py_XDECREF(name);
     }
 
     // Visit the attribute dict
