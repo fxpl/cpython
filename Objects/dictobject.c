@@ -131,7 +131,7 @@ As a consequence of this, split keys have a maximum size of 16.
 #include "pycore_setobject.h"     // _PySet_NextEntry()
 #include "pycore_tuple.h"         // _PyTuple_Recycle()
 #include "pycore_unicodeobject.h" // _PyUnicode_InternImmortal()
-#include "pycore_region.h"        // _PyRegion_ADDREFS
+#include "region.h"               // _PyRegion_ADDREFS
 
 #include "stringlib/eq.h"                // unicode_eq()
 #include <stdbool.h>
@@ -445,7 +445,7 @@ dictkeys_incref(PyDictKeysObject *dk)
 }
 
 static inline void
-dictkeys_decref(PyInterpreterState *interp, PyDictKeysObject *dk, bool use_qsbr)
+dictkeys_decref(PyInterpreterState *interp, PyObject *dict, PyDictKeysObject *dk, bool use_qsbr)
 {
     if (FT_ATOMIC_LOAD_SSIZE_RELAXED(dk->dk_refcnt) < 0) {
         assert(FT_ATOMIC_LOAD_SSIZE_RELAXED(dk->dk_refcnt) == _Py_DICT_IMMORTAL_INITIAL_REFCNT);
@@ -460,6 +460,8 @@ dictkeys_decref(PyInterpreterState *interp, PyDictKeysObject *dk, bool use_qsbr)
             PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(dk);
             Py_ssize_t i, n;
             for (i = 0, n = dk->dk_nentries; i < n; i++) {
+                _PyRegion_RemoveRef(dict, entries[i].me_key);
+                _PyRegion_RemoveRef(dict, entries[i].me_value);
                 Py_XDECREF(entries[i].me_key);
                 Py_XDECREF(entries[i].me_value);
             }
@@ -468,6 +470,8 @@ dictkeys_decref(PyInterpreterState *interp, PyDictKeysObject *dk, bool use_qsbr)
             PyDictKeyEntry *entries = DK_ENTRIES(dk);
             Py_ssize_t i, n;
             for (i = 0, n = dk->dk_nentries; i < n; i++) {
+                _PyRegion_RemoveRef(dict, entries[i].me_key);
+                _PyRegion_RemoveRef(dict, entries[i].me_value);
                 Py_XDECREF(entries[i].me_key);
                 Py_XDECREF(entries[i].me_value);
             }
@@ -877,7 +881,7 @@ new_dict(PyInterpreterState *interp,
     if (mp == NULL) {
         mp = PyObject_GC_New(PyDictObject, &PyDict_Type);
         if (mp == NULL) {
-            dictkeys_decref(interp, keys, false);
+            dictkeys_decref(interp, NULL, keys, false);
             if (free_values_on_failure) {
                 free_values(values, false);
             }
@@ -1731,11 +1735,6 @@ insert_combined_dict(PyInterpreterState *interp, PyDictObject *mp,
         }
     }
 
-    // Regions Write Barrier
-    if (_PyRegion_ADDREFS(mp, key, value) != 0) {
-        return -1;
-    }
-
     _PyDict_NotifyEvent(interp, PyDict_EVENT_ADDED, mp, key, value);
     FT_ATOMIC_STORE_UINT32_RELAXED(mp->ma_keys->dk_version, 0);
 
@@ -1807,6 +1806,7 @@ insert_split_value(PyInterpreterState *interp, PyDictObject *mp, PyObject *key, 
     else {
         _PyDict_NotifyEvent(interp, PyDict_EVENT_MODIFIED, mp, key, value);
         STORE_SPLIT_VALUE(mp, ix, Py_NewRef(value));
+        _PyRegion_REMOVEREF(mp, old_value);
         // old_value should be DECREFed after GC track checking is done, if not, it could raise a segmentation fault,
         // when dict only holds the strong reference to value in ep->me_value.
         Py_DECREF(old_value);
@@ -2000,11 +2000,12 @@ build_indices_unicode(PyDictKeysObject *keys, PyDictUnicodeEntry *ep, Py_ssize_t
 }
 
 static void
-invalidate_and_clear_inline_values(PyDictValues *values)
+invalidate_and_clear_inline_values(PyObject *dict, PyDictValues *values)
 {
     assert(values->embedded);
     FT_ATOMIC_STORE_UINT8(values->valid, 0);
     for (int i = 0; i < values->capacity; i++) {
+        _PyRegion_RemoveRef(dict, values->values[i]);
         FT_ATOMIC_STORE_PTR_RELEASE(values->values[i], NULL);
     }
 }
@@ -2095,12 +2096,12 @@ dictresize(PyInterpreterState *interp, PyDictObject *mp,
         }
         UNLOCK_KEYS(oldkeys);
         set_keys(mp, newkeys);
-        dictkeys_decref(interp, oldkeys, IS_DICT_SHARED(mp));
+        dictkeys_decref(interp, _PyObject_CAST(mp), oldkeys, IS_DICT_SHARED(mp));
         set_values(mp, NULL);
         if (oldvalues->embedded) {
             assert(oldvalues->embedded == 1);
             assert(oldvalues->valid == 1);
-            invalidate_and_clear_inline_values(oldvalues);
+            invalidate_and_clear_inline_values(_PyObject_CAST(mp), oldvalues);
         }
         else {
             free_values(oldvalues, IS_DICT_SHARED(mp));
@@ -2665,9 +2666,33 @@ int
 _PyDict_SetItem_Take2(PyDictObject *mp, PyObject *key, PyObject *value)
 {
     int res;
+
+    // Check if the new references can be created
+    PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
+    PyRegion_staged_ref_t staged_value = PyRegion_staged_ref_ERR;
+    staged_key = _PyRegion_STAGEREF(mp, key);
+    staged_value = _PyRegion_STAGEREF(mp, value);
+    if (staged_key == PyRegion_staged_ref_ERR || staged_value == PyRegion_staged_ref_ERR) {
+        goto Fail;
+    }
+
+    // Insert the value if possible
     Py_BEGIN_CRITICAL_SECTION(mp);
     res = setitem_take2_lock_held(mp, key, value);
     Py_END_CRITICAL_SECTION();
+    if (res != 0) {
+        goto Fail;
+    }
+
+    _PyRegion_CommitStagedRef(staged_key);
+    _PyRegion_CommitStagedRef(staged_value);
+    return 0;
+
+Fail:
+    _PyRegion_ResetStagedRef(staged_key);
+    _PyRegion_ResetStagedRef(staged_value);
+    return res;
+
     return res;
 }
 
@@ -2695,22 +2720,29 @@ setitem_lock_held(PyDictObject *mp, PyObject *key, PyObject *value)
 {
     assert(key);
     assert(value);
-    // This NewRef sucks.... and basically asks where do we add the WB?
-    // Answer, we need a commit and
 
-    //Py_region_ref_tooken_t toc = _PyRegion_ReserveRef(mp, key, value);
-    // if (toc == 0) {
-    //     return 0;
-    // }
-    int result = setitem_take2_lock_held(mp,
-                                   Py_NewRef(key), Py_NewRef(value));
+    // Check if the new references can be created
+    PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
+    PyRegion_staged_ref_t staged_value = PyRegion_staged_ref_ERR;
+    staged_key = _PyRegion_STAGEREF(mp, key);
+    staged_value = _PyRegion_STAGEREF(mp, value);
+    if (staged_key == PyRegion_staged_ref_ERR || staged_value == PyRegion_staged_ref_ERR) {
+        goto Fail;
+    }
 
-    // if (result) {
-    //     _PyRegion_AddReservedRef(toc);
-    // } else {
-    //     _PyRegion_DropReservedRef(toc);
-    // }
-    return result;
+    // Insert the value if possible
+    if (setitem_take2_lock_held(mp, Py_NewRef(key), Py_NewRef(value))) {
+        goto Fail;
+    }
+
+    _PyRegion_CommitStagedRef(staged_key);
+    _PyRegion_CommitStagedRef(staged_value);
+    return 0;
+
+Fail:
+    _PyRegion_ResetStagedRef(staged_key);
+    _PyRegion_ResetStagedRef(staged_value);
+    return -1;
 }
 
 
@@ -2719,11 +2751,35 @@ _PyDict_SetItem_KnownHash_LockHeld(PyDictObject *mp, PyObject *key, PyObject *va
                                    Py_hash_t hash)
 {
     PyInterpreterState *interp = _PyInterpreterState_GET();
-    if (mp->ma_keys == Py_EMPTY_KEYS) {
-        return insert_to_emptydict(interp, mp, Py_NewRef(key), hash, Py_NewRef(value));
+    int res = -1;
+
+    // Check if the new references can be created
+    PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
+    PyRegion_staged_ref_t staged_value = PyRegion_staged_ref_ERR;
+    staged_key = _PyRegion_STAGEREF(mp, key);
+    staged_value = _PyRegion_STAGEREF(mp, value);
+    if (staged_key == PyRegion_staged_ref_ERR || staged_value == PyRegion_staged_ref_ERR) {
+        goto Fail;
     }
-    /* insertdict() handles any resizing that might be necessary */
-    return insertdict(interp, mp, Py_NewRef(key), hash, Py_NewRef(value));
+
+    if (mp->ma_keys == Py_EMPTY_KEYS) {
+        res = insert_to_emptydict(interp, mp, Py_NewRef(key), hash, Py_NewRef(value));
+    } else {
+        /* insertdict() handles any resizing that might be necessary */
+        res = insertdict(interp, mp, Py_NewRef(key), hash, Py_NewRef(value));
+    }
+    if (res != 0) {
+        goto Fail;
+    }
+
+    _PyRegion_CommitStagedRef(staged_key);
+    _PyRegion_CommitStagedRef(staged_value);
+    return 0;
+
+Fail:
+    _PyRegion_ResetStagedRef(staged_key);
+    _PyRegion_ResetStagedRef(staged_value);
+    return -1;
 }
 
 int
@@ -2799,8 +2855,10 @@ delitem_common(PyDictObject *mp, Py_hash_t hash, Py_ssize_t ix,
             STORE_VALUE(ep, NULL);
             STORE_HASH(ep, 0);
         }
+        _PyRegion_RemoveRef(_PyObject_CAST(mp), old_key);
         Py_DECREF(old_key);
     }
+    _PyRegion_RemoveRef(_PyObject_CAST(mp), old_value);
     Py_DECREF(old_value);
 
     ASSERT_CONSISTENT(mp);
@@ -2949,11 +3007,13 @@ clear_lock_held(PyObject *op)
     if (oldvalues == NULL) {
         set_keys(mp, Py_EMPTY_KEYS);
         assert(oldkeys->dk_refcnt == 1);
-        dictkeys_decref(interp, oldkeys, IS_DICT_SHARED(mp));
+        dictkeys_decref(interp, _PyObject_CAST(mp), oldkeys, IS_DICT_SHARED(mp));
     }
     else {
         n = oldkeys->dk_nentries;
         for (i = 0; i < n; i++) {
+            // This should never fail
+            _PyRegion_RemoveRef(op, oldvalues->values[i]);
             Py_CLEAR(oldvalues->values[i]);
         }
         if (oldvalues->embedded) {
@@ -2963,7 +3023,7 @@ clear_lock_held(PyObject *op)
             set_values(mp, NULL);
             set_keys(mp, Py_EMPTY_KEYS);
             free_values(oldvalues, IS_DICT_SHARED(mp));
-            dictkeys_decref(interp, oldkeys, false);
+            dictkeys_decref(interp, _PyObject_CAST(mp), oldkeys, false);
         }
     }
     ASSERT_CONSISTENT(mp);
@@ -3236,14 +3296,30 @@ dict_dict_fromkeys(PyInterpreterState *interp, PyDictObject *mp,
         return NULL;
     }
 
+    PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
+    PyRegion_staged_ref_t staged_value = PyRegion_staged_ref_ERR;
     while (_PyDict_Next(iterable, &pos, &key, &oldvalue, &hash)) {
-        if (insertdict(interp, mp,
-                        Py_NewRef(key), hash, Py_NewRef(value))) {
-            Py_DECREF(mp);
-            return NULL;
+        // Check if the new references can be created
+        staged_key = _PyRegion_STAGEREF(mp, key);
+        staged_value = _PyRegion_STAGEREF(mp, value);
+        if (staged_key == PyRegion_staged_ref_ERR || staged_value == PyRegion_staged_ref_ERR) {
+            goto Fail;
         }
+
+        if (insertdict(interp, mp, Py_NewRef(key), hash, Py_NewRef(value))) {
+            goto Fail;
+        }
+
+        _PyRegion_CommitStagedRef(staged_key);
+        _PyRegion_CommitStagedRef(staged_value);
     }
     return mp;
+
+Fail:
+    _PyRegion_ResetStagedRef(staged_key);
+    _PyRegion_ResetStagedRef(staged_value);
+    Py_DECREF(mp);
+    return NULL;
 }
 
 static PyDictObject *
@@ -3262,6 +3338,7 @@ dict_set_fromkeys(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(iterable);
+    // FIXME(regions): xFrednet: Write Barrier is missing because FML
     while (_PySet_NextEntryRef(iterable, &pos, &key, &hash)) {
         if (insertdict(interp, mp, key, hash, Py_NewRef(value))) {
             Py_DECREF(mp);
@@ -3368,11 +3445,11 @@ dict_dealloc(PyObject *self)
             }
             free_values(values, false);
         }
-        dictkeys_decref(interp, keys, false);
+        dictkeys_decref(interp, _PyObject_CAST(mp), keys, false);
     }
     else if (keys != NULL) {
         assert(keys->dk_refcnt == 1 || keys == Py_EMPTY_KEYS);
-        dictkeys_decref(interp, keys, false);
+        dictkeys_decref(interp, _PyObject_CAST(mp), keys, false);
     }
     if (Py_IS_TYPE(mp, &PyDict_Type)) {
         _Py_FREELIST_FREE(dicts, mp, Py_TYPE(mp)->tp_free);
@@ -3906,7 +3983,7 @@ dict_dict_merge(PyInterpreterState *interp, PyDictObject *mp, PyDictObject *othe
                 return -1;
 
             ensure_shared_on_resize(mp);
-            dictkeys_decref(interp, mp->ma_keys, IS_DICT_SHARED(mp));
+            dictkeys_decref(interp, _PyObject_CAST(mp), mp->ma_keys, IS_DICT_SHARED(mp));
             set_keys(mp, keys);
             STORE_USED(mp, other->ma_used);
             ASSERT_CONSISTENT(mp);
@@ -3939,6 +4016,18 @@ dict_dict_merge(PyInterpreterState *interp, PyDictObject *mp, PyDictObject *othe
 
     while (_PyDict_Next((PyObject*)other, &pos, &key, &value, &hash)) {
         int err = 0;
+
+        // Check if the new references can be created
+        PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
+        PyRegion_staged_ref_t staged_value = PyRegion_staged_ref_ERR;
+        staged_key = _PyRegion_STAGEREF(mp, key);
+        staged_value = _PyRegion_STAGEREF(mp, value);
+        if (staged_key == PyRegion_staged_ref_ERR || staged_value == PyRegion_staged_ref_ERR) {
+            _PyRegion_ResetStagedRef(staged_key);
+            _PyRegion_ResetStagedRef(staged_value);
+            return -1;
+        }
+
         Py_INCREF(key);
         Py_INCREF(value);
         if (override == 1) {
@@ -3954,6 +4043,8 @@ dict_dict_merge(PyInterpreterState *interp, PyDictObject *mp, PyDictObject *othe
             else if (err > 0) {
                 if (override != 0) {
                     _PyErr_SetKeyError(key);
+                    _PyRegion_ResetStagedRef(staged_key);
+                    _PyRegion_ResetStagedRef(staged_value);
                     Py_DECREF(value);
                     Py_DECREF(key);
                     return -1;
@@ -3963,8 +4054,11 @@ dict_dict_merge(PyInterpreterState *interp, PyDictObject *mp, PyDictObject *othe
         }
         Py_DECREF(value);
         Py_DECREF(key);
-        if (err != 0)
+        if (err != 0) {
+            _PyRegion_ResetStagedRef(staged_key);
+            _PyRegion_ResetStagedRef(staged_value);
             return -1;
+        }
 
         if (orig_size != other->ma_keys->dk_nentries) {
             PyErr_SetString(PyExc_RuntimeError,
@@ -7308,11 +7402,12 @@ PyObject_VisitManagedDict(PyObject *obj, visitproc visit, void *arg)
 }
 
 static void
-clear_inline_values(PyDictValues *values)
+clear_inline_values(PyObject *dict, PyDictValues *values)
 {
     if (values->valid) {
         FT_ATOMIC_STORE_UINT8(values->valid, 0);
         for (Py_ssize_t i = 0; i < values->capacity; i++) {
+            _PyRegion_RemoveRef(dict, values->values[i]);
             Py_CLEAR(values->values[i]);
         }
     }
@@ -7328,7 +7423,7 @@ set_dict_inline_values(PyObject *obj, PyDictObject *new_dict)
     Py_XINCREF(new_dict);
     FT_ATOMIC_STORE_PTR(_PyObject_ManagedDictPointer(obj)->dict, new_dict);
 
-    clear_inline_values(values);
+    clear_inline_values(obj, values);
 }
 
 #ifdef Py_GIL_DISABLED
@@ -7513,7 +7608,7 @@ detach_dict_from_object(PyDictObject *mp, PyObject *obj)
     }
     mp->ma_values = values;
 
-    invalidate_and_clear_inline_values(_PyObject_InlineValues(obj));
+    invalidate_and_clear_inline_values(_PyObject_CAST(mp), _PyObject_InlineValues(obj));
 
     assert(_PyObject_InlineValuesConsistencyCheck(obj));
     ASSERT_CONSISTENT(mp);
@@ -7532,7 +7627,7 @@ PyObject_ClearManagedDict(PyObject *obj)
             // We have no materialized dictionary and inline values
             // that just need to be cleared.
             // No dict to clear, we're done
-            clear_inline_values(_PyObject_InlineValues(obj));
+            clear_inline_values(obj, _PyObject_InlineValues(obj));
             return;
         }
         else if (FT_ATOMIC_LOAD_PTR_RELAXED(dict->ma_values) ==
@@ -7556,9 +7651,9 @@ PyObject_ClearManagedDict(PyObject *obj)
                 PyDictKeysObject *oldkeys = dict->ma_keys;
                 set_keys(dict, Py_EMPTY_KEYS);
                 dict->ma_values = NULL;
-                dictkeys_decref(interp, oldkeys, IS_DICT_SHARED(dict));
+                dictkeys_decref(interp, _PyObject_CAST(dict), oldkeys, IS_DICT_SHARED(dict));
                 STORE_USED(dict, 0);
-                clear_inline_values(_PyObject_InlineValues(obj));
+                clear_inline_values(_PyObject_CAST(dict), _PyObject_InlineValues(obj));
                 Py_END_CRITICAL_SECTION();
             }
         }
@@ -7692,7 +7787,7 @@ void
 _PyDictKeys_DecRef(PyDictKeysObject *keys)
 {
     PyInterpreterState *interp = _PyInterpreterState_GET();
-    dictkeys_decref(interp, keys, false);
+    dictkeys_decref(interp, NULL, keys, false);
 }
 
 static inline uint32_t

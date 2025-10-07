@@ -981,7 +981,6 @@ void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
     // Merge the pending region into local
     Py_region_t staged_region = STAGED_AS_PTR(staged_ref);
     assert(HAS_OWNER_TAG(staged_region, OWNER_TAG_MERGE_PENDING));
-    Py_region_t target = GET_OWNER_PTR(staged_region);
 
     // This should never fail
     res = regiondata_union_merge(staged_region, _Py_LOCAL_REGION);
@@ -1414,6 +1413,11 @@ int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
  * Returns 0 on success.
  */
 int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
+    if (tgt == NULL) {
+        return 0;
+    }
+
+
     Py_region_t src_region = _PyRegion_Get(src);
     Py_region_t tgt_region = _PyRegion_Get(tgt);
 
@@ -1424,6 +1428,14 @@ int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
 
     if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
         // References to immutable objects or cowns are always permitted
+        return 0;
+    }
+
+    // Mark the target region as dirty, if the source wasn't passed in.
+    // This can sadly happen with some old dictionary APIs which don't
+    // include the dict object
+    if (src == NULL) {
+        regiondata_mark_as_dirty(tgt_region);
         return 0;
     }
 
