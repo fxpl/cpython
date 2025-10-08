@@ -108,6 +108,8 @@ PyAPI_FUNC(PyObject*) _PyRegion_GetBridge(Py_region_t region);
 
 PyAPI_FUNC(int) _PyRegion_SignalImmutable(PyObject *obj);
 
+PyAPI_FUNC(void) _PyRegion_HackDirtyForPrototype(Py_region_t region);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7,6 +7,7 @@
 #include "pycore_pyerrors.h"
 #include "pycore_region.h"
 #include "pycore_runtime.h"    // _Py_ID
+#include "pycore_list.h"
 
 #include <stdbool.h>
 
@@ -51,6 +52,22 @@ static int regiondata_is_open(Py_region_t data);
 static Py_region_t regiondata_get_parent(Py_region_t region);
 static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent);
 static int regiondata_check_status(Py_region_t region);
+
+static PyObject* list_pop(PyObject* s){
+    PyObject* item;
+    Py_ssize_t size = PyList_Size(s);
+    if(size == 0){
+        return NULL;
+    }
+    item = PyList_GetItem(s, size - 1);
+    if(item == NULL){
+        return NULL;
+    }
+    if(PyList_SetSlice(s, size - 1, size, NULL)){
+        return NULL;
+    }
+    return item;
+}
 
 // This uses the given arguments to create and throw a `RegionError`
 static void throw_region_error(
@@ -330,6 +347,10 @@ static int regiondata_open(Py_region_t region) {
     } else if (regiondata_get_parent(region) != 0) {
         SUCCEEDS(regiondata_open(regiondata_get_parent(region)));
     }
+
+    // This is a hack, by marking every region as dirty we force
+    // every region to be closed by cleaning it.
+    _PyRegion_HackDirtyForPrototype(region);
 
     // Check for failure, which would leave the region closed
     return 0;
@@ -773,6 +794,7 @@ static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
 typedef struct AddRegionState {
     Py_region_t merge_region;
     Py_region_t subject_region;
+    PyObject *open_subregion_list;
 } AddRegionState;
 
 static
@@ -874,6 +896,8 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
         return Py_OWNERSHIP_TRAVERSE_ERR;
     }
 
+    // This region can become the parent of the target region, but this is
+    // not allowed to create a cycle
     if (regiondata_is_ancestor(state->subject_region, tgt_region)) {
         // TODO: Better error message
         throw_region_error("Regions are not allowed to create cycles in the ancestor tree", Py_None, src, tgt);
@@ -887,6 +911,13 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     //
     // `regiondata_set_parent` will also ensure that the `osc` is updated.
     regiondata_set_parent(tgt_region, state->merge_region);
+    if (state->open_subregion_list && regiondata_is_open(tgt_region)) {
+        if (_PyList_AppendTakeRef(
+            _PyList_CAST(state->open_subregion_list), Py_NewRef(tgt)))
+        {
+            return Py_OWNERSHIP_TRAVERSE_ERR;
+        }
+    }
 
     // The object reference was accepted, but the target should not be traversed
     return Py_OWNERSHIP_TRAVERSE_SKIP;
@@ -897,7 +928,10 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
  *
  * The `src` argument is only used for error reporting and can be NULL.
  */
-PyRegion_staged_ref_t regiondata_stage_objects(Py_region_t subject_region, PyObject* src, int tgt_count, PyObject **targets)
+PyRegion_staged_ref_t regiondata_stage_objects(
+    Py_region_t subject_region, PyObject* src,
+    int tgt_count, PyObject **targets,
+    PyObject* open_subregion_list)
 {
     // Invariant:
     ASSERT_IS_UNION_ROOT(subject_region);
@@ -916,6 +950,7 @@ PyRegion_staged_ref_t regiondata_stage_objects(Py_region_t subject_region, PyObj
     AddRegionState add_state;
     add_state.subject_region = subject_region;
     add_state.merge_region = regiondata_new();
+    add_state.open_subregion_list = open_subregion_list;
     if (add_state.merge_region == NULL_REGION) {
         PyErr_NoMemory();
         goto error;
@@ -960,12 +995,12 @@ error:
     // Merge the region into local, to undo any ownership changes
     regiondata_union_merge(add_state.merge_region, _Py_LOCAL_REGION);
     staged_res = PyRegion_staged_ref_ERR;
-    SUCCEEDS(_PyOwnership_invariant_resume());
+    // Ignoring the error, since an error will already be reported
+    _PyOwnership_invariant_resume();
 
 finally:
     return staged_res;
 }
-
 
 void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
     assert(staged_ref != PyRegion_staged_ref_ERR);
@@ -1026,7 +1061,7 @@ void staged_ref_commit(PyRegion_staged_ref_t staged_ref) {
 
 /* Simple wrapper to call `regiondata_add_object` with one target */
 PyRegion_staged_ref_t regiondata_stage_object(Py_region_t subject_region, PyObject* src, PyObject *target) {
-    return regiondata_stage_objects(subject_region, src, 1, &target);
+    return regiondata_stage_objects(subject_region, src, 1, &target, NULL);
 }
 
 /* Simple wrapper to call `regiondata_add_object` with one target */
@@ -1040,6 +1075,107 @@ PyRegion_staged_ref_t regiondata_add_object(Py_region_t subject_region, PyObject
     // Should always succeed
     staged_ref_commit(staged_ref);
     return 0;
+}
+
+int regiondata_try_close(PyObject* bridge) {
+    // Invariant
+    ASSERT_IS_UNION_ROOT(_PyRegion_Get(bridge));
+    assert(HAS_DATA(_PyRegion_Get(bridge)));
+
+    int result = 0;
+    PyObject *pending_list = NULL;
+
+    // We only need to close a region which is open
+    if (!regiondata_is_open(_PyRegion_Get(bridge))) {
+        return 0;
+    }
+
+    // Incrementing the RC of the bridge will ensure that we don't
+    // accidentally release a cown early
+    if (regiondata_inc_lrc(_PyRegion_Get(bridge))) {
+        return -1;
+    }
+    Py_INCREF(bridge);
+
+    // Enable and pause invariant
+    SUCCEEDS(_PyOwnership_invariant_enable());
+    SUCCEEDS(_PyOwnership_invariant_pause());
+
+    // Initialize the state
+    pending_list = PyList_New(1);
+    if (pending_list == NULL) {
+        goto error;
+    }
+    SUCCEEDS(_PyList_AppendTakeRef(_PyList_CAST(pending_list), Py_NewRef(bridge)));
+
+    while(PyList_Size(pending_list) != 0){
+        PyObject* item = list_pop(pending_list);
+        Py_region_t item_region = _PyRegion_Get(item);
+
+        // Store metadata for the new region
+        assert(HAS_DATA(item_region));
+        Py_region_t owner = ((_Py_region_data*)item_region)->owner;
+        ((_Py_region_data*)item_region)->owner = 0;
+        PyObject *name = ((_Py_region_data*)item_region)->name;
+        ((_Py_region_data*)item_region)->name = NULL;
+        bool was_open = regiondata_is_open(item_region);
+
+        // Merge the region into local
+        if (regiondata_union_merge(item_region, _Py_LOCAL_REGION)) {
+            regiondata_mark_as_dirty(item_region);
+            Py_DECREF(item);
+            goto error;
+        }
+
+        // Create the new clean region
+        Py_region_t clean_region = regiondata_new();
+        if (clean_region == NULL_REGION) {
+            Py_DECREF(item);
+            goto error;
+        }
+
+        PyRegion_staged_ref_t staged_ref = regiondata_stage_objects(
+            clean_region, NULL, 1, &item, pending_list);
+        if (staged_ref == PyRegion_staged_ref_ERR) {
+            Py_DECREF(item);
+            regiondata_dec_rc(clean_region);
+            goto error;
+        }
+        staged_ref_commit(staged_ref);
+
+        // FIXME(regions): Probably just manually make it clean, while this is
+        // the hacky implementation
+        assert(!regiondata_is_dirty(clean_region));
+
+        // Decrease the RC of item and the connected LRC
+        Py_DECREF(item);
+        SUCCEEDS(regiondata_dec_lrc(clean_region));
+
+        // Refill metadata.
+        ((_Py_region_data*)clean_region)->owner = owner;
+        ((_Py_region_data*)clean_region)->name = name;
+        if (!was_open && regiondata_is_open(clean_region)) {
+            regiondata_inc_osc(clean_region);
+        }
+
+        // Allow the region to be deallocated
+        regiondata_dec_rc(clean_region);
+    }
+
+    goto finally;
+error:
+    result = -1;
+
+finally:
+    // Decrease the LRC, which was incremented at the start to keep the region
+    // open. This shoudln't close the region, since the bridge object should
+    // only be borrowed.
+    regiondata_dec_lrc(_PyRegion_Get(bridge));
+    Py_DECREF(bridge);
+    Py_XDECREF(pending_list);
+    // Resume invariant
+    _PyOwnership_invariant_resume();
+    return result;
 }
 
 /* ====================================
@@ -1403,7 +1539,7 @@ int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
     }
 
     // Stage the references to be addeds
-    PyRegion_staged_ref_t staged_ref = regiondata_stage_objects(src_region, src, batch_size, batch);
+    PyRegion_staged_ref_t staged_ref = regiondata_stage_objects(src_region, src, batch_size, batch, NULL);
     if (staged_ref == PyRegion_staged_ref_ERR) {
         return -1;
     }
@@ -1511,6 +1647,10 @@ int _PyRegion_AddLocalRefs(int argc, ...) {
 
 int _PyRegion_RemoveLocalRef(PyObject *tgt) {
     return regiondata_dec_lrc(_PyRegion_Get(tgt));
+}
+
+void _PyRegion_HackDirtyForPrototype(Py_region_t region) {
+    regiondata_mark_as_dirty(region);
 }
 
 // TODO(regions): xFrednet: Write Barrier in: Bytecode
