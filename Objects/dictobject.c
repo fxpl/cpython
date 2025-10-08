@@ -1876,7 +1876,7 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
 
     if (old_value != value) {
         if (_PyRegion_ADDREFS(mp, value) != 0) {
-         goto Fail;
+            goto Fail;
         }
 
         _PyDict_NotifyEvent(interp, PyDict_EVENT_MODIFIED, mp, key, value);
@@ -2419,6 +2419,9 @@ _PyDict_GetItemRef_KnownHash(PyDictObject *op, PyObject *key, Py_hash_t hash, Py
 #ifdef Py_GIL_DISABLED
     *result = value;
 #else
+    if (_PyRegion_AddLocalRef(value)) {
+        return -1;
+    }
     *result = Py_NewRef(value);
 #endif
     return 1;  // key is present
@@ -2665,7 +2668,7 @@ setitem_take2_lock_held(PyDictObject *mp, PyObject *key, PyObject *value)
 int
 _PyDict_SetItem_Take2(PyDictObject *mp, PyObject *key, PyObject *value)
 {
-    int res;
+    int res = -1;
 
     // Check if the new references can be created
     PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
@@ -2692,8 +2695,6 @@ Fail:
     _PyRegion_ResetStagedRef(staged_key);
     _PyRegion_ResetStagedRef(staged_value);
     return res;
-
-    return res;
 }
 
 /* CAUTION: PyDict_SetItem() must guarantee that it won't resize the
@@ -2711,8 +2712,33 @@ PyDict_SetItem(PyObject *op, PyObject *key, PyObject *value)
     }
     assert(key);
     assert(value);
-    return _PyDict_SetItem_Take2((PyDictObject *)op,
+
+    int res;
+
+    // Check if the new references can be created
+    PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
+    PyRegion_staged_ref_t staged_value = PyRegion_staged_ref_ERR;
+    staged_key = _PyRegion_STAGEREF(op, key);
+    staged_value = _PyRegion_STAGEREF(op, value);
+    if (staged_key == PyRegion_staged_ref_ERR || staged_value == PyRegion_staged_ref_ERR) {
+        goto Fail;
+    }
+
+    res = _PyDict_SetItem_Take2((PyDictObject *)op,
                                  Py_NewRef(key), Py_NewRef(value));
+
+    if (res != 0) {
+        goto Fail;
+    }
+
+    _PyRegion_CommitStagedRef(staged_key);
+    _PyRegion_CommitStagedRef(staged_value);
+    return 0;
+
+Fail:
+    _PyRegion_ResetStagedRef(staged_key);
+    _PyRegion_ResetStagedRef(staged_value);
+    return res;
 }
 
 static int
@@ -3186,6 +3212,7 @@ _PyDict_Pop_KnownHash(PyDictObject *mp, PyObject *key, Py_hash_t hash,
         *result = old_value;
     }
     else {
+        _PyRegion_REMOVEREF(mp, old_value);
         Py_DECREF(old_value);
     }
     return 1;
@@ -3254,6 +3281,7 @@ PyDict_PopString(PyObject *op, const char *key, PyObject **result)
     }
 
     int res = PyDict_Pop(op, key_obj, result);
+    _PyRegion_REMOVEREF(op, key_obj);
     Py_DECREF(key_obj);
     return res;
 }
@@ -3384,6 +3412,7 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
 
     it = PyObject_GetIter(iterable);
     if (it == NULL){
+        // FIXME(regions): xFrednet: Does this need a WB?
         Py_DECREF(d);
         return NULL;
     }
@@ -3392,6 +3421,7 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
         Py_BEGIN_CRITICAL_SECTION(d);
         while ((key = PyIter_Next(it)) != NULL) {
             status = setitem_lock_held((PyDictObject *)d, key, value);
+            _PyRegion_REMOVEREF(d, key);
             Py_DECREF(key);
             if (status < 0) {
                 assert(PyErr_Occurred());
@@ -3403,6 +3433,7 @@ dict_iter_exit:;
     } else {
         while ((key = PyIter_Next(it)) != NULL) {
             status = PyObject_SetItem(d, key, value);
+            _PyRegion_REMOVEREF(d, key);
             Py_DECREF(key);
             if (status < 0)
                 goto Fail;
@@ -3411,10 +3442,12 @@ dict_iter_exit:;
 
     if (PyErr_Occurred())
         goto Fail;
+    _PyRegion_REMOVELOCALREF(it);
     Py_DECREF(it);
     return d;
 
 Fail:
+    _PyRegion_REMOVELOCALREF(it);
     Py_DECREF(it);
     Py_DECREF(d);
     return NULL;
@@ -3441,6 +3474,7 @@ dict_dealloc(PyObject *self)
     if (values != NULL) {
         if (values->embedded == 0) {
             for (i = 0, n = values->capacity; i < n; i++) {
+                _PyRegion_REMOVEREF(self, values->values[i]);
                 Py_XDECREF(values->values[i]);
             }
             free_values(values, false);
@@ -3491,11 +3525,21 @@ dict_repr_lock_held(PyObject *self)
     /* Do repr() on each key+value pair, and insert ": " between them.
        Note that repr may mutate the dict. */
     Py_ssize_t i = 0;
+    bool dec_value_lrc = true;
     int first = 1;
     while (_PyDict_Next((PyObject *)mp, &i, &key, &value, NULL)) {
         // Prevent repr from deleting key or value during key format.
         Py_INCREF(key);
         Py_INCREF(value);
+        if (_PyRegion_AddLocalRef(key)) {
+            // Clear `value` to prevent a the `_PyRegion_RemoveLocalRef` call
+            // during error handling.
+            Py_CLEAR(value);
+            goto error;
+        }
+        if (_PyRegion_AddLocalRef(value)) {
+            goto error;
+        }
 
         if (!first) {
             // Write ", "
@@ -3526,7 +3570,17 @@ dict_repr_lock_held(PyObject *self)
             goto error;
         }
 
+        if (_PyRegion_RemoveLocalRef(key)) {
+            // Clear the key to prevent a second remove ref call during
+            // error handling
+            Py_CLEAR(key);
+            goto error;
+        }
         Py_CLEAR(key);
+        if (_PyRegion_RemoveLocalRef(value)) {
+            Py_CLEAR(value);
+            goto error;
+        }
         Py_CLEAR(value);
     }
 
@@ -3541,6 +3595,8 @@ dict_repr_lock_held(PyObject *self)
 error:
     Py_ReprLeave((PyObject *)mp);
     PyUnicodeWriter_Discard(writer);
+    _PyRegion_RemoveLocalRef(key);
+    _PyRegion_RemoveLocalRef(value);
     Py_XDECREF(key);
     Py_XDECREF(value);
     return NULL;
@@ -3582,6 +3638,7 @@ dict_subscript(PyObject *self, PyObject *key)
         if (!PyDict_CheckExact(mp)) {
             /* Look up __missing__ method if we're a subclass. */
             PyObject *missing, *res;
+            // FIXME(region): xFrednet: Write barrier for `missing`
             missing = _PyObject_LookupSpecial(
                     (PyObject *)mp, &_Py_ID(__missing__));
             if (missing != NULL) {
@@ -3644,6 +3701,10 @@ keys_lock_held(PyObject *dict)
     PyObject *key;
     while (_PyDict_Next((PyObject*)mp, &pos, &key, NULL, NULL)) {
         assert(j < n);
+        if (_PyRegion_ADDLOCALREF(key)) {
+            Py_DECREF(v);
+            return NULL;
+        }
         PyList_SET_ITEM(v, j, Py_NewRef(key));
         j++;
     }
@@ -3693,6 +3754,10 @@ values_lock_held(PyObject *dict)
     PyObject *value;
     while (_PyDict_Next((PyObject*)mp, &pos, NULL, &value, NULL)) {
         assert(j < n);
+        if (_PyRegion_ADDLOCALREF(value)) {
+            Py_DECREF(v);
+            return NULL;
+        }
         PyList_SET_ITEM(v, j, Py_NewRef(value));
         j++;
     }
@@ -3730,6 +3795,9 @@ items_lock_held(PyObject *dict)
      */
   again:
     n = mp->ma_used;
+    // Pyrona: We know that the list is new and therefore in the local region.
+    // This allows us to skip some write barriers and only requires LRC increases
+    // when we populate this array.
     v = PyList_New(n);
     if (v == NULL)
         return NULL;
@@ -3755,6 +3823,10 @@ items_lock_held(PyObject *dict)
     while (_PyDict_Next((PyObject*)mp, &pos, &key, &value, NULL)) {
         assert(j < n);
         PyObject *item = PyList_GET_ITEM(v, j);
+        if (_PyRegion_ADDLOCALREFS(key, value)) {
+            Py_DECREF(v);
+            return NULL;
+        }
         PyTuple_SET_ITEM(item, 0, Py_NewRef(key));
         PyTuple_SET_ITEM(item, 1, Py_NewRef(value));
         j++;
@@ -3845,6 +3917,10 @@ dict_update(PyObject *self, PyObject *args, PyObject *kwds)
         Py_RETURN_NONE;
     return NULL;
 }
+
+// ************************************************************************
+// Pyrona Write barrier barrier, above should be done
+// ************************************************************************
 
 /* Update unconditionally replaces existing items.
    Merge has a 3rd argument 'override'; if set, it acts like Update,

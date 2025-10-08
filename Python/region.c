@@ -540,12 +540,18 @@ static int regiondata_dec_lrc(Py_region_t region) {
         return 0;
     }
 
-    // Update the OSC
+    // Update the LRC
     _Py_region_data *data = (_Py_region_data*)region;
-    data->lrc -= 1;
+    if (data == 0) {
+        // Open the region, to mark it as dirty
+        SUCCEEDS(regiondata_open(region));
+        regiondata_mark_as_dirty(region);
+    } else {
+        data->lrc -= 1;
 
-    // Check the region state to determine if it should be closed.
-    SUCCEEDS(regiondata_check_close(region));
+        // Check the region state to determine if it should be closed.
+        SUCCEEDS(regiondata_check_close(region));
+    }
 
     // Return 0 on success
     return 0;
