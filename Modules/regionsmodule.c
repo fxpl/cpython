@@ -175,9 +175,31 @@ static PyObject* Region_owns(PyObject *self, PyObject *other) {
     return PyBool_FromLong(self_region == other_region);
 }
 
+static PyObject* Region_try_close(PyObject *op) {
+    const Py_ssize_t LRC_COUNT_FROM_STACK = 1;
+
+    CHECK_BRIDGE(op);
+
+    if (_PyRegion_Clean(_PyRegion_Get(op))) {
+        return NULL;
+    }
+
+    RegionObject *self = RegionObject_CAST(op);
+    Py_region_t old_stored = self->region;
+    self->region = _PyRegion_Get(self);
+    _PyRegion_IncRc(self->region);
+    _PyRegion_DecRc(old_stored);
+
+    int closed_with_stack_clear =
+        _PyRegion_ClosesWithLrc(_PyRegion_Get(self), LRC_COUNT_FROM_STACK);
+    return PyBool_FromLong(closed_with_stack_clear);
+}
+
 static PyMethodDef Region_methods[] = {
     {"owns", _PyCFunction_CAST(Region_owns), METH_O,
         "Check if object is owned by the region."},
+    {"try_close", _PyCFunction_CAST(Region_try_close), METH_NOARGS,
+        "Cleans the region and returns `True` if it can be closed."},
     {NULL,              NULL}           /* sentinel */
 };
 

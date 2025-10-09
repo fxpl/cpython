@@ -462,11 +462,7 @@ static int regiondata_close(Py_region_t region) {
     return 0;
 }
 
-/* This uses the inner state of the region and closes it if possible.
- *
- * This can fail if the region gets closed, see `regiondata_close`.
- */
-static int regiondata_check_close(Py_region_t region) {
+static int regiondata_closes_after_lrc(Py_region_t region, Py_ssize_t lrc) {
     // Invariant:
     ASSERT_IS_UNION_ROOT(region);
 
@@ -475,10 +471,31 @@ static int regiondata_check_close(Py_region_t region) {
         return 0;
     }
 
-    // Check if the region can currently be closed
+    // Return 0 if the region will be kept open, even if the LRC is adjusted
     _Py_region_data *data = (_Py_region_data*)region;
-    if (data->lrc == 0 && data->osc == 0 && !regiondata_is_dirty(region)) {
-        // Propagate the result
+    if (regiondata_is_dirty(region) && data->osc > 0) {
+        return 0;
+    } 
+
+    // Return true, if the known local references are the only ones keeping
+    // the region open
+    if (data->lrc == lrc) {
+        return 1;
+    }
+
+    // Invariant, the LRC should never be less than the known LRC
+    assert(data->lrc >= lrc);
+
+    return 0;
+}
+
+/* This uses the inner state of the region and closes it if possible.
+ *
+ * This can fail if the region gets closed, see `regiondata_close`.
+ */
+static int regiondata_check_close(Py_region_t region) {
+    // Check if the region should be closed at this point.
+    if (regiondata_closes_after_lrc(region, 0)) {
         return regiondata_close(region);
     }
 
@@ -927,6 +944,10 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
  * state is updated accordingly.
  *
  * The `src` argument is only used for error reporting and can be NULL.
+ *
+ * FIXME(regions): xFrednet: Optional, this could be specialized for cases
+ * which are known to succeed, to more the objects directly into the subject
+ * region.
  */
 PyRegion_staged_ref_t regiondata_stage_objects(
     Py_region_t subject_region, PyObject* src,
@@ -1077,7 +1098,7 @@ PyRegion_staged_ref_t regiondata_add_object(Py_region_t subject_region, PyObject
     return 0;
 }
 
-int regiondata_try_close(PyObject* bridge) {
+int regiondata_clean(PyObject* bridge) {
     // Invariant
     ASSERT_IS_UNION_ROOT(_PyRegion_Get(bridge));
     assert(HAS_DATA(_PyRegion_Get(bridge)));
@@ -1106,11 +1127,13 @@ int regiondata_try_close(PyObject* bridge) {
     if (pending_list == NULL) {
         goto error;
     }
-    SUCCEEDS(_PyList_AppendTakeRef(_PyList_CAST(pending_list), Py_NewRef(bridge)));
+    PyList_SET_ITEM(_PyList_CAST(pending_list), 0, Py_NewRef(bridge));
 
     while(PyList_Size(pending_list) != 0){
         PyObject* item = list_pop(pending_list);
         Py_region_t item_region = _PyRegion_Get(item);
+
+        // TODO: Account in LRC for reference from owner, if present.
 
         // Store metadata for the new region
         assert(HAS_DATA(item_region));
@@ -1143,6 +1166,18 @@ int regiondata_try_close(PyObject* bridge) {
         }
         staged_ref_commit(staged_ref);
 
+        // TODO(regions): xFrednet: This doesn't account for region union...
+        //
+        // `stage_objects` accounts for a reference from a contained object to
+        // the added object, mening that the LRC is missing a count of 1 here.
+        // We increment the LRC if it doesn't have a owner.
+        if (owner == 0) {
+            // TODO: WTF: How is the region closed with an LRC of 3????
+            // Oh no, I never update the open status do I? No it should do so...
+            // FML; this is a problem for tomorrow me
+            SUCCEEDS(regiondata_inc_lrc(clean_region));
+        }
+
         // FIXME(regions): Probably just manually make it clean, while this is
         // the hacky implementation
         assert(!regiondata_is_dirty(clean_region));
@@ -1154,6 +1189,7 @@ int regiondata_try_close(PyObject* bridge) {
         // Refill metadata.
         ((_Py_region_data*)clean_region)->owner = owner;
         ((_Py_region_data*)clean_region)->name = name;
+        ((_Py_region_data*)clean_region)->bridge = item;
         if (!was_open && regiondata_is_open(clean_region)) {
             regiondata_inc_osc(clean_region);
         }
@@ -1269,6 +1305,12 @@ void _PyRegion_DecRc(Py_region_t region) {
     regiondata_dec_rc(region);
 }
 
+/* Increments the reference count of the region.
+ */
+void _PyRegion_IncRc(Py_region_t region) {
+    regiondata_inc_rc(region);
+}
+
 /* This clears objects from the region. This is mainly the name and the brige
  * object. Objects inside the region will remain objects of the region
  */
@@ -1345,8 +1387,31 @@ int _PyRegion_IsParent(Py_region_t child, Py_region_t parent) {
     return regiondata_get_parent(child) == parent;
 }
 
+/* This checks with the region is only held open by the LRC.
+ *
+ * Retruns true, if the region will automatically close, once the given
+ * number (lrc) of local references are dropped.
+ */
+int _PyRegion_ClosesWithLrc(Py_region_t region, Py_ssize_t lrc) {
+    return regiondata_closes_after_lrc(region, lrc);
+}
+
 Py_region_t _PyRegion_GetParent(Py_region_t child) {
     return regiondata_get_parent(child);
+}
+
+/* This cleans the region by reconstructing it from the bridge object.
+ *
+ * FIXME(regions): xFrednet: This could be smarter, by only cleaning
+ * the region if it's dirty (or a subregion) is dirty.
+ */
+int _PyRegion_Clean(Py_region_t region) {
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    _Py_region_data *data = (_Py_region_data *)region;
+    return regiondata_clean(data->bridge);
 }
 
 int _PyRegion_IsBridge(PyObject *obj) {
