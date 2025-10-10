@@ -258,7 +258,7 @@ static int regiondata_union_merge(
 
     // Merge stats into the `target`
     if (HAS_DATA(target)) {
-        _Py_region_data *target_data = (_Py_region_data*) target;
+        _Py_region_data *target_data = (_Py_region_data*)target;
         target_data->lrc += source_data->lrc;
         target_data->osc += source_data->osc;
 
@@ -348,10 +348,6 @@ static int regiondata_open(Py_region_t region) {
         SUCCEEDS(regiondata_open(regiondata_get_parent(region)));
     }
 
-    // This is a hack, by marking every region as dirty we force
-    // every region to be closed by cleaning it.
-    _PyRegion_HackDirtyForPrototype(region);
-
     // Check for failure, which would leave the region closed
     return 0;
 
@@ -359,6 +355,33 @@ error:
     // Mark the region as closed on failure.
     data->open_tick = OPEN_TICK_CLOSED;
     return 1;
+}
+
+static int regiondata_mark_as_clean(Py_region_t region) {
+    // Invariant:
+    ASSERT_IS_UNION_ROOT(region);
+    assert(regiondata_is_open(region));
+
+    // Regions without metadata are always clean
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    // Mark the region as open.
+    _Py_region_data *data = (_Py_region_data*)region;
+    Py_ssize_t old_open_tick = data->open_tick;
+    data->open_tick = _PyOwnership_get_open_region_tick();
+
+    // Check if an error occured
+    if (data->open_tick == OPEN_TICK_CLOSED) {
+        data->open_tick = old_open_tick;
+        return -1;
+    }
+
+    // The open tick should always be even, see invariant
+    assert((data->open_tick % 2) == 0);
+
+    return 0;
 }
 
 static int regiondata_is_open(Py_region_t region) {
@@ -517,8 +540,9 @@ static int regiondata_check_open(Py_region_t region) {
     }
 
     // Check if the region can currently be closed
+    // - LRC and OSC can be negative if the region is staged (waiting to be merged)
     _Py_region_data *data = (_Py_region_data*)region;
-    if (data->lrc != 0 && data->osc != 0 && !regiondata_is_dirty(region)) {
+    if (data->lrc > 0 || data->osc > 0) {
         // Propagate the result
         return regiondata_open(region);
     }
@@ -560,6 +584,10 @@ static int regiondata_inc_lrc(Py_region_t region) {
     // Update the LRC, once the region is open
     _Py_region_data *data = (_Py_region_data*)region;
     data->lrc += 1;
+
+    // This is a hack, by marking every region as dirty we force
+    // every region to be closed by cleaning it.
+    _PyRegion_HackDirtyForPrototype(region);
 
     return 0;
 }
@@ -1008,6 +1036,8 @@ PyRegion_staged_ref_t regiondata_stage_objects(
         }
     }
 
+    SUCCEEDS(regiondata_check_status(add_state.merge_region));
+
     // Return the staged region to be commited later
     staged_res = (PyRegion_staged_ref_t)add_state.merge_region;
     goto finally;
@@ -1172,14 +1202,14 @@ int regiondata_clean(PyObject* bridge) {
         // the added object, mening that the LRC is missing a count of 1 here.
         // We increment the LRC if it doesn't have a owner.
         if (owner == 0) {
-            // TODO: WTF: How is the region closed with an LRC of 3????
-            // Oh no, I never update the open status do I? No it should do so...
-            // FML; this is a problem for tomorrow me
             SUCCEEDS(regiondata_inc_lrc(clean_region));
+            // FIXME(regions): xFrednet: The hack currently marks the region as
+            // dirty when the LRC is increased. the following function should
+            // no longer be used when all barriers are in place
+            SUCCEEDS(regiondata_mark_as_clean(clean_region));
         }
 
-        // FIXME(regions): Probably just manually make it clean, while this is
-        // the hacky implementation
+        // The region should now be marked as clean
         assert(!regiondata_is_dirty(clean_region));
 
         // Decrease the RC of item and the connected LRC
@@ -1202,6 +1232,7 @@ int regiondata_clean(PyObject* bridge) {
 error:
     result = -1;
 
+    // TODO(regions): xFrednet: FML something in here decrements the bridge RC one too may times WHYYYYYYY
 finally:
     // Decrease the LRC, which was incremented at the start to keep the region
     // open. This shoudln't close the region, since the bridge object should
@@ -1623,7 +1654,6 @@ int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
     if (tgt == NULL) {
         return 0;
     }
-
 
     Py_region_t src_region = _PyRegion_Get(src);
     Py_region_t tgt_region = _PyRegion_Get(tgt);
