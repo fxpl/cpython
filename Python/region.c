@@ -1036,8 +1036,6 @@ PyRegion_staged_ref_t regiondata_stage_objects(
         }
     }
 
-    SUCCEEDS(regiondata_check_status(add_state.merge_region));
-
     // Return the staged region to be commited later
     staged_res = (PyRegion_staged_ref_t)add_state.merge_region;
     goto finally;
@@ -1054,8 +1052,11 @@ finally:
 }
 
 void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
-    assert(staged_ref != PyRegion_staged_ref_ERR);
-    int res = 0;
+    // Error reporting is done by the staging step. This can therefore
+    // just ignore the error.
+    if (staged_ref == PyRegion_staged_ref_ERR) {
+        return;
+    }
 
     // Everything is fine
     if (staged_ref == STAGED_REF_NOP_MERGE) {
@@ -1075,7 +1076,7 @@ void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
     assert(HAS_OWNER_TAG(staged_region, OWNER_TAG_MERGE_PENDING));
 
     // This should never fail
-    res = regiondata_union_merge(staged_region, _Py_LOCAL_REGION);
+    int res = regiondata_union_merge(staged_region, _Py_LOCAL_REGION);
     assert(res == 0);
     regiondata_dec_rc(staged_region);
 
@@ -1183,14 +1184,12 @@ int regiondata_clean(PyObject* bridge) {
         // Create the new clean region
         Py_region_t clean_region = regiondata_new();
         if (clean_region == NULL_REGION) {
-            Py_DECREF(item);
             goto error;
         }
 
         PyRegion_staged_ref_t staged_ref = regiondata_stage_objects(
             clean_region, NULL, 1, &item, pending_list);
         if (staged_ref == PyRegion_staged_ref_ERR) {
-            Py_DECREF(item);
             regiondata_dec_rc(clean_region);
             goto error;
         }
@@ -1211,10 +1210,6 @@ int regiondata_clean(PyObject* bridge) {
 
         // The region should now be marked as clean
         assert(!regiondata_is_dirty(clean_region));
-
-        // Decrease the RC of item and the connected LRC
-        Py_DECREF(item);
-        SUCCEEDS(regiondata_dec_lrc(clean_region));
 
         // Refill metadata.
         ((_Py_region_data*)clean_region)->owner = owner;

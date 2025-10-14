@@ -176,6 +176,7 @@ static PyObject* Region_owns(PyObject *self, PyObject *other) {
 }
 
 static PyObject* Region_try_close(PyObject *op) {
+    // 1 From the stack
     const Py_ssize_t LRC_COUNT_FROM_STACK = 1;
 
     CHECK_BRIDGE(op);
