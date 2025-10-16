@@ -175,10 +175,7 @@ static PyObject* Region_owns(PyObject *self, PyObject *other) {
     return PyBool_FromLong(self_region == other_region);
 }
 
-static PyObject* Region_try_close(PyObject *op) {
-    // 1 From the stack
-    const Py_ssize_t LRC_COUNT_FROM_STACK = 1;
-
+static PyObject* Region_clean(PyObject *op) {
     CHECK_BRIDGE(op);
 
     if (_PyRegion_Clean(_PyRegion_Get(op))) {
@@ -187,20 +184,18 @@ static PyObject* Region_try_close(PyObject *op) {
 
     RegionObject *self = RegionObject_CAST(op);
     Py_region_t old_stored = self->region;
-    self->region = _PyRegion_Get(self);
+    self->region = _PyRegion_GET(self);
     _PyRegion_IncRc(self->region);
     _PyRegion_DecRc(old_stored);
 
-    int closed_with_stack_clear =
-        _PyRegion_ClosesWithLrc(_PyRegion_Get(self), LRC_COUNT_FROM_STACK);
-    return PyBool_FromLong(closed_with_stack_clear);
+    Py_RETURN_NONE;
 }
 
 static PyMethodDef Region_methods[] = {
     {"owns", _PyCFunction_CAST(Region_owns), METH_O,
         "Check if object is owned by the region."},
-    {"try_close", _PyCFunction_CAST(Region_try_close), METH_NOARGS,
-        "Cleans the region and returns `True` if it can be closed."},
+    {"clean", _PyCFunction_CAST(Region_clean), METH_NOARGS,
+        "Cleans the region and any dirty subregions"},
     {NULL,              NULL}           /* sentinel */
 };
 
@@ -280,16 +275,35 @@ Region_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
+// TODO(regions): xFrednet: Make sure every `->tp_dealloc` usage clears the region
+//                and ideally removes itself from the region or does it even need this?
 static int
 Region_clear(PyObject *op)
 {
     RegionObject *self = RegionObject_CAST(op);
 
-    // Clear the region, this uses the internal region pointer
-    // since `_PyRegion_Get` might be different or already cleared.
-    _PyRegion_Clear(self->region);
-    _PyRegion_DecRc(self->region);
-    self->region = NULL_REGION;
+    if (self->region != NULL_REGION) {
+        // TODO(regions): xFrednet: The `self->region` pointer needs to be updated
+        // =================================
+        //
+        // This merges this region into the local region. This is done because:
+        // (1) Once the bridge is gone, there is no way to send the region
+        //     anymore therefore there is no advantage of tracking ownership
+        //     for these objects
+        // (2) Clear might propagate through the object graph. This previously
+        //     caused some asserts to fail, which assumed the bridge to always
+        //     be there.
+        // (3) Only guessing, but merging the region back into the local region
+        //     will probably be good for usability, since there is more freedom
+        //     to reference previously contained objects.
+        _PyRegion_Dissolve(self->region);
+
+        // Clear the region, this uses the internal region pointer
+        // since `_PyRegion_Get` might be different or already cleared.
+        _PyRegion_Clear(self->region);
+        _PyRegion_DecRc(self->region);
+        self->region = NULL_REGION;
+    }
 
     // Clear members
     Py_CLEAR(self->dict);
@@ -300,6 +314,9 @@ static void
 Region_dealloc(PyObject *self)
 {
     PyObject_GC_UnTrack(self);
+
+    Region_clear(self);
+
     PyTypeObject *tp = Py_TYPE(self);
     freefunc free = PyType_GetSlot(tp, Py_tp_free);
     free(self);

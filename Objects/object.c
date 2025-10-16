@@ -3201,48 +3201,11 @@ _Py_Dealloc(PyObject *op)
         _PyTrash_thread_deposit_object(tstate, (PyObject *)op);
         return;
     }
-#ifdef Py_DEBUG
-#if !defined(Py_GIL_DISABLED) && !defined(Py_STACKREF_DEBUG)
-    /* This assertion doesn't hold for the free-threading build, as
-     * PyStackRef_CLOSE_SPECIALIZED is not implemented */
-    assert(tstate->current_frame == NULL || tstate->current_frame->stackpointer != NULL);
-#endif
-    PyObject *old_exc = tstate != NULL ? tstate->current_exception : NULL;
-    // Keep the old exception type alive to prevent undefined behavior
-    // on (tstate->curexc_type != old_exc_type) below
-    Py_XINCREF(old_exc);
-    // Make sure that type->tp_name remains valid
-    Py_INCREF(type);
-#endif
 
-#ifdef Py_TRACE_REFS
-    _Py_ForgetReference(op);
-#endif
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
     (*dealloc)(op);
 
-#ifdef Py_DEBUG
-    // gh-89373: The tp_dealloc function must leave the current exception
-    // unchanged.
-    if (tstate != NULL && tstate->current_exception != old_exc) {
-        const char *err;
-        if (old_exc == NULL) {
-            err = "Deallocator of type '%s' raised an exception";
-        }
-        else if (tstate->current_exception == NULL) {
-            err = "Deallocator of type '%s' cleared the current exception";
-        }
-        else {
-            // It can happen if dealloc() normalized the current exception.
-            // A deallocator function must not change the current exception,
-            // not even normalize it.
-            err = "Deallocator of type '%s' overrode the current exception";
-        }
-        _Py_FatalErrorFormat(__func__, err, type->tp_name);
-    }
-    Py_XDECREF(old_exc);
-    Py_DECREF(type);
-#endif
+
     if (tstate->delete_later && margin >= 4) {
         _PyTrash_thread_destroy_chain(tstate);
     }

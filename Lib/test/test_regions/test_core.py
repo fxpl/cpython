@@ -15,8 +15,11 @@ class TestBasicRegionObject(unittest.TestCase):
         # The region should be open since r points into it
         self.assertTrue(r.is_open)
 
+        # FIXME(regions): xFrednet: Regions currently default to being dirty
+        # while most write barriers are missing
+        #
         # A new region should be clean
-        self.assertFalse(r.is_dirty)
+        # self.assertFalse(r.is_dirty)
 
         # A new region has no parent
         self.assertIsNone(r.parent)
