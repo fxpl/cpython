@@ -208,6 +208,7 @@ static int regiondata_union_merge(
     _Py_region_data *source_data = (_Py_region_data*) source;
     if (HAS_OWNER_TAG(source, OWNER_TAG_MERGE_PENDING)) {
         Py_region_t pending_target = GET_OWNER_PTR(source);
+        assert(pending_target == target);
         regiondata_dec_rc(pending_target);
         source_data->owner = NULL_REGION;
     }
@@ -255,6 +256,12 @@ static int regiondata_union_merge(
     // Set the owner to the target with the merged tag
     regiondata_inc_rc(target);
     source_data->owner = target | OWNER_TAG_MERGED;
+
+    // Update the bridge object
+    if (source_data->bridge) {
+        regiondata_dec_rc(source_data->bridge->region);
+        source_data->bridge->region = NULL_REGION;
+    }
 
     // Merge stats into the `target`
     if (HAS_DATA(target)) {
@@ -1164,6 +1171,7 @@ int regiondata_clean(PyObject* bridge) {
         PyObject* item = list_pop(pending_list);
         Py_region_t item_region = _PyRegion_Get(item);
 
+        assert(regiondata_is_bridge(item_region, item));
         // TODO: Account in LRC for reference from owner, if present.
 
         // Store metadata for the new region
@@ -1212,15 +1220,14 @@ int regiondata_clean(PyObject* bridge) {
         assert(!regiondata_is_dirty(clean_region));
 
         // Refill metadata.
-        ((_Py_region_data*)clean_region)->owner = owner;
-        ((_Py_region_data*)clean_region)->name = name;
-        ((_Py_region_data*)clean_region)->bridge = item;
+        _Py_region_data* clean_region_data = (_Py_region_data*)clean_region;
+        clean_region_data->owner = owner;
+        clean_region_data->name = name;
+        clean_region_data->bridge = _PyBridgeObject_CAST(item);
+        clean_region_data->bridge->region = clean_region; // Move RC ownership
         if (!was_open && regiondata_is_open(clean_region)) {
             regiondata_inc_osc(clean_region);
         }
-
-        // Allow the region to be deallocated
-        regiondata_dec_rc(clean_region);
     }
 
     goto finally;
@@ -1273,10 +1280,10 @@ Py_region_t _PyRegion_GetSlow(PyObject *obj) {
 /* Creates a new region and moves the bridge object into it. The new region
  * will be returned.
  */
-Py_region_t _PyRegion_New(PyObject *bridge, PyObject *name) {
+int _PyRegion_New(_PyBridgeObject *bridge, PyObject *name) {
     Py_region_t region = regiondata_new();
     if (region == NULL_REGION) {
-        return NULL_REGION;
+        return -1;
     }
 
     _Py_region_data *data = (_Py_region_data*)region;
@@ -1284,6 +1291,7 @@ Py_region_t _PyRegion_New(PyObject *bridge, PyObject *name) {
     // A weak reference, the bridge will clear this pointer when it is
     // being cleared
     data->bridge = bridge;
+    bridge->region = region;
 
     // The region starts with an LRC of 1, due to the local reference to the
     // bridge object
@@ -1292,7 +1300,7 @@ Py_region_t _PyRegion_New(PyObject *bridge, PyObject *name) {
 
     // This should never fail but might if the given bridge object has
     // some object which can't be moved.
-    if (regiondata_add_object(region, NULL, bridge))
+    if (regiondata_add_object(region, NULL, _PyObject_CAST(bridge)))
     {
         goto error;
     }
@@ -1308,14 +1316,16 @@ Py_region_t _PyRegion_New(PyObject *bridge, PyObject *name) {
         goto error;
     }
 
-    return region;
+
+    return 0;
 
 error:
     // Cleanup
     data->bridge = NULL;
+    bridge->region = NULL_REGION;
     Py_CLEAR(data->name);
     regiondata_dec_rc(region);
-    return NULL_REGION;
+    return -1;
 }
 
 /* This merges the given region into the local region thereby practically
@@ -1329,12 +1339,6 @@ int _PyRegion_Dissolve(Py_region_t region) {
  */
 void _PyRegion_DecRc(Py_region_t region) {
     regiondata_dec_rc(region);
-}
-
-/* Increments the reference count of the region.
- */
-void _PyRegion_IncRc(Py_region_t region) {
-    regiondata_inc_rc(region);
 }
 
 /* This clears objects from the region. This is mainly the name and the brige

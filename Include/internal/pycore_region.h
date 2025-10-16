@@ -15,6 +15,31 @@ extern "C" {
 /* Macros for readability */
 #define NULL_REGION 0
 
+/* PyObject_HEAD defines the initial segment of every PyObject used as a region bridge. */
+#define PyBridgeObject_HEAD \
+    PyObject_HEAD; \
+    /* The region value which will be updated and \
+     * still filled when the dealloc function of \
+     * the object is called. \
+     */ \
+    Py_region_t region;
+
+
+#define PyBridgeObject_HEAD_INIT(type) \
+    PyObject_HEAD_INIT(type) \
+    region = NULL_REGION,
+
+/**
+ * Objects used as bridges need to have an additional region field, which is
+ * still filled in the dealloc function. This should be the inital segment,
+ * similar to how `PyObject` is the inital segment for other objects.
+*/
+typedef struct _PyBridgeObject {
+    PyBridgeObject_HEAD;
+} _PyBridgeObject;
+
+#define _PyBridgeObject_CAST(op) _Py_CAST(_PyBridgeObject*, op)
+
 typedef struct _Py_region_data {
     /* The number of references coming in from the local region.
      *
@@ -75,13 +100,16 @@ typedef struct _Py_region_data {
      * This is a weak reference to the brige, meaning the RC is not updated
      * by writes to this field.
      */
-    PyObject* bridge;
-    
+    _PyBridgeObject* bridge;
+
     /* The name of the region.
      *
      * This object will be visited from the bridge object to make sure it is
      * marked as reachable by the GC. This object will be cleared when the
-     * bridge is deallocated. 
+     * bridge is deallocated.
+     *
+     * FIXME(regions): xFrednet: Maybe move this into `_PyBridgeObject` that
+     * would make traverse and clear etc be nicer and cleaner
      */
     PyObject *name;
 
@@ -90,10 +118,9 @@ typedef struct _Py_region_data {
 #endif
 } _Py_region_data;
 
-PyAPI_FUNC(Py_region_t) _PyRegion_New(PyObject *bridge, PyObject *name);
+PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge, PyObject *name);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
-PyAPI_FUNC(void) _PyRegion_IncRc(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_Clear(Py_region_t region);
 
 PyAPI_FUNC(PyObject*) _PyRegion_GetName(Py_region_t region);

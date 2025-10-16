@@ -78,7 +78,7 @@ PyType_Spec regions_error_spec = {
 };
 
 void RegionErr_NoBridge(void) {
-    // TODO Static RegionError and call
+    // FIXME Static RegionError and call
     PyErr_Format(
         PyExc_RuntimeError,
         "a region method was called on a non-bridge object");
@@ -90,15 +90,10 @@ void RegionErr_NoBridge(void) {
  * ===================
  */
 
-PyDoc_STRVAR(Region_doc, "TODO =^.^=");
+PyDoc_STRVAR(Region_doc, "FIXME =^.^=");
 
 typedef struct RegionObject {
-    PyObject_HEAD
-    /* A pointer to the region object, this is needed to access the region
-     * in the dealloc function when the region field in the object has
-     * already been cleared.
-     */
-    Py_region_t region;
+    PyBridgeObject_HEAD
     PyObject *dict;
 } RegionObject;
 
@@ -118,10 +113,10 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
     }
 
     // Allocate the new region object
-    self->region = _PyRegion_New(_PyObject_CAST(self), name);
-    if (self->region == NULL_REGION) {
+    if (_PyRegion_New(_PyObject_CAST(self), name)) {
         return -1;
     }
+    assert(self->region != NULL_REGION);
 
     // Check the object is alos correctly moved into the region
     assert(_PyRegion_Get(_PyObject_CAST(self)) == self->region);
@@ -181,12 +176,6 @@ static PyObject* Region_clean(PyObject *op) {
     if (_PyRegion_Clean(_PyRegion_Get(op))) {
         return NULL;
     }
-
-    RegionObject *self = RegionObject_CAST(op);
-    Py_region_t old_stored = self->region;
-    self->region = _PyRegion_GET(self);
-    _PyRegion_IncRc(self->region);
-    _PyRegion_DecRc(old_stored);
 
     Py_RETURN_NONE;
 }

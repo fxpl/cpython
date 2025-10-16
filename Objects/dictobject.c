@@ -2713,7 +2713,7 @@ PyDict_SetItem(PyObject *op, PyObject *key, PyObject *value)
     assert(key);
     assert(value);
 
-    int res;
+    int res = -1;
 
     // Check if the new references can be created
     PyRegion_staged_ref_t staged_key = PyRegion_staged_ref_ERR;
@@ -3525,7 +3525,6 @@ dict_repr_lock_held(PyObject *self)
     /* Do repr() on each key+value pair, and insert ": " between them.
        Note that repr may mutate the dict. */
     Py_ssize_t i = 0;
-    bool dec_value_lrc = true;
     int first = 1;
     while (_PyDict_Next((PyObject *)mp, &i, &key, &value, NULL)) {
         // Prevent repr from deleting key or value during key format.
