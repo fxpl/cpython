@@ -22,12 +22,13 @@ extern "C" {
      * still filled when the dealloc function of \
      * the object is called. \
      */ \
-    Py_region_t region;
+    Py_region_t region; \
+    /** The name of the region or NULL */ \
+    PyObject *name;
 
-
-#define PyBridgeObject_HEAD_INIT(type) \
-    PyObject_HEAD_INIT(type) \
-    region = NULL_REGION,
+#define PyBridgeObject_HEAD_INIT(op) \
+    op->region = NULL_REGION; \
+    op->name = NULL;
 
 /**
  * Objects used as bridges need to have an additional region field, which is
@@ -102,28 +103,16 @@ typedef struct _Py_region_data {
      */
     _PyBridgeObject* bridge;
 
-    /* The name of the region.
-     *
-     * This object will be visited from the bridge object to make sure it is
-     * marked as reachable by the GC. This object will be cleared when the
-     * bridge is deallocated.
-     *
-     * FIXME(regions): xFrednet: Maybe move this into `_PyBridgeObject` that
-     * would make traverse and clear etc be nicer and cleaner
-     */
-    PyObject *name;
-
 #ifdef Py_OWNERSHIP_INVARIANT
     _Py_ownership_invariant_region_data invariant_data;
 #endif
 } _Py_region_data;
 
-PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge, PyObject *name);
+PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_Clear(Py_region_t region);
 
-PyAPI_FUNC(PyObject*) _PyRegion_GetName(Py_region_t region);
 PyAPI_FUNC(Py_ssize_t) _PyRegion_GetLrc(Py_region_t region);
 PyAPI_FUNC(Py_ssize_t) _PyRegion_GetOsc(Py_region_t region);
 PyAPI_FUNC(int) _PyRegion_IsOpen(Py_region_t region);

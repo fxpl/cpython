@@ -12,10 +12,8 @@ class TestCleanRegion(unittest.TestCase):
 
     def test_try_close_dirty_with_local_ref(self):
         region = Region()
-        print(sys.getrefcount(region))
-        self.mark_region_as_dirty(region)
 
-        # Cleaning should succeed
+        self.mark_region_as_dirty(region)
         region.clean()
 
         self.assertFalse(region.is_dirty)
@@ -34,7 +32,7 @@ class TestCleanRegion(unittest.TestCase):
         # The region should now be clean
         self.assertFalse(sub.is_dirty)
 
-    def test_try_close_removes_unreachable(self):
+    def test_clean_removes_unreachable(self):
         region = Region()
         obj = {}
         region.x = obj
@@ -47,7 +45,15 @@ class TestCleanRegion(unittest.TestCase):
         self.mark_region_as_dirty(region)
         region.clean()
 
-        # Try close should have kicked `obj` from the region since it is no
+        # Clean should have kicked `obj` from the region since it is no
         # longer reachable from the bridge object
         self.assertFalse(region.owns(obj))
         self.assertTrue(is_local(obj))
+
+    def test_clean_keeps_name(self):
+        region = Region("Marlin")
+
+        self.mark_region_as_dirty(region)
+        region.clean()
+
+        self.assertEqual(region.name, "Marlin")

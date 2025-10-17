@@ -820,7 +820,7 @@ static bool regiondata_is_bridge(Py_region_t region, PyObject *obj) {
 
     _Py_region_data *data = (_Py_region_data*)region;
 
-    return data->bridge == obj;
+    return _PyObject_CAST(data->bridge) == obj;
 }
 
 /* Sets the region of the object to the newly given region.
@@ -1178,8 +1178,6 @@ int regiondata_clean(PyObject* bridge) {
         assert(HAS_DATA(item_region));
         Py_region_t owner = ((_Py_region_data*)item_region)->owner;
         ((_Py_region_data*)item_region)->owner = 0;
-        PyObject *name = ((_Py_region_data*)item_region)->name;
-        ((_Py_region_data*)item_region)->name = NULL;
         bool was_open = regiondata_is_open(item_region);
 
         // Merge the region into local
@@ -1222,7 +1220,6 @@ int regiondata_clean(PyObject* bridge) {
         // Refill metadata.
         _Py_region_data* clean_region_data = (_Py_region_data*)clean_region;
         clean_region_data->owner = owner;
-        clean_region_data->name = name;
         clean_region_data->bridge = _PyBridgeObject_CAST(item);
         clean_region_data->bridge->region = clean_region; // Move RC ownership
         if (!was_open && regiondata_is_open(clean_region)) {
@@ -1280,7 +1277,7 @@ Py_region_t _PyRegion_GetSlow(PyObject *obj) {
 /* Creates a new region and moves the bridge object into it. The new region
  * will be returned.
  */
-int _PyRegion_New(_PyBridgeObject *bridge, PyObject *name) {
+int _PyRegion_New(_PyBridgeObject *bridge) {
     Py_region_t region = regiondata_new();
     if (region == NULL_REGION) {
         return -1;
@@ -1292,6 +1289,7 @@ int _PyRegion_New(_PyBridgeObject *bridge, PyObject *name) {
     // being cleared
     data->bridge = bridge;
     bridge->region = region;
+    assert(data->rc == 1);
 
     // The region starts with an LRC of 1, due to the local reference to the
     // bridge object
@@ -1305,25 +1303,12 @@ int _PyRegion_New(_PyBridgeObject *bridge, PyObject *name) {
         goto error;
     }
 
-    // Add the name or set it to None
-    if (name) {
-        assert(bridge != NULL && "A region with a name requires a bridge object");
-        data->name = _Py_NewRef(name);
-    } else {
-        data->name = Py_None;
-    }
-    if (_PyImmutability_Freeze(data->name)) {
-        goto error;
-    }
-
-
     return 0;
 
 error:
     // Cleanup
     data->bridge = NULL;
     bridge->region = NULL_REGION;
-    Py_CLEAR(data->name);
     regiondata_dec_rc(region);
     return -1;
 }
@@ -1341,8 +1326,10 @@ void _PyRegion_DecRc(Py_region_t region) {
     regiondata_dec_rc(region);
 }
 
-/* This clears objects from the region. This is mainly the name and the brige
- * object. Objects inside the region will remain objects of the region
+/* This clears the bridge object from the region struct.
+ * 
+ * This should only be done after the region has been dissolved. Otherwise,
+ * it might be possible to access a region after it was cleared.
  */
 void _PyRegion_Clear(Py_region_t region) {
     // Note: This can be called on a non-union-root region.
@@ -1354,25 +1341,7 @@ void _PyRegion_Clear(Py_region_t region) {
 
     // Clear the name
     _Py_region_data *data = (_Py_region_data*)region;
-    Py_CLEAR(data->name);
-
-    // This is a weak reference, a simple NULL is therefore enough.
     data->bridge = NULL;
-}
-
-
-PyObject* _PyRegion_GetName(Py_region_t region) {
-    // Sanity Check
-    ASSERT_IS_UNION_ROOT(region);
-
-    // Return null for regions without data
-    if (!HAS_DATA(region)) {
-        Py_RETURN_NONE;
-    }
-
-    _Py_region_data *data = (_Py_region_data*)region;
-    Py_XINCREF(data->name);
-    return data->name;
 }
 
 Py_ssize_t _PyRegion_GetLrc(Py_region_t region) {
@@ -1441,7 +1410,7 @@ int _PyRegion_Clean(Py_region_t region) {
     }
 
     _Py_region_data *data = (_Py_region_data *)region;
-    return regiondata_clean(data->bridge);
+    return regiondata_clean(_PyObject_CAST(data->bridge));
 }
 
 int _PyRegion_IsBridge(PyObject *obj) {

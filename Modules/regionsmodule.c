@@ -112,35 +112,47 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
+    // Strings are often interned, which makes sharing complicated. But
+    // they are effectivly immutable, which makes freezing a simple and
+    // safe fix.
+    if (name && _PyImmutability_Freeze(name)) {
+        return -1;
+    }
+
+    PyBridgeObject_HEAD_INIT(self);
+
     // Allocate the new region object
-    if (_PyRegion_New(_PyObject_CAST(self), name)) {
+    if (_PyRegion_New(_PyObject_CAST(self))) {
         return -1;
     }
     assert(self->region != NULL_REGION);
 
-    // Check the object is alos correctly moved into the region
+    // Check the object is also correctly moved into the region
     assert(_PyRegion_Get(_PyObject_CAST(self)) == self->region);
     assert(_PyRegion_IsBridge(_PyObject_CAST(self)));
+
+    // No write barrier needed, since name is frozen
+    self->name = _Py_XNewRef(name);
 
     // Everything is a-okay
     return 0;
 }
 
 static PyObject *
-Region_repr(PyObject *self)
+Region_repr(PyObject *op)
 {
-    if (!_PyRegion_IsBridge(_PyObject_CAST(self))) {
+    if (!_PyRegion_IsBridge(op)) {
         return PyUnicode_FromString("<Region (merged)>");;
     }
 
-    Py_region_t region = _PyRegion_Get(self);
-    PyObject *name = _PyRegion_GetName(region);
+    RegionObject *self = RegionObject_CAST(op);
+    Py_region_t region = _PyRegion_Get(op);
 
     PyObject *repr = NULL;
 #ifdef Py_DEBUG
     repr = PyUnicode_FromFormat(
         "<Region name=%R _lrc=%zu _osc=%zu is_dirty=%s>",
-        _PyRegion_GetName(region),
+        self->name,
         _PyRegion_GetLrc(region),
         _PyRegion_GetOsc(region),
         _PyRegion_IsDirty(region) ? "True" : "False"
@@ -148,11 +160,10 @@ Region_repr(PyObject *self)
 #else
     repr = PyUnicode_FromFormat(
         "<Region name=%R>",
-        _PyRegion_GetName(region),
+        self->name,
     );
 #endif
 
-    Py_DECREF(name);
     return repr;
 }
 
@@ -212,7 +223,7 @@ static PyObject* Region_get_parent(PyObject *self, void *closure) {
 static PyObject* Region_get_name(PyObject *self, void *closure) {
     CHECK_BRIDGE(self);
 
-    return _PyRegion_GetName(_PyRegion_Get(self));
+    return Py_NewRef(RegionObject_CAST(self)->name);
 }
 
 static PyObject* Region_get__lrc(PyObject* self, void* closure) {
@@ -248,18 +259,17 @@ static PyGetSetDef Region_getset[] = {
 static int
 Region_traverse(PyObject *op, visitproc visit, void *arg)
 {
+    RegionObject *self = RegionObject_CAST(op);
+
     // Visit the type
     Py_VISIT(Py_TYPE(op));
 
     // Only visit the name from the root bridge object
     if (_PyRegion_IsBridge(op)) {
-        PyObject *name = _PyRegion_GetName(_PyRegion_Get(op));
-        Py_VISIT(name);
-        Py_XDECREF(name);
+        Py_VISIT(self->name);
     }
 
     // Visit the attribute dict
-    RegionObject *self = RegionObject_CAST(op);
     Py_VISIT(self->dict);
     return 0;
 }
@@ -272,9 +282,6 @@ Region_clear(PyObject *op)
     RegionObject *self = RegionObject_CAST(op);
 
     if (self->region != NULL_REGION) {
-        // TODO(regions): xFrednet: The `self->region` pointer needs to be updated
-        // =================================
-        //
         // This merges this region into the local region. This is done because:
         // (1) Once the bridge is gone, there is no way to send the region
         //     anymore therefore there is no advantage of tracking ownership
@@ -295,6 +302,7 @@ Region_clear(PyObject *op)
     }
 
     // Clear members
+    Py_CLEAR(self->name);
     Py_CLEAR(self->dict);
     return 0;
 }
