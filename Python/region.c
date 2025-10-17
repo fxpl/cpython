@@ -1732,11 +1732,13 @@ void _PyRegion_HackDirtyForPrototype(Py_region_t region) {
     regiondata_mark_as_dirty(region);
 }
 
+// TODO(regions): xFrednet: Take objects out of GC and create a region GC list
+// TODO(regions): xFrednet: Cowns
 // TODO(regions): xFrednet: Write Barrier in: Bytecode
 // TODO(regions): xFrednet: Write Barrier in: Dictionary
 // TODO(regions): xFrednet: Dirty on C code
-// TODO(regions): xFrednet: Cowns
 // TODO(regions): xFrednet: Track Weak Reference in LRC
 // TODO(regions): xFrednet: Weak Reference into regions
 // TODO(regions): xFrednet: Merging a region into the local region should open
 //                          subregions, if the merge didn't happend for error handling
+//                          (Make sure subregions are always at the start of the region CG list)
