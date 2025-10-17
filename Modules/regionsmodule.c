@@ -274,8 +274,6 @@ Region_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
-// TODO(regions): xFrednet: Make sure every `->tp_dealloc` usage clears the region
-//                and ideally removes itself from the region or does it even need this?
 static int
 Region_clear(PyObject *op)
 {
@@ -296,7 +294,7 @@ Region_clear(PyObject *op)
 
         // Clear the region, this uses the internal region pointer
         // since `_PyRegion_Get` might be different or already cleared.
-        _PyRegion_Clear(self->region);
+        _PyRegion_RemoveBridge(self->region);
         _PyRegion_DecRc(self->region);
         self->region = NULL_REGION;
     }
@@ -310,6 +308,10 @@ Region_clear(PyObject *op)
 static void
 Region_dealloc(PyObject *self)
 {
+    // The region in the `ob_region` field should be cleared before calling
+    // dealloc.
+    assert(self->ob_region == NULL_REGION);
+
     PyObject_GC_UnTrack(self);
 
     Region_clear(self);

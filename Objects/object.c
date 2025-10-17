@@ -26,6 +26,7 @@
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pymem.h"         // _PyMem_IsPtrFreed()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_region.h"        // _PyRegion_SignalDealloc
 #include "pycore_symtable.h"      // PySTEntry_Type
 #include "pycore_template.h"      // _PyTemplate_Type _PyTemplateIter_Type
 #include "pycore_tuple.h"         // _PyTuple_DebugMallocStats()
@@ -3128,6 +3129,7 @@ _PyTrash_thread_destroy_chain(PyThreadState *tstate)
          * up distorting allocation statistics.
          */
         _PyObject_ASSERT(op, Py_REFCNT(op) == 0);
+        _PyRegion_SignalDealloc(op);
         (*dealloc)(op);
     }
 }
@@ -3203,6 +3205,7 @@ _Py_Dealloc(PyObject *op)
     }
 
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
+    _PyRegion_SignalDealloc(op);
     (*dealloc)(op);
 
 

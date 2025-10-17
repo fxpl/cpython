@@ -1231,7 +1231,6 @@ int regiondata_clean(PyObject* bridge) {
 error:
     result = -1;
 
-    // TODO(regions): xFrednet: FML something in here decrements the bridge RC one too may times WHYYYYYYY
 finally:
     // Decrease the LRC, which was incremented at the start to keep the region
     // open. This shoudln't close the region, since the bridge object should
@@ -1326,13 +1325,13 @@ void _PyRegion_DecRc(Py_region_t region) {
     regiondata_dec_rc(region);
 }
 
-/* This clears the bridge object from the region struct.
- * 
- * This should only be done after the region has been dissolved. Otherwise,
- * it might be possible to access a region after it was cleared.
+/* This removes the pointer from the region to the bridge object.
+ *
+ * The bridge object reference is weak, meaning that the RC of the bridge will
+ * remain unchanged.
  */
-void _PyRegion_Clear(Py_region_t region) {
-    // Note: This can be called on a non-union-root region.
+void _PyRegion_RemoveBridge(Py_region_t region) {
+    ASSERT_IS_UNION_ROOT(region);
 
     // Return for regions without data
     if (!HAS_DATA(region)) {
@@ -1428,7 +1427,7 @@ PyObject* _PyRegion_GetBridge(Py_region_t region) {
 
     // TODO refactor all uses of this
     _Py_region_data *data = (_Py_region_data*)region;
-    return data->bridge;
+    return _PyObject_CAST(data->bridge);
 }
 
 /* Notifys the contianing region that the given object is now immutable.
@@ -1461,6 +1460,23 @@ int _PyRegion_SignalImmutable(PyObject *obj) {
     regiondata_mark_as_dirty(region);
 
     return 0;
+}
+
+/* This clears the region from a given object. This should only be done
+ * when the object is being deallocated.
+ */
+void _PyRegion_SignalDealloc(PyObject *obj) {
+    Py_region_t region = _PyRegion_Get(obj);
+
+    // Objects from static regions don't have to be changed. It might
+    // also be unsafe if the object is shared across threads.
+    if (!HAS_DATA(region)) {
+        return;
+    }
+
+    // Moving the object into a static region, allows the original
+    // region to be deallocated once te RC hits 0
+    _PyRegion_Set(obj, _Py_LOCAL_REGION);
 }
 
 PyRegion_staged_ref_t _PyRegion_StageRef(PyObject *src, PyObject *tgt) {

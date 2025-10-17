@@ -111,7 +111,6 @@ typedef struct _Py_region_data {
 PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
-PyAPI_FUNC(void) _PyRegion_Clear(Py_region_t region);
 
 PyAPI_FUNC(Py_ssize_t) _PyRegion_GetLrc(Py_region_t region);
 PyAPI_FUNC(Py_ssize_t) _PyRegion_GetOsc(Py_region_t region);
@@ -124,8 +123,10 @@ PyAPI_FUNC(int) _PyRegion_Clean(Py_region_t region);
 
 PyAPI_FUNC(int) _PyRegion_IsBridge(PyObject *obj);
 PyAPI_FUNC(PyObject*) _PyRegion_GetBridge(Py_region_t region);
+PyAPI_FUNC(void) _PyRegion_RemoveBridge(Py_region_t region);
 
 PyAPI_FUNC(int) _PyRegion_SignalImmutable(PyObject *obj);
+PyAPI_FUNC(void) _PyRegion_SignalDealloc(PyObject *obj);
 
 PyAPI_FUNC(void) _PyRegion_HackDirtyForPrototype(Py_region_t region);
 
