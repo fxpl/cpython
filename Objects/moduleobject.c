@@ -1252,6 +1252,12 @@ module_get_annotate(PyObject *self, void *Py_UNUSED(ignored))
 static int
 module_set_annotate(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
 {
+    if (!Py_CHECKWRITE(self))
+    {
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     PyModuleObject *m = _PyModule_CAST(self);
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete __annotate__ attribute");
@@ -1358,6 +1364,12 @@ static int
 module_set_annotations(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
 {
     PyModuleObject *m = _PyModule_CAST(self);
+
+    if (!Py_CHECKWRITE(self))
+    {
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     PyObject *dict = module_get_dict(m);
     if (dict == NULL) {

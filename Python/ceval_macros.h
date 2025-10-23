@@ -150,13 +150,26 @@ do { \
 
 
 /* Do interpreter dispatch accounting for tracing and instrumentation */
-#define DISPATCH() \
+#ifdef Py_OWNERSHIP_INVARIANT
+#  define DISPATCH() \
+    { \
+        if (_PyOwnership_check_invariant(tstate) != 0) { \
+            JUMP_TO_LABEL(error); \
+        } \
+        assert(frame->stackpointer == NULL); \
+        NEXTOPARG(); \
+        PRE_DISPATCH_GOTO(); \
+        DISPATCH_GOTO(); \
+    }
+#else
+#  define DISPATCH() \
     { \
         assert(frame->stackpointer == NULL); \
         NEXTOPARG(); \
         PRE_DISPATCH_GOTO(); \
         DISPATCH_GOTO(); \
     }
+#endif
 
 #define DISPATCH_SAME_OPARG() \
     { \
@@ -305,6 +318,8 @@ GETITEM(PyObject *v, Py_ssize_t i) {
 #define UNBOUNDFREE_ERROR_MSG \
     "cannot access free variable '%s' where it is not associated with a value" \
     " in enclosing scope"
+#define NOT_WRITEABLE_ERROR_MSG \
+    "cannot write to local variable '%s'"
 #define NAME_ERROR_MSG "name '%.200s' is not defined"
 
 // If a trace function sets a new f_lineno and

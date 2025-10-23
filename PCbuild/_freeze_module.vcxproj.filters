@@ -235,6 +235,9 @@
     <ClCompile Include="..\Python\index_pool.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <CLCompile Include="..\Python\immutability.c">
+      <Filter>Source Files</Filter>
+    </CLCompile>
     <ClCompile Include="..\Python\initconfig.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -324,6 +327,9 @@
     </ClCompile>
     <ClCompile Include="..\Python\optimizer_symbols.c">
       <Filter>Python</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Python\ownership.c">
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\Parser\parser.c">
       <Filter>Source Files</Filter>
