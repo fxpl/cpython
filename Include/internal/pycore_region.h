@@ -11,6 +11,7 @@ extern "C" {
 #include "object.h"
 #include "region.h"
 #include "pycore_ownership.h"
+#include "pycore_gc.h" // PyGC_Head
 
 /* Macros for readability */
 #define NULL_REGION 0
@@ -102,6 +103,15 @@ typedef struct _Py_region_data {
      * by writes to this field.
      */
     _PyBridgeObject* bridge;
+
+    /* Objects have to be removed from their local GC cycle, when they're moved
+     * into a region. Instead they're moved into this list, to allow GC inside
+     * the region.
+     * 
+     * Bridges can't form cycles with objects outside their regions (Mudolo cowns).
+     * It should therefore be safe to take them out of the GC cycle.
+     */
+    PyGC_Head gc_list;
 
 #ifdef Py_OWNERSHIP_INVARIANT
     _Py_ownership_invariant_region_data invariant_data;

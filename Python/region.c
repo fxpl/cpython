@@ -69,6 +69,87 @@ static PyObject* list_pop(PyObject* s){
     return item;
 }
 
+// Lifted from Python/gc.c
+//******************************** */
+#ifndef Py_GIL_DISABLED
+#define GC_NEXT _PyGCHead_NEXT
+#define GC_PREV _PyGCHead_PREV
+
+static inline void
+gc_set_old_space(PyGC_Head *g, int space)
+{
+    assert(space == 0 || space == _PyGC_NEXT_MASK_OLD_SPACE_1);
+    g->_gc_next &= ~_PyGC_NEXT_MASK_OLD_SPACE_1;
+    g->_gc_next |= space;
+}
+
+static inline void
+gc_list_init(PyGC_Head *list)
+{
+    // List header must not have flags.
+    // We can assign pointer by simple cast.
+    list->_gc_prev = (uintptr_t)list;
+    list->_gc_next = (uintptr_t)list;
+}
+
+static inline int
+gc_list_is_empty(PyGC_Head *list)
+{
+    return (list->_gc_next == (uintptr_t)list);
+}
+
+/* Move `node` from the gc list it's currently in (which is not explicitly
+ * named here) to the end of `list`.  This is semantically the same as
+ * gc_list_remove(node) followed by gc_list_append(node, list).
+ */
+static void
+gc_list_move(PyGC_Head *node, PyGC_Head *list)
+{
+    /* Unlink from current list. */
+    PyGC_Head *from_prev = GC_PREV(node);
+    PyGC_Head *from_next = GC_NEXT(node);
+    _PyGCHead_SET_NEXT(from_prev, from_next);
+    _PyGCHead_SET_PREV(from_next, from_prev);
+
+    /* Relink at end of new list. */
+    // list must not have flags.  So we can skip macros.
+    PyGC_Head *to_prev = (PyGC_Head*)list->_gc_prev;
+    _PyGCHead_SET_PREV(node, to_prev);
+    _PyGCHead_SET_NEXT(to_prev, node);
+    list->_gc_prev = (uintptr_t)node;
+    _PyGCHead_SET_NEXT(node, list);
+}
+
+/* append list `from` onto list `to`; `from` becomes an empty list */
+static void
+gc_list_merge(PyGC_Head *from, PyGC_Head *to)
+{
+    assert(from != to);
+    if (!gc_list_is_empty(from)) {
+        PyGC_Head *to_tail = GC_PREV(to);
+        PyGC_Head *from_head = GC_NEXT(from);
+        PyGC_Head *from_tail = GC_PREV(from);
+        assert(from_head != from);
+        assert(from_tail != from);
+
+        _PyGCHead_SET_NEXT(to_tail, from_head);
+        _PyGCHead_SET_PREV(from_head, to_tail);
+
+        _PyGCHead_SET_NEXT(from_tail, to);
+        _PyGCHead_SET_PREV(to, from_tail);
+    }
+    gc_list_init(from);
+}
+
+static struct _gc_runtime_state*
+get_gc_state(void)
+{
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    return &interp->gc;
+}
+#endif // Py_GIL_DISABLED
+// **********************************************************************
+
 // This uses the given arguments to create and throw a `RegionError`
 static void throw_region_error(
     const char *format_str, PyObject *format_args,
@@ -100,6 +181,7 @@ static Py_region_t regiondata_new(void) {
         return NULL_REGION;
     }
 
+    gc_list_init(&data->gc_list);
     data->rc = 1;
     return (Py_region_t)data;
 }
@@ -268,6 +350,7 @@ static int regiondata_union_merge(
         _Py_region_data *target_data = (_Py_region_data*)target;
         target_data->lrc += source_data->lrc;
         target_data->osc += source_data->osc;
+        gc_list_merge(&source_data->gc_list, &target_data->gc_list);
 
         // Check how the `open_tick` should be updated
         if (target_data->open_tick == OPEN_TICK_CLOSED) {
@@ -287,6 +370,10 @@ static int regiondata_union_merge(
 
         // Check if the region can be opened or closed.
         regiondata_check_status(target);
+    } else if (IS_LOCAL_REGION(target)) {
+        struct _gc_runtime_state* gc_state = get_gc_state();
+        // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
+        gc_list_merge(&(source_data->gc_list), &(gc_state->old[0].head));
     }
 
     // Remove information from `source`
@@ -294,6 +381,8 @@ static int regiondata_union_merge(
     source_data->lrc = 0;
     source_data->osc = 0;
     source_data->open_tick = OPEN_TICK_CLOSED;
+
+    assert(gc_list_is_empty(&source_data->gc_list));
 
     // Skip the error label and run the normal cleanup code
     goto cleanup;
@@ -833,6 +922,14 @@ static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
     assert(obj);
     ASSERT_IS_UNION_ROOT(new_region);
     ASSERT_REGION_HAS_NO_TAG(new_region);
+
+    // Remove the object from its GC list. This has to be done before the
+    // region update to make sure that the list head remains allocated
+    if (HAS_DATA(new_region) && PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
+        _Py_region_data *data = (_Py_region_data *)new_region;
+        gc_set_old_space(_Py_AS_GC(obj), 0);
+        gc_list_move(_Py_AS_GC(obj), &data->gc_list);
+    }
 
     // Update the region and region rc
     Py_region_t old_region = obj->ob_region;
