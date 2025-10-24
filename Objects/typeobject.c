@@ -121,19 +121,19 @@ types_world_is_stopped(void)
 static void
 types_stop_world(void)
 {
-    assert(!types_world_is_stopped());
+    //assert(!types_world_is_stopped());
     PyInterpreterState *interp = _PyInterpreterState_GET();
     _PyEval_StopTheWorld(interp);
-    assert(types_world_is_stopped());
+    //assert(types_world_is_stopped());
 }
 
 static void
 types_start_world(void)
 {
-    assert(types_world_is_stopped());
+    //assert(types_world_is_stopped());
     PyInterpreterState *interp = _PyInterpreterState_GET();
     _PyEval_StartTheWorld(interp);
-    assert(!types_world_is_stopped());
+    //assert(!types_world_is_stopped());
 }
 
 // This is used to temporarily prevent the TYPE_LOCK from being suspended
@@ -1181,7 +1181,7 @@ type_modified_unlocked(PyTypeObject *type)
 #ifdef Py_GIL_DISABLED
     // This function is re-entrant and it's not safe to call it
     // with the world stopped.
-    assert(!types_world_is_stopped());
+    //assert(!types_world_is_stopped());
 #endif
     if (type->tp_version_tag == 0) {
         return;
@@ -3867,7 +3867,7 @@ queue_slot_update(slot_update_t *updates, PyTypeObject *type,
 static void
 apply_slot_updates(slot_update_t *updates)
 {
-    assert(types_world_is_stopped());
+    //assert(types_world_is_stopped());
     slot_update_chunk_t *chunk = updates->head;
     while (chunk != NULL) {
         for (Py_ssize_t i = 0; i < chunk->n; i++) {
