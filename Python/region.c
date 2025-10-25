@@ -1829,8 +1829,17 @@ void _PyRegion_HackDirtyForPrototype(Py_region_t region) {
     regiondata_mark_as_dirty(region);
 }
 
-// TODO(regions): xFrednet: Take objects out of GC and create a region GC list
 // TODO(regions): xFrednet: Cowns
+//          Cowns are weird, Regions and RegionObjects are clearly split which allows the
+//          object to be defined in the regions module. What is the case for cowns?
+//          When do regions need to know about cowns?
+//            - Mark a new object as a cown (Move it into the cown region)
+//            - Inform a cown parent that a region is closed
+//            - Region has to know that it's owned
+//          Idea: Have a Cown struct, which is not bound to the CownObject of BoC. This
+//                object has a callback for `close,open,merge`?
+//                This should allow the creation of the CownObject but also other magic
+//                I think this is good (famous last words)
 // TODO(regions): xFrednet: Write Barrier in: Bytecode
 // TODO(regions): xFrednet: Write Barrier in: Dictionary
 // TODO(regions): xFrednet: Dirty on C code
@@ -1839,3 +1848,7 @@ void _PyRegion_HackDirtyForPrototype(Py_region_t region) {
 // TODO(regions): xFrednet: Merging a region into the local region should open
 //                          subregions, if the merge didn't happend for error handling
 //                          (Make sure subregions are always at the start of the region CG list)
+//                          (This might need a custom list, since bridges are currently part of
+//                             their regions list)
+//                          (Can this opening be done by checking if the parent is local?)
+// TODO(regions): xFrednet: Add GC operating in individual regions
