@@ -42,6 +42,11 @@ typedef struct _PyBridgeObject {
 
 #define _PyBridgeObject_CAST(op) _Py_CAST(_PyBridgeObject*, op)
 
+// FIXME(regions): xFrednet: Several parts of this state should be atomic to
+//      allow weak references from asking if the region is currently accessable.
+//      This might also be helpful to reduce the level of corruption which can
+//      happen when a region is somehow shared across threads. It would be
+//      interesting to see if using more atomics here has a performance impact.
 typedef struct _Py_region_data {
     /* The number of references coming in from the local region.
      *
@@ -118,6 +123,23 @@ typedef struct _Py_region_data {
 #endif
 } _Py_region_data;
 
+/** Callback to the owning cown. The first argument is the bride of of the
+ * owned region. The second argument is the concurrent unit id.
+ * 
+ * Note that these callbacks have to be thread safe, as they may be called
+ * from multiple threads simutaniously.
+ */
+typedef int(*_Py_cown_callback)(_PyBridgeObject* region, Py_ssize_t cuid);
+typedef int(*_Py_cown_merge_callback)(_PyBridgeObject* region, Py_ssize_t cuid, Py_region_t into_region, _PyBridgeObject* into_bridge);
+
+typedef struct _Py_cown
+{
+    _Py_cown_callback open;
+    _Py_cown_callback close;
+    _Py_cown_merge_callback merge;
+    _Py_cown_callback is_accessible;
+} _Py_cown;
+
 PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
@@ -139,6 +161,10 @@ PyAPI_FUNC(int) _PyRegion_SignalImmutable(PyObject *obj);
 PyAPI_FUNC(void) _PyRegion_SignalDealloc(PyObject *obj);
 
 PyAPI_FUNC(void) _PyRegion_HackDirtyForPrototype(Py_region_t region);
+
+PyAPI_FUNC(int) _PyRegion_HasOwner(Py_region_t region);
+PyAPI_FUNC(int) _PyRegion_SetCown(Py_region_t region, _Py_cown *cown);
+PyAPI_FUNC(int) _PyRegion_RemoveCown(Py_region_t region, _Py_cown *cown);
 
 #ifdef __cplusplus
 }
