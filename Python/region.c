@@ -19,6 +19,7 @@
 #define IS_IMMUTABLE_REGION(r)    ((Py_region_t)(r) == _Py_IMMUTABLE_REGION)
 #define IS_COWN_REGION(r)         ((Py_region_t)(r) == _Py_COWN_REGION)
 #define HAS_DATA(r)               (!IS_LOCAL_REGION(r) && !IS_IMMUTABLE_REGION(r) && !IS_COWN_REGION(r))
+#define _Py_region_data_CAST(op)  _Py_CAST(_Py_region_data*, op)
 
 /* Magic values for `_Py_region_data.open_tick` */
 #define OPEN_TICK_CLOSED 0
@@ -51,6 +52,9 @@ static int regiondata_dec_osc(Py_region_t region);
 static int regiondata_is_open(Py_region_t data);
 static Py_region_t regiondata_get_parent(Py_region_t region);
 static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent);
+static _PyCownObject* regiondata_get_cown(Py_region_t region);
+static int regiondata_set_cown(Py_region_t region, _PyCownObject *cown);
+static bool regiondata_has_cown(Py_region_t region);
 static int regiondata_check_status(Py_region_t region);
 
 static PyObject* list_pop(PyObject* s){
@@ -297,6 +301,13 @@ static int regiondata_union_merge(
     ASSERT_REGION_HAS_NO_TAG(target);
 
     int result = 0;
+
+    // A region which is owned by a cown can't be merged into another region.
+    // Note: This could be relaxed to allow merges into the immutable and cown region
+    if (regiondata_has_cown(source)) {
+        PyErr_Format(PyExc_RuntimeError, "regions owned by a cown can't be merged");
+        return -1;
+    }
 
     // Increase the RC of `target` to make sure none of the following
     // operations deallocates it by accident.
@@ -863,6 +874,64 @@ static Py_region_t regiondata_get_parent(Py_region_t region) {
  */
 static bool regiondata_has_parent(Py_region_t region) {
     return regiondata_get_parent(region) != 0;
+}
+
+static _PyCownObject* regiondata_get_cown(Py_region_t region) {
+    // Invariant:
+    ASSERT_IS_UNION_ROOT(region);
+
+    // Static regions never have a parent
+    if (!HAS_DATA(region)) {
+        return 0;
+    }
+
+    // Only continue if the owner is a cown
+    if (!HAS_OWNER_TAG(region, OWNER_TAG_COWN)) {
+        return 0;
+    }
+
+    return _PyCownObject_CAST(GET_OWNER_PTR(region));
+}
+
+static int regiondata_set_cown(Py_region_t region, _PyCownObject *cown) {
+    // Check invariant:
+    ASSERT_IS_UNION_ROOT(region);
+    ASSERT_REGION_HAS_NO_TAG(GET_OWNER_WITH_TAG(region));
+
+    if (!HAS_DATA(region)) {
+        PyErr_Format(PyExc_RuntimeError, "attempted to set the cown on a static region");
+        return -1;
+    }
+
+    // Fail the region is a subregion
+    if (regiondata_has_parent(region)) {
+        PyErr_Format(PyExc_RuntimeError, "attempted to set a cown for a subregion");
+        return -1;
+    }
+
+    // Fail if the region already has a cown
+    if (cown != NULL && regiondata_get_cown(region) != NULL) {
+        PyErr_Format(PyExc_RuntimeError, "attempted to set a cown for a region with a cown");
+        return -1;
+    }
+
+    // Update the owner field
+    _Py_region_data* data = _Py_region_data_CAST(region);
+    if (cown == NULL) {
+        // Clear ownership
+        data->owner = NULL_REGION;
+    } else {
+        // Store new owner
+        data->owner = ((Py_uintptr_t)cown) | OWNER_TAG_COWN;
+    }
+
+    return 0;
+}
+
+/* Returns `true` if the given region has a cown
+ */
+static bool regiondata_has_cown(Py_region_t region) {
+    return regiondata_get_cown(region) != 0;
 }
 
 /* Returns true, if `other` is an ancestor of `region`.
@@ -1827,6 +1896,51 @@ int _PyRegion_RemoveLocalRef(PyObject *tgt) {
 
 void _PyRegion_HackDirtyForPrototype(Py_region_t region) {
     regiondata_mark_as_dirty(region);
+}
+
+/* Returns 1 if the region has a owner. This can either be another region
+ * or a concurrent owner (cown)
+ */
+int _PyRegion_HasOwner(Py_region_t region) {
+    return regiondata_has_cown(region);
+}
+
+
+/* This sets the cown of the given region, or returns a non-zero value if the
+ * region is already owned.
+ *
+ * The region only stores a weak reference to the cown, to prevent cycles. The
+ * cown has to hold a strong reference to the region and remove the ownership
+ * on deallocation.
+ */
+int _PyRegion_SetCown(Py_region_t region, _PyCownObject *cown) {
+    assert(cown != NULL);
+
+    return regiondata_set_cown(region, cown);
+}
+
+/* This removes removes the concurrent owner from the region. The region will be
+ * free to get a new owner.
+ *
+ * The cown is passed in to ensure that a cown is only able to remove the owner for
+ * regions it owns.
+ */
+int _PyRegion_RemoveCown(Py_region_t region, _PyCownObject *cown) {
+    // Sanity check
+    _PyCownObject *owner = regiondata_get_cown(region);
+
+    // The owner was already cleared
+    if (owner == NULL) {
+        return 0;
+    }
+
+    // Fail if the region is owned by another cown
+    if (owner != cown) {
+        PyErr_Format(PyExc_RuntimeError, "attempted to clear the cown of a region owned by another cown");
+        return -1;
+    }
+
+    return regiondata_set_cown(region, NULL);
 }
 
 // TODO(regions): xFrednet: Cowns

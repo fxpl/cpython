@@ -129,16 +129,22 @@ typedef struct _Py_region_data {
  * Note that these callbacks have to be thread safe, as they may be called
  * from multiple threads simutaniously.
  */
-typedef int(*_Py_cown_callback)(_PyBridgeObject* region, Py_ssize_t cuid);
-typedef int(*_Py_cown_merge_callback)(_PyBridgeObject* region, Py_ssize_t cuid, Py_region_t into_region, _PyBridgeObject* into_bridge);
+typedef int(*_Py_cown_state_callback)(_PyCownObject *op, _PyBridgeObject* region, Py_ssize_t cuid);
+typedef int(*_Py_cown_merge_callback)(_PyCownObject *op, _PyBridgeObject* region, Py_ssize_t cuid, Py_region_t into_region, _PyBridgeObject* into_bridge);
 
-typedef struct _Py_cown
+typedef struct _Py_cown_callbacks
 {
-    _Py_cown_callback open;
-    _Py_cown_callback close;
+    _Py_cown_state_callback open;
+    _Py_cown_state_callback close;
     _Py_cown_merge_callback merge;
-    _Py_cown_callback is_accessible;
-} _Py_cown;
+    _Py_cown_state_callback is_accessible;
+} _Py_cown_callbacks;
+
+typedef struct _PyCownObject {
+    PyObject_HEAD;
+    _Py_cown_callbacks *callbacks;
+} _PyCownObject;
+#define _PyCownObject_CAST(op) _Py_CAST(_PyCownObject*, op)
 
 PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
@@ -163,8 +169,8 @@ PyAPI_FUNC(void) _PyRegion_SignalDealloc(PyObject *obj);
 PyAPI_FUNC(void) _PyRegion_HackDirtyForPrototype(Py_region_t region);
 
 PyAPI_FUNC(int) _PyRegion_HasOwner(Py_region_t region);
-PyAPI_FUNC(int) _PyRegion_SetCown(Py_region_t region, _Py_cown *cown);
-PyAPI_FUNC(int) _PyRegion_RemoveCown(Py_region_t region, _Py_cown *cown);
+PyAPI_FUNC(int) _PyRegion_SetCown(Py_region_t region, _PyCownObject *cown);
+PyAPI_FUNC(int) _PyRegion_RemoveCown(Py_region_t region, _PyCownObject *cown);
 
 #ifdef __cplusplus
 }
