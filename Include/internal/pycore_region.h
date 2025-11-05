@@ -123,6 +123,8 @@ typedef struct _Py_region_data {
 #endif
 } _Py_region_data;
 
+typedef struct _PyCownObject _PyCownObject;
+
 /** Callback to the owning cown. The first argument is the bride of of the
  * owned region. The second argument is the concurrent unit id.
  * 
@@ -140,10 +142,10 @@ typedef struct _Py_cown_callbacks
     _Py_cown_state_callback is_accessible;
 } _Py_cown_callbacks;
 
-typedef struct _PyCownObject {
+struct _PyCownObject {
     PyObject_HEAD;
     _Py_cown_callbacks *callbacks;
-} _PyCownObject;
+};
 #define _PyCownObject_CAST(op) _Py_CAST(_PyCownObject*, op)
 
 PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge);

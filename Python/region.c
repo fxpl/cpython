@@ -309,6 +309,9 @@ static int regiondata_union_merge(
         return -1;
     }
 
+    // TODO: insert COWN callbacks where needed
+    // TODO: insert specific cown handling were needed (clean???)
+
     // Increase the RC of `target` to make sure none of the following
     // operations deallocates it by accident.
     regiondata_inc_rc(target);
