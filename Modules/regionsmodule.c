@@ -122,7 +122,7 @@ static int Region_init(RegionObject *self, PyObject *args, PyObject *kwds) {
     PyBridgeObject_HEAD_INIT(self);
 
     // Allocate the new region object
-    if (_PyRegion_New(_PyObject_CAST(self))) {
+    if (_PyRegion_New(_PyBridgeObject_CAST(self))) {
         return -1;
     }
     assert(self->region != NULL_REGION);
@@ -445,7 +445,9 @@ regions_exec(PyObject *module) {
     }
 
     // Disable the invariant again, since it slows Python down so much
-    _PyOwnership_invariant_disable();
+    if (_PyOwnership_invariant_disable() != 0) {
+        return -1;
+    }
 
     return 0;
 }
