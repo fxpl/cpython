@@ -996,6 +996,19 @@ int _Py_DecRef_Immutable(PyObject *op)
 
     _Py_CLEAR_IMMUTABLE(op);
 
+    if (PyWeakref_Check(op)) {
+        PyObject* wr;
+        int res = PyWeakref_GetRef(op, &wr);
+        if (res == 1) {
+            // Make the weak reference weak.
+            // Get ref increments the refcount, so we need to decref twice.
+            Py_DECREF(wr);
+            Py_DECREF(wr);
+        }
+        // TODO: Don't know how to handle failure here.  It should never happen,
+        // as the reference was made strong during freezing.
+    }
+
     return true;
 #endif
 }
@@ -1048,6 +1061,24 @@ int traverse_freeze(PyObject* obj, PyObject* dfs)
         traverseproc traverse = Py_TYPE(obj)->tp_traverse;
         if(traverse != NULL){
             SUCCEEDS(traverse(obj, (visitproc)freeze_visit, dfs));
+        }
+    }
+
+    // Weak references are not followed by the GC, but should be
+    // for immutability.  Otherwise, we could share mutable state
+    // using a weak reference.
+    if (PyWeakref_Check(obj)) {
+        // Make the weak reference strong.
+        // Get Ref increments the refcount.
+        PyObject* wr;
+        int res = PyWeakref_GetRef(obj, &wr);
+        if (res == -1) {
+            goto error;
+        }
+        if (res == 1) {
+            if (freeze_visit(wr, dfs)) {
+                goto error;
+            }
         }
     }
 
