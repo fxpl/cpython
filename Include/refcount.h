@@ -355,6 +355,8 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         }
         // Object is immutable.
         // TODO(Immutable): Will need Atomic RC here
+        _Py_atomic_add_ssize(&op->ob_refcnt_full, 1);
+        return;
     }
     op->ob_refcnt = (uint32_t)cur_refcnt + 1;
 #else
@@ -365,6 +367,8 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         }
         // Object is immutable.
         // TODO(Immutable): Will need Atomic RC here
+        _Py_atomic_add_ssize(&op->ob_refcnt, 1);
+        return;
     }
     op->ob_refcnt++;
 #endif

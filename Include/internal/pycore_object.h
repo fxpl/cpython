@@ -495,9 +495,15 @@ static inline void _Py_DECREF_MORTAL_SPECIALIZED(const char *filename, int linen
 
 static inline void Py_DECREF_MORTAL(PyObject *op)
 {
-    // TODO(Immutable): Need to catch immutable things here
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+        return;
+    }
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -506,9 +512,16 @@ static inline void Py_DECREF_MORTAL(PyObject *op)
 
 static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruct)
 {
-    // TODO(Immutable): Need to catch immutable things here
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            destruct(op);
+        }
+        return;
+    }
+
     if (--op->ob_refcnt == 0) {
         _PyReftracerTrack(op, PyRefTracer_DESTROY);
         destruct(op);
