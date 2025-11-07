@@ -312,6 +312,14 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+// TODO(Immutable): Should this not be defined in the LIMITED_API?
+//#if !defined(Py_LIMITED_API)
+// Implements special logic for immutable objects.
+PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
+PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
+//#endif
+
+
 #ifndef Py_GIL_DISABLED
 static inline Py_ALWAYS_INLINE void Py_INCREF_MORTAL(PyObject *op)
 {
@@ -369,7 +377,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         }
         // Object is immutable.
         // TODO(Immutable): Will need Atomic RC here
-        _Py_atomic_add_ssize(&op->ob_refcnt_full, 1);
+        _Py_RefcntAdd_Immutable(op, 1);
         return;
     }
     op->ob_refcnt = (uint32_t)cur_refcnt + 1;
@@ -380,8 +388,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             return;
         }
         // Object is immutable.
-        // TODO(Immutable): Will need Atomic RC here
-        _Py_atomic_add_ssize(&op->ob_refcnt, 1);
+        _Py_RefcntAdd_Immutable(op, 1);
         return;
     }
     op->ob_refcnt++;
@@ -398,12 +405,6 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 < 0x030b0000
 #  define Py_INCREF(op) Py_INCREF(_PyObject_CAST(op))
 #endif
-
-// TODO(Immutable): Should this not be defined in the LIMITED_API?
-//#if !defined(Py_LIMITED_API)
-// Implements special logic for immutable objects.
-PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
-//#endif
 
 #if !defined(Py_LIMITED_API) && defined(Py_GIL_DISABLED)
 // Implements Py_DECREF on objects not owned by the current thread.

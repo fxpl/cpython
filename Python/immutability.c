@@ -605,12 +605,9 @@ void immutable_by_construction(PyObject* start, struct FreezeState *state)
 /*
   Function for use in _Py_hashtable_foreach.
   Marks the key as immutable/frozen.
-  In debug builds, sets the __freeze_location__ attribute
 */
-int mark_frozen(_Py_hashtable_t*, const void* key, const void*, void* state)
+int mark_frozen(_Py_hashtable_t*, const void* key, const void*, void*)
 {
-    struct FreezeState* fs = (struct FreezeState*)state;
-
     // Mark as frozen, this can only reach immutable objects so safe.
     _Py_SetImmutable((PyObject*)key);
     return 0;
@@ -979,11 +976,17 @@ int _Py_DecRef_Immutable(PyObject *op)
     return false;
 #else
     // TODO(Immutable): This will need to be atomic.
+#if SIZEOF_VOID_P > 4
+    Py_ssize_t old = _Py_atomic_add_ssize(&op->ob_refcnt_full, -1);
+    // The ssize_t might be too big, so mask to 32 bits as that is the size of
+    // ob_refcnt.
+    old = old & 0xFFFFFFFF;
+#else
     Py_ssize_t old = _Py_atomic_add_ssize(&op->ob_refcnt, -1);
-    // The ssize_t might be too big, so shrink to 32 bits as that is the size of
-    // ob_refcnt on all systems.
-    uint32_t old_32 = _Py_IMMUTABLE_FLAG_CLEAR(old);
-    if (old_32 != 1) {
+    old = _Py_IMMUTABLE_FLAG_CLEAR(old);
+#endif
+    
+    if (old != 1) {
         assert(_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) != 0);
         // Context does not to dealloc this object.
         return false;
@@ -996,6 +999,19 @@ int _Py_DecRef_Immutable(PyObject *op)
     return true;
 #endif
 }
+
+// _Py_RefcntAdd_Immutable(op, 1);
+void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
+{
+    // Increment the reference count of an immutable object.
+    assert(_Py_IsImmutable(op));
+#if SIZEOF_VOID_P > 4
+    _Py_atomic_add_ssize(&op->ob_refcnt_full, increment);
+#else
+    _Py_atomic_add_ssize(&op->ob_refcnt, increment);
+#endif
+}
+
 
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
