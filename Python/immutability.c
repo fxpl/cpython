@@ -1203,11 +1203,19 @@ int _PyImmutability_Freeze(PyObject* obj)
         // Add to visited before putting in internal datastructures, so don't have
         // to account of internal RC manipulations.
         add_visited(item, &freeze_state);
-        // Add postorder step to dfs.
-        SUCCEEDS(push(freeze_state.dfs, item));
-        SUCCEEDS(push(freeze_state.dfs, PostOrderMarker));
-        // Add to the SCC path
-        SUCCEEDS(push(freeze_state.pending, item));
+
+        if (_PyObject_IS_GC(item)) {
+            // Add postorder step to dfs.
+            SUCCEEDS(push(freeze_state.dfs, item));
+            SUCCEEDS(push(freeze_state.dfs, PostOrderMarker));
+            // Add to the SCC path
+            SUCCEEDS(push(freeze_state.pending, item));
+        } else {
+            // Non GC objects are their own SCC and cannot be cyclic.
+            debug_obj("Non-GC object, own SCC: %s (%p)\n", item);
+            // Make it its own SCC.
+            complete_scc(item, &freeze_state);
+        }
 
         if (!is_shallow_immutable(item)) {
             debug_obj("Not implicitly immutable: %s (%p)\n", item);
