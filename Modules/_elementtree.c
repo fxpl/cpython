@@ -4467,7 +4467,7 @@ module_exec(PyObject *m)
     CREATE_TYPE(m, st->Element_Type, &element_spec);
     CREATE_TYPE(m, st->XMLParser_Type, &xmlparser_spec);
 
-    if (_PyImmutability_RegisterFreezable((PyObject *)st->Element_Type) != 0) {
+    if (_PyImmutability_RegisterFreezable(st->Element_Type) != 0) {
         goto error;
     }
 

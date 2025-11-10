@@ -880,6 +880,7 @@ is_freezable_builtin(PyTypeObject *type)
         type == &_PyWeakref_RefType ||
         type == &_PyNotImplemented_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
         type == &PyModule_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
+        type == &PyImmModule_Type ||
         type == &PyEllipsis_Type
      )
      {
@@ -1041,6 +1042,10 @@ int traverse_freeze(PyObject* obj, PyObject* dfs)
     // use, and then we can freeze the those components.
     if(PyFunction_Check(obj)){
         SUCCEEDS(shadow_function_globals(obj));
+    }
+
+    if (PyModule_Check(obj)) {
+        SUCCEEDS(_Py_module_freeze_hook(obj));
     }
 
     if(PyType_Check(obj)){

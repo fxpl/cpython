@@ -4171,6 +4171,10 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
         goto error;
     }
     interp->sysdict = Py_NewRef(sysdict);
+    interp->mutable_modules = PyDict_New();
+    if (interp->mutable_modules == NULL) {
+        goto error;
+    }
 
     interp->sysdict_copy = PyDict_Copy(sysdict);
     if (interp->sysdict_copy == NULL) {
