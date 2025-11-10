@@ -169,6 +169,8 @@ static PyObject* peek(PyObject* s){
     return item;
 }
 
+// Depend on internal list pop implementation to avoid 
+// unnecessary refcount operations.
 static PyObject* pop(PyObject* s){
     PyObject* item;
     Py_ssize_t size = PyList_Size(s);
@@ -176,16 +178,11 @@ static PyObject* pop(PyObject* s){
         return NULL;
     }
 
-    item = PyList_GetItem(s, size - 1);
+    // The push doesn't incref, so can avoid the extra
+    // incref/decref here by using the internal pop.
+    item = _Py_ListPop((PyListObject *)s, size - 1);
     if(item == NULL){
-        return NULL;
-    }
-    // SetSlice will decref the item removed,
-    // but we didn't incref when pushing, so newref it
-    // here to balance the refcount.
-    // TODO(Immutable): Optimize by avoiding the newref/decf pair.
-    Py_NewRef(item);
-    if(PyList_SetSlice(s, size - 1, size, NULL)){
+        PyErr_SetString(PyExc_RuntimeError, "Internal error: Failed to pop from list");
         return NULL;
     }
 
