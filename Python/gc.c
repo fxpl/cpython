@@ -1542,6 +1542,7 @@ mark_global_roots(PyInterpreterState *interp, PyGC_Head *visited, int visited_sp
     gc_list_init(&reachable);
     Py_ssize_t objects_marked = 0;
     objects_marked += move_to_reachable(interp->sysdict, &reachable, visited_space);
+    objects_marked += move_to_reachable(interp->mutable_modules, &reachable, visited_space);
     objects_marked += move_to_reachable(interp->builtins, &reachable, visited_space);
     objects_marked += move_to_reachable(interp->dict, &reachable, visited_space);
     struct types_state *types = &interp->types;

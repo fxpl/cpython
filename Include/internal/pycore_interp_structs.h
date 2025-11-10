@@ -842,6 +842,7 @@ struct _is {
 
     // Dictionary of the sys module
     PyObject *sysdict;
+    PyObject *mutable_modules;
 
     // Dictionary of the builtins module
     PyObject *builtins;
