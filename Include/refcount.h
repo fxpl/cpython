@@ -51,11 +51,22 @@ increase over time until it reaches _Py_IMMORTAL_INITIAL_REFCNT.
 /*
   Immutability:
     In 64bit builds, we use the ob_flags field to store the immutability status of the object.
+  Immutable SCC algorithm requires three states
+    1. Immutable:
+        a. Direct: The object is immutable and it has the reference count
+        b. Indirect: The object is immutable and is part of an SCC, and another
+        object in the SCC carries the reference count.
+    2. Immutable pending: The object is currently being processed by the freeze
+    algorithm.
  */
 #define _Py_IMMUTABLE_FLAG 8
 #define _Py_IMMUTABLE_SCC_FLAG 16
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
 #define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) refcnt
+
+#define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
+#define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
 #else
 /*
 In 32 bit systems, an object will be treated as immortal if its reference
@@ -79,6 +90,8 @@ Immutability:
 Immutability is tracked in the top bit of the reference count. The immutability
 system also uses the second-to-top bit for managing immutable graphs.
 */
+// TODO(Immutable): Will need more states for IMMUTABLE + SCC, this doesn't
+// currently cover the SCC states.
 #define _Py_IMMUTABLE_FLAG ((Py_ssize_t)1L << 30)
 #define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) (refcnt & ~_Py_IMMUTABLE_FLAG)
 #endif
@@ -225,6 +238,9 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
 
         // TODO(Immutable): Do we need to clear the immutability state here?
         // TODO(Immutable): Is here even reachable?
+
+        // TODO(Immutable): Care should be taken to make the whole SCC mutable
+        // again if needed.
     }
 #ifndef Py_GIL_DISABLED
 #if SIZEOF_VOID_P > 4

@@ -1586,17 +1586,10 @@ PyObject* _Py_ListPop(PyListObject *self, Py_ssize_t index)
     PyObject **items = self->ob_item;
     v = items[index];
     const Py_ssize_t size_after_pop = Py_SIZE(self) - 1;
-    if (size_after_pop == 0) {
-        Py_INCREF(v);
-        list_clear(self);
-        status = 0;
+    if ((size_after_pop - index) > 0) {
+        memmove(&items[index], &items[index+1], (size_after_pop - index) * sizeof(PyObject *));
     }
-    else {
-        if ((size_after_pop - index) > 0) {
-            memmove(&items[index], &items[index+1], (size_after_pop - index) * sizeof(PyObject *));
-        }
-        status = list_resize(self, size_after_pop);
-    }
+    status = list_resize(self, size_after_pop);
     if (status >= 0) {
         return v; // and v now owns the reference the list had
     }
