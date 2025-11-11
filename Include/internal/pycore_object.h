@@ -498,7 +498,7 @@ static inline void Py_DECREF_MORTAL(PyObject *op)
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
     // TODO(Immutable): Check this is okay, does it perform okay?
-    if (Py_IsImmutable(op)) {
+    if (_Py_IsImmutable(op)) {
         if (_Py_DecRef_Immutable(op)) {
             _Py_Dealloc(op);
         }
@@ -515,7 +515,7 @@ static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruc
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
     // TODO(Immutable): Check this is okay, does it perform okay?
-    if (Py_IsImmutable(op)) {
+    if (_Py_IsImmutable(op)) {
         if (_Py_DecRef_Immutable(op)) {
             destruct(op);
         }
