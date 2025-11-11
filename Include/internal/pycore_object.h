@@ -465,6 +465,13 @@ static inline void Py_DECREF_MORTAL(const char *filename, int lineno, PyObject *
     if (!_Py_IsImmortal(op)) {
         _Py_DECREF_DecRefTotal();
     }
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (_Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+        return;
+    }
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -481,6 +488,15 @@ static inline void _Py_DECREF_MORTAL_SPECIALIZED(const char *filename, int linen
     if (!_Py_IsImmortal(op)) {
         _Py_DECREF_DecRefTotal();
     }
+
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (_Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+        return;
+    }
+
     if (--op->ob_refcnt == 0) {
 #ifdef Py_TRACE_REFS
         _Py_ForgetReference(op);
