@@ -1125,14 +1125,14 @@ static int shadow_function_globals(PyObject* op)
 
         if(PyDict_Contains(globals, name)){
             PyObject* value = PyDict_GetItem(globals, name);
-            if(PyDict_SetItem(shadow_globals, name, value)){
+            if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
                 Py_DECREF(shadow_builtins);
                 Py_DECREF(shadow_globals);
                 return 0;
             }
         }else if(PyDict_Contains(builtins, name)){
             PyObject* value = PyDict_GetItem(builtins, name);
-            if(PyDict_SetItem(shadow_builtins, name, value)){
+            if(PyDict_SetItem(shadow_builtins, Py_NewRef(name), Py_NewRef(value))){
                 Py_DECREF(shadow_builtins);
                 Py_DECREF(shadow_globals);
                 return 0;
@@ -1152,7 +1152,7 @@ static int shadow_function_globals(PyObject* op)
             PyObject* name = value;
             if(PyDict_Contains(globals, name)){
                 value = PyDict_GetItem(globals, name);
-                if(PyDict_SetItem(shadow_globals, name, value)){
+                if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
                     Py_DECREF(shadow_builtins);
                     Py_DECREF(shadow_globals);
                     return 0;
@@ -1192,7 +1192,7 @@ static int shadow_function_globals(PyObject* op)
             PyObject* name = value;
             if(PyDict_Contains(globals, name)){
                 value = PyDict_GetItem(globals, name);
-                if(PyDict_SetItem(shadow_globals, name, value)){
+                if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
                     Py_DECREF(shadow_builtins);
                     Py_DECREF(shadow_globals);
                     return 0;
