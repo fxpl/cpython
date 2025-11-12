@@ -1147,10 +1147,17 @@ static int shadow_function_globals(PyObject* op)
         goto nomemory;
     }
 
+    debug("Shadowing builtins for function %s (%p)\n", f->func_name, f);
+    debug(" Original builtins: %p\n", builtins);
+    debug(" Shadow builtins:   %p\n", shadow_builtins);
+
     shadow_globals = PyDict_New();
     if(shadow_globals == NULL){
         goto nomemory;
     }
+    debug("Shadowing globals for function %s (%p)\n", f->func_name, f);
+    debug(" Original globals: %p\n", globals);
+    debug(" Shadow globals:   %p\n", shadow_globals);
 
     if(PyDict_SetItemString(shadow_globals, "__builtins__", Py_NewRef(shadow_builtins))){
         Py_DECREF(shadow_builtins);
@@ -1178,6 +1185,7 @@ static int shadow_function_globals(PyObject* op)
 
         if(PyDict_Contains(globals, name)){
             PyObject* value = PyDict_GetItem(globals, name);
+            debug(" Copying global %s -> %p\n", PyUnicode_AsUTF8(name), value);
             if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
                 Py_DECREF(shadow_builtins);
                 Py_DECREF(shadow_globals);
@@ -1185,6 +1193,7 @@ static int shadow_function_globals(PyObject* op)
             }
         }else if(PyDict_Contains(builtins, name)){
             PyObject* value = PyDict_GetItem(builtins, name);
+            debug(" Copying builtin %s -> %p\n", PyUnicode_AsUTF8(name), value);
             if(PyDict_SetItem(shadow_builtins, Py_NewRef(name), Py_NewRef(value))){
                 Py_DECREF(shadow_builtins);
                 Py_DECREF(shadow_globals);
@@ -1205,6 +1214,7 @@ static int shadow_function_globals(PyObject* op)
             PyObject* name = value;
             if(PyDict_Contains(globals, name)){
                 value = PyDict_GetItem(globals, name);
+                debug(" Copying global %s -> %p\n", PyUnicode_AsUTF8(name), value);
                 if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
                     Py_DECREF(shadow_builtins);
                     Py_DECREF(shadow_globals);
@@ -1244,6 +1254,7 @@ static int shadow_function_globals(PyObject* op)
             PyObject* name = value;
             if(PyDict_Contains(globals, name)){
                 value = PyDict_GetItem(globals, name);
+                debug(" Copying global %s -> %p\n", PyUnicode_AsUTF8(name), value);
                 if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
                     Py_DECREF(shadow_builtins);
                     Py_DECREF(shadow_globals);
