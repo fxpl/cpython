@@ -27,6 +27,52 @@
 #define debug_obj(...)
 #endif
 
+// #define MERMAID_TRACING
+#ifdef MERMAID_TRACING
+#define TRACE_MERMAID_START() \
+    do { \
+        FILE* f = fopen("freeze_trace.md", "w"); \
+        if (f != NULL) { \
+            fprintf(f, "```mermaid\n"); \
+            fprintf(f, "graph LR\n"); \
+            fclose(f); \
+        } \
+    } while(0)
+
+#define TRACE_MERMAID_NODE(obj) \
+    do { \
+        FILE* f = fopen("freeze_trace.md", "a"); \
+        if (f != NULL) { \
+            fprintf(f, "    %p[\"%s (rc=%zd) - %p\"]\n", \
+                (void*)obj, (PyObject*)obj->ob_type->tp_name, \
+                Py_REFCNT(obj), (void*)obj); \
+            fclose(f); \
+        } \
+    } while(0)
+
+#define TRACE_MERMAID_EDGE(from, to) \
+    do { \
+        FILE* f = fopen("freeze_trace.md", "a"); \
+        if (f != NULL) { \
+            fprintf(f, "    %p --> %p\n", (void*)from, (void*)to); \
+            fclose(f); \
+        } \
+    } while(0)
+
+#define TRACE_MERMAID_END() \
+    do { \
+        FILE* f = fopen("freeze_trace.md", "a"); \
+        if (f != NULL) { \
+            fprintf(f, "```\n"); \
+            fclose(f); \
+        } \
+    } while(0)
+#else
+#define TRACE_MERMAID_START()
+#define TRACE_MERMAID_NODE(obj)
+#define TRACE_MERMAID_EDGE(from, to)
+#define TRACE_MERMAID_END()
+#endif
 
 static PyObject *
 _destroy(PyObject* set, PyObject *objweakref)
@@ -240,6 +286,9 @@ struct FreezeState {
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
     PyObject* freeze_location;
+#endif
+#ifdef MERMAID_TRACING
+    PyObject* start;
 #endif
 };
 
@@ -1099,7 +1148,7 @@ static int shadow_function_globals(PyObject* op)
         goto nomemory;
     }
 
-    if(PyDict_SetItemString(shadow_globals, "__builtins__", shadow_builtins)){
+    if(PyDict_SetItemString(shadow_globals, "__builtins__", Py_NewRef(shadow_builtins))){
         Py_DECREF(shadow_builtins);
         Py_DECREF(shadow_globals);
         return 0;
@@ -1177,7 +1226,6 @@ static int shadow_function_globals(PyObject* op)
 
         PyObject* shadow_cellvar = PyCell_New(value);
         if(PyTuple_SetItem(f->func_closure, i, shadow_cellvar) == -1){
-            Py_DECREF(shadow_cellvar);
             Py_DECREF(shadow_builtins);
             Py_DECREF(shadow_globals);
             return 0;
@@ -1201,18 +1249,15 @@ static int shadow_function_globals(PyObject* op)
         }
     }
 
-    f->func_globals = shadow_globals;
-    Py_DECREF(globals);
-
-    f->func_builtins = shadow_builtins;
-    Py_DECREF(builtins);
-
     if(f->func_annotations == NULL){
         f->func_annotations = PyDict_New();
         if(f->func_annotations == NULL){
             goto nomemory;
         }
     }
+
+    f->func_globals = shadow_globals;
+    f->func_builtins = shadow_builtins;
 
     return 0;
 
@@ -1223,8 +1268,10 @@ nomemory:
     return -1;
 }
 
-static int freeze_visit(PyObject* obj, void* dfs)
+static int freeze_visit(PyObject* obj, void* freeze_state_untyped)
 {
+    struct FreezeState* freeze_state = (struct FreezeState *)freeze_state_untyped;
+    PyObject* dfs = freeze_state->dfs;
     if (obj == NULL) {
         return 0;
     }
@@ -1234,6 +1281,8 @@ static int freeze_visit(PyObject* obj, void* dfs)
     }
 
     debug_obj("-> %s (%p) rc=%zu\n", obj, Py_REFCNT(obj));
+
+    TRACE_MERMAID_EDGE(freeze_state->start, obj);
 
     if(push(dfs, obj)){
         PyErr_NoMemory();
@@ -1403,6 +1452,9 @@ int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
 // returns true if the object should be deallocated.
 int _Py_DecRef_Immutable(PyObject *op)
 {
+    if (!_Py_IsImmutable(op))
+        return false;
+
     // Decrement the reference count of an immutable object without
     // deallocating it.
     assert(_Py_IsImmutable(op));
@@ -1475,6 +1527,9 @@ int _Py_DecRef_Immutable(PyObject *op)
 // _Py_RefcntAdd_Immutable(op, 1);
 void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 {
+    if (!_Py_IsImmutable(op))
+        return;
+
     op = scc_root(op);
 
     // Increment the reference count of an immutable object.
@@ -1490,10 +1545,15 @@ void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
-int traverse_freeze(PyObject* obj, PyObject* dfs)
+int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
 {
     //  WARNING
     //  CHANGES HERE NEED TO BE REFLECTED IN freeze_visit
+
+#ifdef MERMAID_TRACING
+    freeze_state->start = obj;
+    TRACE_MERMAID_NODE(obj);
+#endif
 
     debug_obj("%s (%p) rc=%zd\n", obj, Py_REFCNT(obj));
 
@@ -1519,17 +1579,17 @@ int traverse_freeze(PyObject* obj, PyObject* dfs)
         // TODO(Immutable): mjp: Special case for types not sure if required. We should review.
         PyTypeObject* type = (PyTypeObject*)obj;
 
-        SUCCEEDS(freeze_visit(type->tp_dict, dfs));
-        SUCCEEDS(freeze_visit(type->tp_mro, dfs));
+        SUCCEEDS(freeze_visit(type->tp_dict, freeze_state));
+        SUCCEEDS(freeze_visit(type->tp_mro, freeze_state));
         // We need to freeze the tuple object, even though the types
         // within will have been frozen already.
-        SUCCEEDS(freeze_visit(type->tp_bases, dfs));
+        SUCCEEDS(freeze_visit(type->tp_bases, freeze_state));
     }
     else
     {
         traverseproc traverse = Py_TYPE(obj)->tp_traverse;
         if(traverse != NULL){
-            SUCCEEDS(traverse(obj, (visitproc)freeze_visit, dfs));
+            SUCCEEDS(traverse(obj, (visitproc)freeze_visit, freeze_state));
         }
     }
 
@@ -1545,7 +1605,7 @@ int traverse_freeze(PyObject* obj, PyObject* dfs)
             goto error;
         }
         if (res == 1) {
-            if (freeze_visit(wr, dfs)) {
+            if (freeze_visit(wr, freeze_state)) {
                 goto error;
             }
         }
@@ -1555,7 +1615,7 @@ int traverse_freeze(PyObject* obj, PyObject* dfs)
     // not heap allocated, so we need to do that manually here to freeze
     // the statically allocated types that are reachable.
     if (!(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
-        SUCCEEDS(freeze_visit(_PyObject_CAST(Py_TYPE(obj)), dfs));
+        SUCCEEDS(freeze_visit(_PyObject_CAST(Py_TYPE(obj)), freeze_state));
     }
 
     return 0;
@@ -1571,6 +1631,7 @@ int _PyImmutability_Freeze(PyObject* obj)
         return 0;
     }
     int result = 0;
+    TRACE_MERMAID_START();
 
     struct FreezeState freeze_state;
     // Initialize the freeze state
@@ -1652,7 +1713,7 @@ int _PyImmutability_Freeze(PyObject* obj)
 
 
         // Traverse the fields of the current object to add to the dfs.
-        SUCCEEDS(traverse_freeze(item, freeze_state.dfs));
+        SUCCEEDS(traverse_freeze(item, &freeze_state));
     }
 
     // TODO: This disables the self-contained check.
@@ -1694,6 +1755,6 @@ error:
 
 finally:
     deallocate_FreezeState(&freeze_state);
-
+    TRACE_MERMAID_END();
     return result;
 }
