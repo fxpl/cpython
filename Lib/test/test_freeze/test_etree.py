@@ -5,11 +5,9 @@ import unittest
 from .test_common import BaseNotFreezableTest, BaseObjectTest
 
 
-# TODO(Immutable): Enable this test when the bug is fixed.
-# class TestElementTree(BaseNotFreezableTest):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, obj=ElementTree(), **kwargs)
-
+class TestElementTree(BaseNotFreezableTest):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, obj=ElementTree(), **kwargs)
 
 class TestXMLParser(BaseNotFreezableTest):
     def __init__(self, *args, **kwargs):
