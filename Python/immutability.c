@@ -9,7 +9,7 @@
 #include "pycore_immutability.h"
 #include "pycore_list.h"
 
-#define IMMUTABLE_TRACING
+// #define IMMUTABLE_TRACING
 
 #ifdef IMMUTABLE_TRACING
 #define debug(msg, ...) \
@@ -1345,7 +1345,9 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj)
 {
     debug_obj("check_freezable  %s (%p)\n", obj);
 
-    if(obj == (PyObject *)&_PyNotFreezable_Type){
+    // Check is object is subclass of NotFreezable
+    // TODO: Would be nice for this to be faster.
+    if (PyObject_IsInstance(obj, (PyObject *)&_PyNotFreezable_Type) == 1){
         goto error;
     }
 
