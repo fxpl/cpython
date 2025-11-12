@@ -1,31 +1,37 @@
-import unittest
 from immutable import freeze, NotFreezable, isfrozen
+from gc import collect
+from sys import getrefcount
+class C:
+    def __init__(self):
+        self.x = 0
 
-class TestDictMutation(unittest.TestCase):
-    class C:
-        def __init__(self):
-            self.x = 0
+    def set(self, x):
+        d = self.__dict__
+        d['x'] = x
 
-        def set(self, x):
-            d = self.__dict__
-            d['x'] = x
-
-    def test_dict_mutation(self):
-        obj = TestDictMutation.C()
-        d = obj.set(1)
-#        self.assertEqual(obj.get(), 1)
-        freeze(obj)
-        # self.assertEqual(obj.get(), 1)
-        # self.assertTrue(isfrozen(obj))
-        self.assertRaises(TypeError, obj.set, 1)
-
-    def test_dict_mutation2(self):
-        obj = TestDictMutation.C()
-        freeze(obj)
-        # self.assertTrue(isfrozen(obj))
-        # self.assertRaises(TypeError, obj.set, 1)
-        # self.assertEqual(obj.get(), 0)
-
+def test_dict_mutation():
+    print("********************Start obj = C()   ***************getrefcount(C):", getrefcount(C))
+    obj = C()
+    print("********************End obj = C()   ***************getrefcount(C):", getrefcount(C))
+    print("********************Start obj.set(1)  ***************getrefcount(C):", getrefcount(C))
+    obj.set(1)
+    print("********************End obj.set(1)  ***************getrefcount(C):", getrefcount(C))
+    print("********************Start freeze(obj)  ***************getrefcount(C):", getrefcount(C))
+    freeze(obj)
+    print("********************End freeze(obj)  ***************getrefcount(C):", getrefcount(C))
 
 if __name__ == '__main__':
-    unittest.main()
+    print("*******************************************************************Freeze C")
+    print("***********************************getrefcount(C):", getrefcount(C))
+    freeze(C)
+    print("*******************************************************************Testing dict mutation")
+    print("***********************************getrefcount(C):", getrefcount(C))
+    test_dict_mutation()
+    print("*******************************************************************Testing dict mutation 2")
+    print("***********************************getrefcount(C):", getrefcount(C))
+    test_dict_mutation()
+    print("*******************************************************************Collecting")
+    print("***********************************getrefcount(C):", getrefcount(C))
+    collect()
+    print("*******************************************************************Done")
+    print("***********************************getrefcount(C):", getrefcount(C))
