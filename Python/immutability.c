@@ -1452,9 +1452,6 @@ int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
 // returns true if the object should be deallocated.
 int _Py_DecRef_Immutable(PyObject *op)
 {
-    if (!_Py_IsImmutable(op))
-        return false;
-
     // Decrement the reference count of an immutable object without
     // deallocating it.
     assert(_Py_IsImmutable(op));
@@ -1527,9 +1524,7 @@ int _Py_DecRef_Immutable(PyObject *op)
 // _Py_RefcntAdd_Immutable(op, 1);
 void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 {
-    if (!_Py_IsImmutable(op))
-        return;
-
+    assert(_Py_IsImmutable(op));
     op = scc_root(op);
 
     // Increment the reference count of an immutable object.

@@ -395,10 +395,13 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_INCREF_IMMORTAL_STAT_INC();
             return;
         }
-        // Object is immutable.
-        // TODO(Immutable): Will need Atomic RC here
-        _Py_RefcntAdd_Immutable(op, 1);
-        return;
+        if (_Py_IsImmutable(op)) {
+            // Object is immutable.
+            // Slight chance of overflow, and an issue here, so check, and
+            // fall back to original core if it wasn't immutable after all.
+            _Py_RefcntAdd_Immutable(op, 1);
+            return;
+        }
     }
     op->ob_refcnt = (uint32_t)cur_refcnt + 1;
 #else
@@ -407,9 +410,13 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_INCREF_IMMORTAL_STAT_INC();
             return;
         }
-        // Object is immutable.
-        _Py_RefcntAdd_Immutable(op, 1);
-        return;
+        if (_Py_IsImmutable(op)) {
+            // Object is immutable.
+            // Slight chance of overflow, and an issue here, so check, and
+            // fall back to original core if it wasn't immutable after all.
+            _Py_RefcntAdd_Immutable(op, 1);
+            return;
+        }
     }
     op->ob_refcnt++;
 #endif
@@ -519,10 +526,13 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        assert(_Py_IsImmutable(op));
-        if (_Py_DecRef_Immutable(op))
-          _Py_Dealloc(op);
-        return;
+        if (_Py_IsImmutable(op))
+        { 
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+            return;
+        }
     }
     _Py_DECREF_STAT_INC();
     _Py_DECREF_DecRefTotal();
@@ -544,10 +554,13 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        assert(_Py_IsImmutable(op));
-        if (_Py_DecRef_Immutable(op))
-            _Py_Dealloc(op);
-        return;
+        if (_Py_IsImmutable(op))
+        { 
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+            return;
+        }
     }
     _Py_DECREF_STAT_INC();
     if (--op->ob_refcnt == 0) {
