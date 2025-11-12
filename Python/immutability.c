@@ -805,6 +805,7 @@ static void unfreeze(PyObject* obj)
     debug_obj("Unfreezing %s @ %p\n", obj);
     // Note: We don't need the details of the SCC for a simple unfreeze.
     struct SCCDetails scc_details;
+    scc_reset_root_refcount(obj);
     scc_add_internal_refcounts(obj, &scc_details);
     scc_make_mutable(obj);
     scc_return_to_gc(obj, true);
