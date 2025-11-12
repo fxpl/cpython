@@ -37,7 +37,7 @@ typedef struct {
 
 PyAPI_FUNC(PyModuleObject*) _PyInterpreterState_GetModuleState(PyObject *mod);
 
-static inline PyModuleDef* _PyModule_GetDefOrNull(PyObject *mod) {
+static inline PyModuleDef* _PyModule_GetDef(PyObject *mod) {
     assert(PyModule_Check(mod));
     PyModuleObject *state = _PyInterpreterState_GetModuleState(mod);
     if (state == NULL) {
