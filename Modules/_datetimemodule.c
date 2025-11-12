@@ -7494,9 +7494,10 @@ _PyDateTime_InitTypes(PyInterpreterState *interp)
             return _PyStatus_ERR("could not initialize static types");
         }
 
-        if(_PyImmutability_RegisterFreezable(capi_types[i]) < 0) {
-            return -1;
-        }
+        // TODO(Immutable): Revisit after PLDI deadline.
+        // if(_PyImmutability_RegisterFreezable(capi_types[i]) < 0) {
+        //     return -1;
+        // }
     }
 
 #define DATETIME_ADD_MACRO(dict, c, value_expr)         \

@@ -780,12 +780,14 @@ static void scc_add_internal_refcounts(PyObject* obj, struct SCCDetails* details
 
         if (PyWeakref_Check(c)) {
             // We followed weakreferences during freeze, so need to here as well.
-            PyObject* wr = PyWeakref_GET_OBJECT(c);
+            PyObject* wr = NULL;
+            PyWeakref_GetRef(c, &wr);
             if (wr != NULL) {
                 // This will increment the reference if it is in the same SCC
                 // and do nothing otherwise.  We are treating the weakref as
                 // a strong reference for the immutable state.
                 scc_add_internal_refcount_visit(wr, root);
+                Py_DECREF(wr);
             }
             details->has_weakreferences++;
         }
@@ -820,9 +822,11 @@ static void scc_make_mutable(PyObject* obj)
         n = scc_next(c);
         _Py_CLEAR_IMMUTABLE(c);
         if (PyWeakref_Check(c)) {
-            PyObject* wr = PyWeakref_GET_OBJECT(c);
+            PyObject* wr = NULL;
+            PyWeakref_GetRef(c, &wr);
             if (wr != NULL) {
                 // Turn back to weak reference. We made the weak references strong during freeze.
+                Py_DECREF(wr);
                 Py_DECREF(wr);
             }
         }

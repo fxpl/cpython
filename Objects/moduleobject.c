@@ -878,14 +878,15 @@ int _Py_module_freeze_hook(PyObject *self) {
     // Copy the state state
     mut_state->md_name = Py_NewRef(m->md_name);
     mut_state->md_dict = m->md_dict;
-    mut_state->md_def = m->md_def;
+    mut_state->md_token = m->md_token;
+    mut_state->md_token_is_def = m->md_token_is_def;
+    mut_state->md_state_size = m->md_state_size;
     mut_state->md_state = m->md_state;
     mut_state->md_weaklist = m->md_weaklist;
 
     if (PyDict_SetItem(ip->mutable_modules, m->md_name, _PyObject_CAST(mut_state))) {
         // Make sure failure keeps self intact
         mut_state->md_dict = NULL;
-        mut_state->md_def = NULL;
         mut_state->md_state = NULL;
         mut_state->md_weaklist = NULL;
 
@@ -895,7 +896,6 @@ int _Py_module_freeze_hook(PyObject *self) {
 
     // Clear the state to freeze the module
     m->md_dict = NULL;
-    m->md_def = NULL;
     m->md_state = NULL;
     m->md_weaklist = NULL;
     m->md_frozen = true;
