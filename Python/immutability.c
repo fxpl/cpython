@@ -619,6 +619,10 @@ static PyObject* scc_root(PyObject* obj)
     if (has_direct_rc(obj))
         return obj;
 
+    // If the object is pending, then it is still being explored,
+    // the final pass of the SCC algorithm will calculate the whole SCCs RC,
+    // apply the ref count directly so we don't accidentally delete an object
+    // that is still being explored.
     if (scc_is_pending(obj))
         return obj;
     
