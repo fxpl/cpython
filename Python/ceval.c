@@ -94,7 +94,7 @@
                     (*dealloc)(op); \
                 } \
                 break; \
-            }
+            } \
         } \
         _Py_DECREF_STAT_INC(); \
         if ((--op->ob_refcnt) == 0) { \
@@ -120,7 +120,7 @@
                     d(op); \
                 } \
                 break; \
-            }
+            } \
         } \
         _Py_DECREF_STAT_INC(); \
         if (--op->ob_refcnt == 0) { \
