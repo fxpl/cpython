@@ -620,7 +620,7 @@ static PyObject* scc_root(PyObject* obj)
         return obj;
 
     if (scc_is_pending(obj))
-        return get_representative(obj, NULL);
+        return obj;
     
     PyObject* parent = scc_parent(obj);
     if (parent != NULL)
