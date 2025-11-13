@@ -152,11 +152,19 @@ def bench_pickle(name, trials, gen_data):
     dur_max = max(durations_unpickle)
     dur_gmean = geometric_mean(durations_unpickle)
     print(f"| {name} | unpickle | {dur_mean:0.5f} | {dur_gmean:0.5f} | {dur_std:0.5f} | {dur_min:0.5f} | {dur_max:0.5f} |")
+    
+    durations = [x + y for x, y in zip(durations_pickle, durations_unpickle)]
+    dur_mean = mean(durations)
+    dur_std = stdev(durations)
+    dur_min = min(durations)
+    dur_max = max(durations)
+    dur_gmean = geometric_mean(durations)
+    print(f"| {name} | pickling | {dur_mean:0.5} | {dur_gmean:0.5} | {dur_std:0.5} | {dur_min:0.5} | {dur_max:0.5} |")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Freezing")
     parser.add_argument("--num-trials", "-t", type=int, default=10, help="Number of trials to run")
-    parser.add_argument("--size", "-s", type=int, default=100000, help="Size of the data structure to generate")
+    parser.add_argument("--size", "-s", type=int, default=1000000, help="Size of the data structure to generate")
     parser.add_argument("--seed", type=int, default=1, help="The inital Seed")
     parser.add_argument("--no-info", type=bool, default=False, help="Prevents info from being printed at the end")
     args = parser.parse_args()
@@ -189,5 +197,6 @@ if __name__ == '__main__':
         print(f"Trials per structure: {args.num_trials}")
         print(f"Initial Seed: {args.seed}")
         print(f"Used keys/values: Strings of length {VAL_LEN} (Examples: '{rand_val(r)}', '{rand_val(r)}', '{rand_val(r)}')")
+        print(f"Pickeling = Pickle + Unpickle")
 
 
