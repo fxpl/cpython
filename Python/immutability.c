@@ -1578,6 +1578,28 @@ int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
         return 0;
     }
 
+    PyObject *attr = NULL;
+    if (PyObject_GetOptionalAttr(obj, &_Py_ID(__freezable__), &attr) == 1
+        && Py_IsFalse(attr))
+    {
+        PyErr_Format(
+            PyExc_TypeError,
+            "A object of type %s is marked as unfreezable",
+            Py_TYPE(obj)->tp_name);
+        Py_XDECREF(attr);
+        return -1;
+    }
+    Py_XDECREF(attr);
+    
+    attr = NULL;
+    if (PyObject_GetOptionalAttr(obj, &_Py_ID(__pre_freeze__), &attr) == 1)
+    {
+        PyErr_SetString(PyExc_TypeError, "Pre-freeze hocks are currently WIP");
+        Py_XDECREF(attr);
+        return -1;
+    }
+    Py_XDECREF(attr);
+
     // Function require some work to freeze, so we do not freeze the
     // world as they mention globals and builtins.  This will shadow what they
     // use, and then we can freeze the those components.
