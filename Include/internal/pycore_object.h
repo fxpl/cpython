@@ -1088,6 +1088,11 @@ extern int _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict);
 static inline Py_ALWAYS_INLINE void _Py_INCREF_MORTAL(PyObject *op)
 {
     assert(!_Py_IsStaticImmortal(op));
+    if (_Py_IsImmutable(op)) {
+        _Py_RefcntAdd_Immutable(op, 1);
+        return;
+    }
+
     op->ob_refcnt++;
     _Py_INCREF_STAT_INC();
 #if defined(Py_REF_DEBUG) && !defined(Py_LIMITED_API)
