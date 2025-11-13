@@ -10982,6 +10982,24 @@
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
                 }
+                if (!Py_CHECKWRITE(owner_o))
+                {
+                    UNLOCK_OBJECT(dict);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    _PyEval_FormatExcNotWriteable(tstate, _PyFrame_GetCode(frame), oparg);
+                    _PyStackRef tmp = owner;
+                    owner = PyStackRef_NULL;
+                    stack_pointer[-1] = owner;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = value;
+                    value = PyStackRef_NULL;
+                    stack_pointer[-2] = value;
+                    PyStackRef_CLOSE(tmp);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -2;
+                    assert(WITHIN_STACK_BOUNDS());
+                    JUMP_TO_LABEL(error);
+                }
                 assert(PyDict_CheckExact((PyObject *)dict));
                 PyObject *name = GETITEM(FRAME_CO_NAMES, oparg);
                 if (hint >= (size_t)dict->ma_keys->dk_nentries ||
