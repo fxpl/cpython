@@ -137,6 +137,10 @@ static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
         _Py_INCREF_IMMORTAL_STAT_INC();
         return;
     }
+    if (_Py_IsImmutable(op)) {
+        _Py_RefcntAdd_Immutable(op, n);
+        return;
+    }
 #ifndef Py_GIL_DISABLED
     Py_ssize_t refcnt = _Py_REFCNT(op);
     Py_ssize_t new_refcnt = refcnt + n;
