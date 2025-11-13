@@ -1378,7 +1378,7 @@ PyModuleObject* _PyInterpreterState_GetModuleState(PyObject *mod) {
             assert(local_mod != mod);
 
             // Store mutable state
-            int res = PyDict_SetItem(is->mutable_modules, self->md_name, (PyObject**) &local_mod);
+            int res = PyDict_SetItem(is->mutable_modules, self->md_name, (PyObject*) local_mod);
             Py_DECREF(local_mod);
             if (res != 0) {
                 return NULL;
