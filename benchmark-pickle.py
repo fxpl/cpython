@@ -117,7 +117,7 @@ def bench_freeze(name, trials, gen_data):
     durations = []
     for i in range(trials):
         (_, t) = bench_func(freeze, gen_data(SEED))
-        durations.append(t)
+        durations.append(t * 1000)
         SEED += 1
 
     dur_mean = mean(durations)
@@ -125,7 +125,7 @@ def bench_freeze(name, trials, gen_data):
     dur_min = min(durations)
     dur_max = max(durations)
     dur_gmean = geometric_mean(durations)
-    print(f"| {name} | freeze   | {dur_mean:0.5} | {dur_gmean:0.5} | {dur_std:0.5} | {dur_min:0.5} | {dur_max:0.5} |")
+    print(f"| {name} | freeze   | {dur_mean:0.2f} | {dur_gmean:0.2f} | {dur_std:0.2f} | {dur_min:0.2f} | {dur_max:0.2f} |")
 
 def bench_pickle(name, trials, gen_data):
     global SEED
@@ -133,33 +133,33 @@ def bench_pickle(name, trials, gen_data):
     durations_unpickle = []
     for i in range(trials):
         (data, time) = bench_func(pickle.dumps, gen_data(SEED))
-        durations_pickle.append(time)
+        durations_pickle.append(time * 1000)
         SEED += 1
 
         (_, time) = bench_func(pickle.loads, data)
-        durations_unpickle.append(time)
+        durations_unpickle.append(time * 1000)
 
     dur_mean = mean(durations_pickle)
     dur_std = stdev(durations_pickle)
     dur_min = min(durations_pickle)
     dur_max = max(durations_pickle)
     dur_gmean = geometric_mean(durations_pickle)
-    print(f"| {name} | pickle   | {dur_mean:0.5f} | {dur_gmean:0.5f} | {dur_std:0.5f} | {dur_min:0.5f} | {dur_max:0.5f} |")
+    print(f"| {name} | pickle   | {dur_mean:0.2f} | {dur_gmean:0.2f} | {dur_std:0.2f} | {dur_min:0.2f} | {dur_max:0.2f} |")
 
     dur_mean = mean(durations_unpickle)
     dur_std = stdev(durations_unpickle)
     dur_min = min(durations_unpickle)
     dur_max = max(durations_unpickle)
     dur_gmean = geometric_mean(durations_unpickle)
-    print(f"| {name} | unpickle | {dur_mean:0.5f} | {dur_gmean:0.5f} | {dur_std:0.5f} | {dur_min:0.5f} | {dur_max:0.5f} |")
-    
+    print(f"| {name} | unpickle | {dur_mean:0.2f} | {dur_gmean:0.2f} | {dur_std:0.2f} | {dur_min:0.2f} | {dur_max:0.2f} |")
+
     durations = [x + y for x, y in zip(durations_pickle, durations_unpickle)]
     dur_mean = mean(durations)
     dur_std = stdev(durations)
     dur_min = min(durations)
     dur_max = max(durations)
     dur_gmean = geometric_mean(durations)
-    print(f"| {name} | pickling | {dur_mean:0.5} | {dur_gmean:0.5} | {dur_std:0.5} | {dur_min:0.5} | {dur_max:0.5} |")
+    print(f"| {name} | pickling | {dur_mean:0.2f} | {dur_gmean:0.2f} | {dur_std:0.2f} | {dur_min:0.2f} | {dur_max:0.2f} |")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser("Freezing")
@@ -198,5 +198,6 @@ if __name__ == '__main__':
         print(f"Initial Seed: {args.seed}")
         print(f"Used keys/values: Strings of length {VAL_LEN} (Examples: '{rand_val(r)}', '{rand_val(r)}', '{rand_val(r)}')")
         print(f"Pickeling = Pickle + Unpickle")
+        print(f"Time in MS")
 
 
