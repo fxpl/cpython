@@ -11,7 +11,6 @@ extern "C" {
 #include "object.h"
 #include "region.h"
 #include "pycore_ownership.h"
-#include "pycore_gc.h" // PyGC_Head
 
 /* Macros for readability */
 #define NULL_REGION 0
@@ -131,8 +130,8 @@ typedef struct _PyCownObject _PyCownObject;
  * Note that these callbacks have to be thread safe, as they may be called
  * from multiple threads simutaniously.
  */
-typedef int(*_Py_cown_state_callback)(_PyCownObject *op, _PyBridgeObject* region, Py_ssize_t cuid);
-typedef int(*_Py_cown_merge_callback)(_PyCownObject *op, _PyBridgeObject* region, Py_ssize_t cuid, Py_region_t into_region, _PyBridgeObject* into_bridge);
+typedef int(*_Py_cown_state_callback)(_PyCownObject *op, _PyBridgeObject* region, uint64_t cuid);
+typedef int(*_Py_cown_merge_callback)(_PyCownObject *op, _PyBridgeObject* region, uint64_t cuid, Py_region_t into_region, _PyBridgeObject* into_bridge);
 
 typedef struct _Py_cown_callbacks
 {

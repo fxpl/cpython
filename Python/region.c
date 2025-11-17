@@ -8,6 +8,7 @@
 #include "pycore_region.h"
 #include "pycore_runtime.h"    // _Py_ID
 #include "pycore_list.h"
+#include "pycore_gc.h" // PyGC_Head
 
 #include <stdbool.h>
 
@@ -452,8 +453,14 @@ static int regiondata_open(Py_region_t region) {
 
     // Notify the owner
     if (HAS_OWNER_TAG(region, OWNER_TAG_COWN)) {
-        // TODO: xFrednet: Implement this branch, probably just an assert
-        assert(false);
+        // FIXME(regions): xFrednet: This is using the thread ID, assuming that
+        // this is safe due to the GIL and enforcing separation between threads
+        // could be hard. Is this assumption/choice correct?
+        //
+        // uint64_t cuid = PyThreadState_GetID(PyThreadState_Get());
+        uint64_t cuid = PyInterpreterState_GetID(PyInterpreterState_Get());
+        _PyCownObject *cown = _PyCownObject_CAST(GET_OWNER_PTR(region));
+        SUCCEEDS((cown->callbacks->open)(cown, data->bridge, cuid));
     } else if (regiondata_get_parent(region) != 0) {
         SUCCEEDS(regiondata_open(regiondata_get_parent(region)));
     }
