@@ -1,6 +1,7 @@
 #include "Python.h"
 
 #include "pycore_cown.h"
+#include "pycore_region.h"
 
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
@@ -14,7 +15,7 @@ typedef enum {
     Cown_POISEN          = 3,
 } CownState;
 
-typedef struct PyCownObject {
+struct PyCownObject {
     PyObject_HEAD
     /* The current state of this cown object.
      *
@@ -34,29 +35,52 @@ typedef struct PyCownObject {
      * or a region object.
      */
     PyObject* value;
-} PyCownObject;
+};
 
 static int PyCown_init(PyCownObject *self, PyObject *args, PyObject *kwds) {
-    // TODO: Pyrona: should not be needed in the future
+    // FIXME(regions): xFrednet: Only freeze this one in regionsmodule_init
     SUCCEEDS(_PyImmutability_Freeze(_PyObject_CAST(&PyCown_Type)));
 
-    static char *kwlist[] = {"value", NULL};
-    PyObject *value = NULL;
+    // This moves the region into the cown rei
+    SUCCEEDS(_PyRegion_SetCownRegion(self));
 
     // See if we got a value as a keyword argument
+    static char *kwlist[] = {"value", NULL};
+    PyObject *value = NULL;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", kwlist, &value)) {
-        return -1;  // Return -1 on failure
+        return -1;
     }
 
+    // Set the value to `None` if nothing was given
     int state = Cown_PENDING_RELEASE;
     if (value == NULL) {
+        // FIXME(regions): xFrednet: Only freeze this one in regionsmodule_init
         SUCCEEDS(_PyImmutability_Freeze(Py_None));
         value = Py_None;
     }
 
-    // TODO(regions): xFrednet: Validate value is immutable, cown or region
+    // FIXME(regions): xFrednet: Move this into and call _PyCown_SetValue
+    // Validate that cowns support the given value
+    Py_region_t value_region = _PyRegion_Get(value);
+    if (value == _Py_COWN_REGION || value == _Py_IMMUTABLE_REGION) {
+        // Immutable and cown objects are allowed. Nothing to be done here.
+    } else if (value == _Py_LOCAL_REGION) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "Cowns only support region, cown or immutable objects. The given object is a local object.");
+        return -1;
+    } else if (_PyRegion_IsBridge(value)) {
+        SUCCEEDS(_PyRegion_SetCown(value, self));
+    } else {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "Cowns only support regions, cown or immutable objects. The given object is a local object.");
+        return -1;
+    }
 
-    SUCCEEDS(_PyRegion_AddRef(_PyObject_CAST(self), value));
+    // The write barrier for this reference is already covered by the
+    // if statement above.
+    // _PyRegion_ADDREF(self, value);
     self->value = _Py_NewRef(value);
     _Py_atomic_store_int(&self->state, state);
 

@@ -11,6 +11,7 @@ extern "C" {
 #include "object.h"
 #include "region.h"
 #include "pycore_ownership.h"
+#include "pycore_gc.h" // PyGC_Head
 
 /* Macros for readability */
 #define NULL_REGION 0
@@ -169,9 +170,10 @@ PyAPI_FUNC(void) _PyRegion_SignalDealloc(PyObject *obj);
 
 PyAPI_FUNC(void) _PyRegion_HackDirtyForPrototype(Py_region_t region);
 
+PyAPI_FUNC(int) _PyRegion_SetCownRegion(_PyCownObject *cown);
 PyAPI_FUNC(int) _PyRegion_HasOwner(Py_region_t region);
-PyAPI_FUNC(int) _PyRegion_SetCown(Py_region_t region, _PyCownObject *cown);
-PyAPI_FUNC(int) _PyRegion_RemoveCown(Py_region_t region, _PyCownObject *cown);
+PyAPI_FUNC(int) _PyRegion_SetCown(_PyBridgeObject* bridge, _PyCownObject *cown);
+PyAPI_FUNC(int) _PyRegion_RemoveCown(_PyBridgeObject* bridge, _PyCownObject *cown);
 
 #ifdef __cplusplus
 }

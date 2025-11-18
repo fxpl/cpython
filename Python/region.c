@@ -8,7 +8,6 @@
 #include "pycore_region.h"
 #include "pycore_runtime.h"    // _Py_ID
 #include "pycore_list.h"
-#include "pycore_gc.h" // PyGC_Head
 
 #include <stdbool.h>
 
@@ -991,7 +990,8 @@ static bool regiondata_is_bridge(Py_region_t region, PyObject *obj) {
     return _PyObject_CAST(data->bridge) == obj;
 }
 
-/* Sets the region of the object to the newly given region.
+/* Sets the region of the object to the newly given region and removes it
+ * from the GC list.
  *
  * This will just update the RC of the old and new region, all other state,
  * like the LRC, has to be updated separatly.
@@ -1003,11 +1003,20 @@ static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
     ASSERT_REGION_HAS_NO_TAG(new_region);
 
     // Remove the object from its GC list. This has to be done before the
-    // region update to make sure that the list head remains allocated
-    if (HAS_DATA(new_region) && PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
-        _Py_region_data *data = (_Py_region_data *)new_region;
-        gc_set_old_space(_Py_AS_GC(obj), 0);
-        gc_list_move(_Py_AS_GC(obj), &data->gc_list);
+    // updating the region RC to make sure that the list head remains allocated
+    if (PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
+        if (HAS_DATA(new_region)) {
+            _Py_region_data *data = (_Py_region_data *)new_region;
+            gc_set_old_space(_Py_AS_GC(obj), 0);
+            gc_list_move(_Py_AS_GC(obj), &data->gc_list);
+        } else if (IS_LOCAL_REGION(new_region)) {
+            struct _gc_runtime_state* gc_state = get_gc_state();
+            // Use `old[0]` here, we are setting the visited space to 0 in _PyRegion_Set().
+            gc_list_move(_Py_AS_GC(obj), &(gc_state->old[0].head));
+        } else if (IS_COWN_REGION(new_region)) {
+            // Untrack the object, cowns are not GC'ed (yet?)
+            PyObject_GC_UnTrack(obj);
+        }
     }
 
     // Update the region and region rc
@@ -1908,6 +1917,11 @@ void _PyRegion_HackDirtyForPrototype(Py_region_t region) {
     regiondata_mark_as_dirty(region);
 }
 
+int _PyRegion_SetCownRegion(_PyCownObject *cown) {
+    _PyRegion_Set(cown, _Py_COWN_REGION);
+    return 0;
+}
+
 /* Returns 1 if the region has a owner. This can either be another region
  * or a concurrent owner (cown)
  */
@@ -1923,8 +1937,12 @@ int _PyRegion_HasOwner(Py_region_t region) {
  * cown has to hold a strong reference to the region and remove the ownership
  * on deallocation.
  */
-int _PyRegion_SetCown(Py_region_t region, _PyCownObject *cown) {
+int _PyRegion_SetCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
+    Py_region_t region = _PyRegion_GET(bridge);
+
+    // Validation
     assert(cown != NULL);
+    assert(_PyRegion_IsBridge(bridge));
 
     return regiondata_set_cown(region, cown);
 }
@@ -1935,7 +1953,13 @@ int _PyRegion_SetCown(Py_region_t region, _PyCownObject *cown) {
  * The cown is passed in to ensure that a cown is only able to remove the owner for
  * regions it owns.
  */
-int _PyRegion_RemoveCown(Py_region_t region, _PyCownObject *cown) {
+int _PyRegion_RemoveCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
+    Py_region_t region = _PyRegion_GET(bridge);
+
+    // Validation
+    assert(cown != NULL);
+    assert(_PyRegion_IsBridge(bridge));
+
     // Sanity check
     _PyCownObject *owner = regiondata_get_cown(region);
 
@@ -1964,6 +1988,10 @@ int _PyRegion_RemoveCown(Py_region_t region, _PyCownObject *cown) {
 //                object has a callback for `close,open,merge`?
 //                This should allow the creation of the CownObject but also other magic
 //                I think this is good (famous last words)
+// TODO(regions): xFrednet: Cleanup
+//      - Move write barriers from `pycore_regions.h` to `regions.h`
+//      - Move region type and object into core (Only reexport types via the regionmodule.c)
+//      - Remove _ prefix from public API types and functions (And add it to internal ones)
 // TODO(regions): xFrednet: Write Barrier in: Bytecode
 // TODO(regions): xFrednet: Write Barrier in: Dictionary
 // TODO(regions): xFrednet: Dirty on C code

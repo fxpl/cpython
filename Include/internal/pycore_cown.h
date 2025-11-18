@@ -12,6 +12,8 @@ extern "C" {
 #include "exports.h"
 #include "region.h"
 
+typedef struct PyCownObject PyCownObject;
+
 // PyAPI_DATA(PyTypeObject) CownType;
 
 //PyAPI_FUNC(PyObject*) _PyCown_New();
