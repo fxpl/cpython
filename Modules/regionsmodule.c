@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include "pycore_object.h"
 #include "pycore_region.h"
+#include "pycore_cown.h"
 #include "pycore_ownership.h"
 
 /*[clinic input]
@@ -152,7 +153,7 @@ Region_repr(PyObject *op)
 #ifdef Py_DEBUG
     repr = PyUnicode_FromFormat(
         "<Region name=%R _lrc=%zu _osc=%zu is_dirty=%s>",
-        self->name,
+        self->name ? self->name : Py_None,
         _PyRegion_GetLrc(region),
         _PyRegion_GetOsc(region),
         _PyRegion_IsDirty(region) ? "True" : "False"
@@ -160,7 +161,7 @@ Region_repr(PyObject *op)
 #else
     repr = PyUnicode_FromFormat(
         "<Region name=%R>",
-        self->name,
+        self->name ? self->name : Py_None,
     );
 #endif
 
@@ -439,8 +440,25 @@ regions_exec(PyObject *module) {
         return -1;
     }
 
+    // Register the `Cown` type
+    if (PyType_Ready(&_PyCown_Type) < 0) {
+        return -1;
+    }
+    if (_PyImmutability_Freeze(_PyObject_CAST(&_PyCown_Type)) != 0) {
+        return -1;
+    }
+    _Py_SetImmortalUntracked(_PyObject_CAST(&_PyCown_Type));
+    if (PyModule_AddObject(module, "Cown", _PyObject_CAST(&_PyCown_Type)) < 0) {
+        return -1;
+    }
+
     // Freeze the dict type, to allow dictionaries to be used across regions.
     if (_PyImmutability_Freeze(_PyObject_CAST(&PyDict_Type)) != 0) {
+        return -1;
+    }
+
+    // Freeze the `None` struct
+    if (_PyImmutability_Freeze(_PyObject_CAST(Py_None)) != 0) {
         return -1;
     }
 

@@ -6,8 +6,6 @@
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
-extern PyTypeObject PyCown_Type;
-
 typedef enum {
     Cown_RELEASED        = 0,
     Cown_ACQUIRED        = 1,
@@ -61,6 +59,7 @@ static int cown_set_value_unchecked(_PyCownObject* self, PyObject* value) {
         }
     }
 
+    // Update the value
     Py_INCREF(value);
     self->value = value;
 
@@ -127,15 +126,12 @@ int _PyCown_RegionClose(_PyCownObject *self, _PyBridgeObject* region, uint64_t c
 }
 
 static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
-    // FIXME(cowns): xFrednet: Only freeze this one in regionsmodule_init
-    SUCCEEDS(_PyImmutability_Freeze(_PyObject_CAST(&PyCown_Type)));
-
     // This moves the region into the cown rei
     SUCCEEDS(_PyRegion_SetCownRegion(self));
 
     // See if we got a value as a keyword argument
     static char *kwlist[] = {"value", NULL};
-    PyObject *value = NULL;
+    PyObject *value = Py_None;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", kwlist, &value)) {
         return -1;
     }
@@ -144,12 +140,7 @@ static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
     _Py_atomic_store_uint64(&self->owning_cuip, _PyCown_ConcurrentUnitId());
     _Py_atomic_store_int(&self->state, Cown_PENDING_RELEASE);
 
-    // Set the value to `None` if nothing was given
-    if (value == NULL) {
-        // FIXME(cowns): xFrednet: Only freeze this one in regionsmodule_init
-        SUCCEEDS(_PyImmutability_Freeze(Py_None));
-        value = Py_None;
-    }
+    // Set the cown value using the internal function for full validation
     SUCCEEDS(cown_set_value(self, value));
 
     return 0;
@@ -167,6 +158,7 @@ static int PyCown_traverse(_PyCownObject *self, visitproc visit, void *arg) {
 }
 
 static int PyCown_clear(_PyCownObject *self) {
+    cown_set_value_unchecked(self, Py_None);
     Py_CLEAR(self->value);
     return 0;
 }
@@ -189,11 +181,28 @@ static PyMethodDef PyCown_methods[] = {
     {NULL}  // Sentinel
 };
 
+PyObject *CownObject_get_value(_PyCownObject *self, void *closure) {
+    BAIL_UNLESS_OWNED_NULL(self);
 
-PyTypeObject PyCown_Type = {
+    return _Py_NewRef(self->value);
+}
+
+int CownObject_set_value(_PyCownObject *self, PyObject *value, void *closure) {
+    BAIL_UNLESS_OWNED(self, -1);
+
+    return cown_set_value(self, value);
+}
+
+static PyGetSetDef PyCownObject_getset[] = {
+    {"value", (getter)CownObject_get_value, (setter)CownObject_set_value,
+        "", NULL},
+    {NULL, NULL, NULL, NULL, NULL}
+};
+
+PyTypeObject _PyCown_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
-    "Cown",                                  /* tp_name */
-    sizeof(_PyCownObject),                    /* tp_basicsize */
+    "regions.Cown",                          /* tp_name */
+    sizeof(_PyCownObject),                   /* tp_basicsize */
     0,                                       /* tp_itemsize */
     (destructor)PyCown_dealloc,              /* tp_dealloc */
     0,                                       /* tp_vectorcall_offset */
@@ -220,7 +229,7 @@ PyTypeObject PyCown_Type = {
     0,                                       /* tp_iternext */
     PyCown_methods,                          /* tp_methods */
     0,                                       /* tp_members */
-    0,                                       /* tp_getset */
+    PyCownObject_getset,                     /* tp_getset */
     0,                                       /* tp_base */
     0,                                       /* tp_dict */
     0,                                       /* tp_descr_get */

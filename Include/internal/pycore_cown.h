@@ -17,7 +17,7 @@ typedef struct _PyCownObject _PyCownObject;
 
 #define _PyCownObject_CAST(op) _Py_CAST(_PyCownObject*, op)
 
-// PyAPI_DATA(PyTypeObject) CownType;
+PyAPI_DATA(PyTypeObject) _PyCown_Type;
 
 //PyAPI_FUNC(PyObject*) _PyCown_New();
 // PyAPI_FUNC(int) _PyCown_SetValue(_PyCownObject* self, PyObject* value);

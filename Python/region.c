@@ -39,6 +39,10 @@
 /* Helper macros */
 #define ASSERT_IS_UNION_ROOT(region) assert(!HAS_DATA(region) || !HAS_OWNER_TAG(region, OWNER_TAG_MERGED))
 #define ASSERT_REGION_HAS_NO_TAG(region) assert((region & OWNER_PTR_MASK) == region)
+#define ASSERT_REGION_OWNER_HAS_NO_TAG(region) \
+    if HAS_DATA(region) { \
+        ASSERT_REGION_HAS_NO_TAG(GET_OWNER_WITH_TAG(region)); \
+    }
 
 #define STAGED_REF_NOP_MERGE            ((Py_uintptr_t)0xbeef)
 #define STAGED_REF_LRC_TAG              ((Py_uintptr_t)0x1)
@@ -615,7 +619,7 @@ static int regiondata_closes_after_lrc(Py_region_t region, Py_ssize_t lrc) {
     _Py_region_data *data = (_Py_region_data*)region;
     if (regiondata_is_dirty(region) && data->osc > 0) {
         return 0;
-    } 
+    }
 
     // Return true, if the known local references are the only ones keeping
     // the region open
@@ -818,7 +822,7 @@ static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent) {
     ASSERT_IS_UNION_ROOT(region);
     ASSERT_IS_UNION_ROOT(new_parent);
     assert(region != new_parent);
-    ASSERT_REGION_HAS_NO_TAG(GET_OWNER_WITH_TAG(region));
+    ASSERT_REGION_OWNER_HAS_NO_TAG(region);
 
     // Get the old parent
     _Py_region_data* data = (_Py_region_data*) region;
@@ -906,7 +910,6 @@ static _PyCownObject* regiondata_get_cown(Py_region_t region) {
 static int regiondata_set_cown(Py_region_t region, _PyCownObject *cown) {
     // Check invariant:
     ASSERT_IS_UNION_ROOT(region);
-    ASSERT_REGION_HAS_NO_TAG(GET_OWNER_WITH_TAG(region));
 
     if (!HAS_DATA(region)) {
         PyErr_Format(PyExc_RuntimeError, "attempted to set the cown on a static region");
@@ -1599,7 +1602,10 @@ int _PyRegion_Clean(Py_region_t region) {
 }
 
 int _PyRegion_IsBridge(PyObject *obj) {
-    return _PyRegion_GetBridge(_PyRegion_Get(obj)) == obj;
+    // _PyRegion_GetBridge will return None, if the region has no bridge,
+    // this would result in a false positive for the None object
+    return _PyRegion_GetBridge(_PyRegion_Get(obj)) == obj
+        && !Py_IsNone(obj);
 }
 
 /* Returns the bridge object belonging to the region of the given object.
@@ -1673,7 +1679,7 @@ PyRegion_staged_ref_t _PyRegion_StageRef(PyObject *src, PyObject *tgt) {
         // Intra-region references are always permitted and not tracket
         return STAGED_REF_NOP_MERGE;
     }
-    
+
     if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
         // References to immutable objects or cowns are always permitted
         return STAGED_REF_NOP_MERGE;
@@ -1699,7 +1705,7 @@ void _PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref) {
  * internal region state accordingly.
  *
  * Returns 0 on success.
- * 
+ *
  * This is the fast path of `_PyRegion_AddRefs` for single references
  */
 int _PyRegion_AddRef(PyObject *src, PyObject *tgt) {
@@ -1729,7 +1735,7 @@ int _PyRegion_AddRef(PyObject *src, PyObject *tgt) {
 }
 
 /* This informs the regions of the targets about a new incoming local reference.
- * 
+ *
  * The `src` argument is only used for error reporting and can be NULL.
  */
 static int _add_local_refs(PyObject *src, int tgt_count, PyObject **targets) {
@@ -1759,7 +1765,7 @@ error:
  * updates the internal region state accordingly.
  *
  * Returns 0 if all references are allowed. Failure will undo the operation.
- * 
+ *
  * The function assumes that the RC of the targets has already been increased.
  * Meaning it should be the RC value the value will have, if the operation
  * succeeds.
