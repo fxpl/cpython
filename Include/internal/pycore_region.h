@@ -42,6 +42,9 @@ typedef struct _PyBridgeObject {
 
 #define _PyBridgeObject_CAST(op) _Py_CAST(_PyBridgeObject*, op)
 
+// Defined in pycore_cown.h
+typedef struct _PyCownObject _PyCownObject;
+
 // FIXME(regions): xFrednet: Several parts of this state should be atomic to
 //      allow weak references from asking if the region is currently accessable.
 //      This might also be helpful to reduce the level of corruption which can
@@ -122,31 +125,6 @@ typedef struct _Py_region_data {
     _Py_ownership_invariant_region_data invariant_data;
 #endif
 } _Py_region_data;
-
-typedef struct _PyCownObject _PyCownObject;
-
-/** Callback to the owning cown. The first argument is the bride of of the
- * owned region. The second argument is the concurrent unit id.
- * 
- * Note that these callbacks have to be thread safe, as they may be called
- * from multiple threads simutaniously.
- */
-typedef int(*_Py_cown_state_callback)(_PyCownObject *op, _PyBridgeObject* region, uint64_t cuid);
-typedef int(*_Py_cown_merge_callback)(_PyCownObject *op, _PyBridgeObject* region, uint64_t cuid, Py_region_t into_region, _PyBridgeObject* into_bridge);
-
-typedef struct _Py_cown_callbacks
-{
-    _Py_cown_state_callback open;
-    _Py_cown_state_callback close;
-    _Py_cown_merge_callback merge;
-    _Py_cown_state_callback is_accessible;
-} _Py_cown_callbacks;
-
-struct _PyCownObject {
-    PyObject_HEAD;
-    _Py_cown_callbacks *callbacks;
-};
-#define _PyCownObject_CAST(op) _Py_CAST(_PyCownObject*, op)
 
 PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);

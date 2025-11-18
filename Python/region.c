@@ -5,6 +5,7 @@
 #include "pycore_interp.h"      // PyThreadState_Get
 #include "pycore_ownership.h"
 #include "pycore_pyerrors.h"
+#include "pycore_cown.h"
 #include "pycore_region.h"
 #include "pycore_runtime.h"    // _Py_ID
 #include "pycore_list.h"
@@ -457,9 +458,9 @@ static int regiondata_open(Py_region_t region) {
         // could be hard. Is this assumption/choice correct?
         //
         // uint64_t cuid = PyThreadState_GetID(PyThreadState_Get());
-        uint64_t cuid = PyInterpreterState_GetID(PyInterpreterState_Get());
+        uint64_t cuid = _PyCown_ConcurrentUnitId();
         _PyCownObject *cown = _PyCownObject_CAST(GET_OWNER_PTR(region));
-        SUCCEEDS((cown->callbacks->open)(cown, data->bridge, cuid));
+        SUCCEEDS(_PyCown_RegionOpen(cown, data->bridge, cuid));
     } else if (regiondata_get_parent(region) != 0) {
         SUCCEEDS(regiondata_open(regiondata_get_parent(region)));
     }
@@ -1918,7 +1919,7 @@ void _PyRegion_HackDirtyForPrototype(Py_region_t region) {
 }
 
 int _PyRegion_SetCownRegion(_PyCownObject *cown) {
-    _PyRegion_Set(cown, _Py_COWN_REGION);
+    _PyRegion_Set(_PyObject_CAST(cown), _Py_COWN_REGION);
     return 0;
 }
 
@@ -1942,7 +1943,7 @@ int _PyRegion_SetCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
 
     // Validation
     assert(cown != NULL);
-    assert(_PyRegion_IsBridge(bridge));
+    assert(_PyRegion_IsBridge(_PyObject_CAST(bridge)));
 
     return regiondata_set_cown(region, cown);
 }
@@ -1958,7 +1959,7 @@ int _PyRegion_RemoveCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
 
     // Validation
     assert(cown != NULL);
-    assert(_PyRegion_IsBridge(bridge));
+    assert(_PyRegion_IsBridge(_PyObject_CAST(bridge)));
 
     // Sanity check
     _PyCownObject *owner = regiondata_get_cown(region);

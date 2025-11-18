@@ -15,7 +15,7 @@ typedef enum {
     Cown_POISEN          = 3,
 } CownState;
 
-struct PyCownObject {
+struct _PyCownObject {
     PyObject_HEAD
     /* The current state of this cown object.
      *
@@ -28,8 +28,8 @@ struct PyCownObject {
      * This value may be read from and written to from different threads.
      * Only use atomic operations to access this field.
      */
-    // FIXME(regions): xFrednet: Make sure that an interpreter releases all cowns on destruction.
-    uint64_t owning_ip;
+    // FIXME(cowns): xFrednet: Make sure that an interpreter releases all cowns on destruction.
+    uint64_t owning_cuip;
 
     /* The value stored in the cown. This value may be immutable, another cown
      * or a region object.
@@ -37,8 +37,97 @@ struct PyCownObject {
     PyObject* value;
 };
 
-static int PyCown_init(PyCownObject *self, PyObject *args, PyObject *kwds) {
-    // FIXME(regions): xFrednet: Only freeze this one in regionsmodule_init
+#define BAIL_UNLESS_OWNED_BY(o, owned_by, result) \
+    do {\
+        uint64_t owning_cuip = _Py_atomic_load_uint64(&(_PyCownObject_CAST(o)->owning_cuip)); \
+        if (owning_cuip != owned_by) { \
+            PyErr_Format( \
+                PyExc_RuntimeError, \
+                "attempted to access a cown owned by %llu from %llu", \
+                owning_cuip, owned_by); \
+            return result; \
+        } \
+    } while (0);
+#define BAIL_UNLESS_OWNED(o, result) BAIL_UNLESS_OWNED_BY(o, _PyCown_ConcurrentUnitId(), result)
+#define BAIL_UNLESS_OWNED_NULL(o) BAIL_UNLESS_OWNED(o, NULL)
+
+static int cown_set_value_unchecked(_PyCownObject* self, PyObject* value) {
+    PyObject *old = self->value;
+
+    if (_PyRegion_IsBridge(value)) {
+        // Inform owned region about its owner
+        if (_PyRegion_SetCown(_PyBridgeObject_CAST(value), self) != 0) {
+            return -1;
+        }
+    }
+
+    Py_INCREF(value);
+    self->value = value;
+
+    if (_PyRegion_IsBridge(old)) {
+        // Inform old region about its abondoment
+        if (_PyRegion_RemoveCown(_PyBridgeObject_CAST(old), self) != 0) {
+            Py_XDECREF(old);
+            return -1;
+        }
+    }
+
+    Py_XDECREF(old);
+
+    return 0;
+}
+
+int cown_set_value(_PyCownObject* self, PyObject* value) {
+    BAIL_UNLESS_OWNED(self, -1);
+
+    // Bridge objects are allowed
+    if (_PyRegion_IsBridge(value)) {
+        return cown_set_value_unchecked(self, value);
+    }
+
+    // Immutable and cown objects are allowed
+    Py_region_t value_region = _PyRegion_Get(value);
+    if (value_region == _Py_COWN_REGION || value_region == _Py_IMMUTABLE_REGION) {
+        return cown_set_value_unchecked(self, value);
+    }
+
+    // Local objects are forbidden
+    char const* obj_info = NULL;
+    if (value_region == _Py_LOCAL_REGION) {
+        obj_info = "local";
+    } else {
+        obj_info = "owned";
+    }
+
+    PyErr_Format(
+        PyExc_RuntimeError,
+        "attempted to store a %s object in a cown.\n"
+        "Only bridges, cown, and immutable objects are allowed",
+        obj_info);
+
+    return -1;
+}
+
+/* Returns the current concurrent unit used by cowns.
+ *
+ * The caller must hold the GIL.
+ */
+uint64_t _PyCown_ConcurrentUnitId(void ) {
+    return PyInterpreterState_GetID(PyInterpreterState_Get());
+}
+
+int _PyCown_RegionOpen(_PyCownObject *self, _PyBridgeObject* region, uint64_t cuid) {
+    BAIL_UNLESS_OWNED_BY(self, cuid, -1);
+    return 0;
+}
+
+int _PyCown_RegionClose(_PyCownObject *self, _PyBridgeObject* region, uint64_t cuid) {
+    BAIL_UNLESS_OWNED_BY(self, cuid, -1);
+    return 0;
+}
+
+static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
+    // FIXME(cowns): xFrednet: Only freeze this one in regionsmodule_init
     SUCCEEDS(_PyImmutability_Freeze(_PyObject_CAST(&PyCown_Type)));
 
     // This moves the region into the cown rei
@@ -51,46 +140,25 @@ static int PyCown_init(PyCownObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
+    // Init the cown as being aquired by the current interpreter
+    _Py_atomic_store_uint64(&self->owning_cuip, _PyCown_ConcurrentUnitId());
+    _Py_atomic_store_int(&self->state, Cown_PENDING_RELEASE);
+
     // Set the value to `None` if nothing was given
-    int state = Cown_PENDING_RELEASE;
     if (value == NULL) {
-        // FIXME(regions): xFrednet: Only freeze this one in regionsmodule_init
+        // FIXME(cowns): xFrednet: Only freeze this one in regionsmodule_init
         SUCCEEDS(_PyImmutability_Freeze(Py_None));
         value = Py_None;
     }
-
-    // FIXME(regions): xFrednet: Move this into and call _PyCown_SetValue
-    // Validate that cowns support the given value
-    Py_region_t value_region = _PyRegion_Get(value);
-    if (value == _Py_COWN_REGION || value == _Py_IMMUTABLE_REGION) {
-        // Immutable and cown objects are allowed. Nothing to be done here.
-    } else if (value == _Py_LOCAL_REGION) {
-        PyErr_Format(
-            PyExc_RuntimeError,
-            "Cowns only support region, cown or immutable objects. The given object is a local object.");
-        return -1;
-    } else if (_PyRegion_IsBridge(value)) {
-        SUCCEEDS(_PyRegion_SetCown(value, self));
-    } else {
-        PyErr_Format(
-            PyExc_RuntimeError,
-            "Cowns only support regions, cown or immutable objects. The given object is a local object.");
-        return -1;
-    }
-
-    // The write barrier for this reference is already covered by the
-    // if statement above.
-    // _PyRegion_ADDREF(self, value);
-    self->value = _Py_NewRef(value);
-    _Py_atomic_store_int(&self->state, state);
+    SUCCEEDS(cown_set_value(self, value));
 
     return 0;
 error:
     return -1;
 }
 
-static int PyCown_traverse(PyCownObject *self, visitproc visit, void *arg) {
-    // FIXME(regions): xFrednet: Traverse should not be called on cowns, since
+static int PyCown_traverse(_PyCownObject *self, visitproc visit, void *arg) {
+    // FIXME(cowns): xFrednet: Traverse should not be called on cowns, since
     // they shouldn't be in the GC or region lists. Meaning, it's probably
     // better to error and detect these cases. But this can only be done once
     // cown is actually removed from the GC list
@@ -98,14 +166,14 @@ static int PyCown_traverse(PyCownObject *self, visitproc visit, void *arg) {
     return 0;
 }
 
-static int PyCown_clear(PyCownObject *self) {
+static int PyCown_clear(_PyCownObject *self) {
     Py_CLEAR(self->value);
     return 0;
 }
 
-static void PyCown_dealloc(PyCownObject *self) {
-    PyTypeObject *tp = Py_TYPE(self);
-    PyObject_GC_UnTrack(_PyObject_CAST(self));
+static void PyCown_dealloc(_PyCownObject *self) {
+    // Self has already been removed from the GC when it was moved
+    // into the cown region.
     Py_TRASHCAN_BEGIN(self, PyCown_dealloc)
     PyCown_clear(self);
     PyObject_GC_Del(self);
@@ -125,7 +193,7 @@ static PyMethodDef PyCown_methods[] = {
 PyTypeObject PyCown_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "Cown",                                  /* tp_name */
-    sizeof(PyCownObject),                    /* tp_basicsize */
+    sizeof(_PyCownObject),                    /* tp_basicsize */
     0,                                       /* tp_itemsize */
     (destructor)PyCown_dealloc,              /* tp_dealloc */
     0,                                       /* tp_vectorcall_offset */
