@@ -297,7 +297,7 @@ static int regiondata_union_merge(
 
     // Clear the pending tag if present
     _Py_region_data *source_data = (_Py_region_data*) source;
-    if (HAS_OWNER_TAG(source, OWNER_TAG_MERGE_PENDING)) {
+    if (HAS_OWNER_TAG(source, OWNER_TAG_MERGE_PENDING) && HAS_DATA(target)) {
         Py_region_t pending_target = GET_OWNER_PTR(source);
         assert(pending_target == target);
         regiondata_dec_rc(pending_target);
