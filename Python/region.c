@@ -609,14 +609,19 @@ static int regiondata_close(Py_region_t region) {
 
     // Notify the owner
     if (HAS_OWNER_TAG(region, OWNER_TAG_COWN)) {
-        // TODO: xFrednet: Implement this branch
-        assert(false);
+        SUCCEEDS(_PyCown_RegionClose(
+            _PyCownObject_CAST(GET_OWNER_PTR(region)),
+            _Py_region_data_CAST(region)->bridge,
+            _PyCown_ConcurrentUnitId()
+        ));
     } else if (regiondata_get_parent(region) != 0) {
         return regiondata_close(regiondata_get_parent(region));
     }
 
     // Check for failure, which would leave the region closed
     return 0;
+error:
+    return -1;
 }
 
 static int regiondata_closes_after_lrc(Py_region_t region, Py_ssize_t lrc) {

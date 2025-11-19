@@ -14,7 +14,9 @@ typedef enum {
     Cown_RELEASED        = 0,
     Cown_ACQUIRED        = 1,
     Cown_PENDING_RELEASE = 2,
-    Cown_POISEN          = 3,
+    // FIXME(cowns): xFrednet: Do we want/need a poisened state and if
+    // so should it be stored here?
+    // Cown_POISEN          = 3,
 } CownState;
 
 struct _PyCownObject {
@@ -148,7 +150,7 @@ static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
 
     // Init the cown as being aquired by the current interpreter
     _Py_atomic_store_uint64(&self->owner, _PyCown_ConcurrentUnitId());
-    _Py_atomic_store_int(&self->state, Cown_PENDING_RELEASE);
+    self->state = Cown_PENDING_RELEASE;
 
     // Set the cown value using the internal function for full validation
     SUCCEEDS(cown_set_value(self, value));
@@ -182,12 +184,86 @@ static void PyCown_dealloc(_PyCownObject *self) {
     Py_TRASHCAN_END
 }
 
+static PyObject* cown_release_unchecked(_PyCownObject* self) {
+    self->state = Cown_RELEASED;
+    _Py_atomic_store_uint64(&self->owner, CUID_RELEASED);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject* cown_release_region(_PyCownObject* self) {
+    assert(_PyRegion_IsBridge(self->value));
+    
+    // Fetch the region handle to allow 
+    Py_region_t region = _PyRegion_Get(self->value);
+
+    // Dirty regions may close after cleaning
+    if (_PyRegion_IsDirty(region)) {
+        SUCCEEDS(_PyRegion_Clean(region));
+
+        // Update the region handle
+        region = _PyRegion_Get(self->value);
+    }
+
+    // A closed region is safe to release
+    if (_PyRegion_IsOpen(region) == false) {
+        return cown_release_unchecked(self);
+    }
+
+    PyErr_Format(
+        PyExc_RuntimeError,
+        "the cown can't be released, since the contained region is still open");
+error:
+    return NULL;
+}
+
+static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
+    _PyCown_cuid_t owner_cuid = cown_get_owner(self);
+    _PyCown_cuid_t this_cuid = _PyCown_ConcurrentUnitId();
+
+    // Error if the cown is already released
+    if (owner_cuid == CUID_RELEASED) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "interpreter %lld attempted to release a released cown",
+            this_cuid
+        );
+        return NULL;
+    }
+
+    // Error if the cown is owned by a different interpreter
+    if (owner_cuid != this_cuid) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "interpreter %lld attempted to release a cown owned by %lld",
+            this_cuid, owner_cuid
+        );
+        return NULL;
+    }
+
+    // Validate that the cown is currently not released, otherwise
+    // it should have the `CUID_RELEASED` owner.
+    assert(self->state != Cown_RELEASED);
+
+    PyObject *value = self->value;
+
+    // Cowns holding cowns or immutable objects can be released without any
+    // restrictions
+    Py_region_t value_region = _PyRegion_Get(value);
+    if (value_region == _Py_COWN_REGION || value_region == _Py_IMMUTABLE_REGION) {
+        return cown_release_unchecked(self);
+    }
+
+    assert(value_region != _Py_LOCAL_REGION);
+    return cown_release_region(self);
+}
+
 // Define the CownType with methods
 static PyMethodDef PyCown_methods[] = {
     // {"acquire", (PyCFunction)PyCown_acquire, METH_NOARGS, "Acquire the cown."},
     // {"release", (PyCFunction)PyCown_release, METH_NOARGS, "Release the cown."},
     // {"get",     (PyCFunction)PyCown_get,     METH_NOARGS, "Get contents of acquired cown."},
-    // {"set",     (PyCFunction)PyCown_set,     METH_O, "Set contents of acquired cown."},
+    {"release", (PyCFunction)CownObject_release, METH_NOARGS, "Set contents of acquired cown."},
     {NULL}  // Sentinel
 };
 
