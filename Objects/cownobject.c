@@ -6,6 +6,10 @@
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
+// The interpreter id 0 is used. This value will be used to indicate that
+// no interpreter owns the cown.
+#define CUID_RELEASED ((_PyCown_cuid_t)0xff00ff00ff00ff00LL)
+
 typedef enum {
     Cown_RELEASED        = 0,
     Cown_ACQUIRED        = 1,
@@ -27,7 +31,7 @@ struct _PyCownObject {
      * Only use atomic operations to access this field.
      */
     // FIXME(cowns): xFrednet: Make sure that an interpreter releases all cowns on destruction.
-    uint64_t owning_cuip;
+    _PyCown_cuid_t owner;
 
     /* The value stored in the cown. This value may be immutable, another cown
      * or a region object.
@@ -35,14 +39,18 @@ struct _PyCownObject {
     PyObject* value;
 };
 
+static _PyCown_cuid_t cown_get_owner(_PyCownObject *obj) {
+    return _Py_atomic_load_uint64(&obj->owner);
+}
+
 #define BAIL_UNLESS_OWNED_BY(o, owned_by, result) \
     do {\
-        uint64_t owning_cuip = _Py_atomic_load_uint64(&(_PyCownObject_CAST(o)->owning_cuip)); \
-        if (owning_cuip != owned_by) { \
+        _PyCown_cuid_t owner = cown_get_owner(_PyCownObject_CAST(o)); \
+        if (owner != owned_by) { \
             PyErr_Format( \
                 PyExc_RuntimeError, \
                 "attempted to access a cown owned by %llu from %llu", \
-                owning_cuip, owned_by); \
+                owner, owned_by); \
             return result; \
         } \
     } while (0);
@@ -111,16 +119,18 @@ int cown_set_value(_PyCownObject* self, PyObject* value) {
  *
  * The caller must hold the GIL.
  */
-uint64_t _PyCown_ConcurrentUnitId(void ) {
-    return PyInterpreterState_GetID(PyInterpreterState_Get());
+_PyCown_cuid_t _PyCown_ConcurrentUnitId(void ) {
+    _PyCown_cuid_t cuid = PyInterpreterState_GetID(PyInterpreterState_Get()); 
+    assert(cuid != CUID_RELEASED);
+    return cuid;
 }
 
-int _PyCown_RegionOpen(_PyCownObject *self, _PyBridgeObject* region, uint64_t cuid) {
+int _PyCown_RegionOpen(_PyCownObject *self, _PyBridgeObject* region, _PyCown_cuid_t cuid) {
     BAIL_UNLESS_OWNED_BY(self, cuid, -1);
     return 0;
 }
 
-int _PyCown_RegionClose(_PyCownObject *self, _PyBridgeObject* region, uint64_t cuid) {
+int _PyCown_RegionClose(_PyCownObject *self, _PyBridgeObject* region, _PyCown_cuid_t cuid) {
     BAIL_UNLESS_OWNED_BY(self, cuid, -1);
     return 0;
 }
@@ -137,7 +147,7 @@ static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
     }
 
     // Init the cown as being aquired by the current interpreter
-    _Py_atomic_store_uint64(&self->owning_cuip, _PyCown_ConcurrentUnitId());
+    _Py_atomic_store_uint64(&self->owner, _PyCown_ConcurrentUnitId());
     _Py_atomic_store_int(&self->state, Cown_PENDING_RELEASE);
 
     // Set the cown value using the internal function for full validation
@@ -199,6 +209,32 @@ static PyGetSetDef PyCownObject_getset[] = {
     {NULL, NULL, NULL, NULL, NULL}
 };
 
+static PyObject *PyCown_repr(_PyCownObject *self) {
+    _PyCown_cuid_t cuid = cown_get_owner(self);
+    // On this interpreter we can access the cown and content
+    // safely since we hold the GIL
+    if (cuid == _PyCown_ConcurrentUnitId()) {
+        return PyUnicode_FromFormat(
+            "Cown(interpreter=%llu (this), value=%S)",
+            cuid,
+            PyObject_Repr(self->value)
+        );
+    }
+
+    // The cown is released and can be aquired
+    if (cuid == CUID_RELEASED) {
+        return PyUnicode_FromFormat(
+            "Cown(interpreter=None, status=Released)"
+        );
+    }
+
+    // The cown is owned by a different interpreter
+    return PyUnicode_FromFormat(
+        "Cown(interpreter=%llu (other))",
+        cuid
+    );
+}
+
 PyTypeObject _PyCown_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "regions.Cown",                          /* tp_name */
@@ -209,7 +245,7 @@ PyTypeObject _PyCown_Type = {
     0,                                       /* tp_getattr */
     0,                                       /* tp_setattr */
     0,                                       /* tp_as_async */
-    0, // (reprfunc)PyCown_repr,                   /* tp_repr */
+    (reprfunc)PyCown_repr,                   /* tp_repr */
     0,                                       /* tp_as_number */
     0,                                       /* tp_as_sequence */
     0,                                       /* tp_as_mapping */

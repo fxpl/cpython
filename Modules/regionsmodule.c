@@ -152,7 +152,7 @@ Region_repr(PyObject *op)
     PyObject *repr = NULL;
 #ifdef Py_DEBUG
     repr = PyUnicode_FromFormat(
-        "<Region name=%R _lrc=%zu _osc=%zu is_dirty=%s>",
+        "Region(name=%R _lrc=%zu _osc=%zu is_dirty=%s)",
         self->name ? self->name : Py_None,
         _PyRegion_GetLrc(region),
         _PyRegion_GetOsc(region),
@@ -160,7 +160,7 @@ Region_repr(PyObject *op)
     );
 #else
     repr = PyUnicode_FromFormat(
-        "<Region name=%R>",
+        "Region(name=%R)",
         self->name ? self->name : Py_None
     );
 #endif
