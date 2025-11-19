@@ -398,7 +398,7 @@ _Py_EnterRecursiveCallUnchecked(PyThreadState *tstate)
 #elif defined(__hppa__) || defined(__powerpc64__)
 #  define Py_C_STACK_SIZE 2000000
 #else
-#  define Py_C_STACK_SIZE 4000000
+#  define Py_C_STACK_SIZE 40000000
 #endif
 
 #if defined(__EMSCRIPTEN__)
