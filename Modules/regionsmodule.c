@@ -161,7 +161,7 @@ Region_repr(PyObject *op)
 #else
     repr = PyUnicode_FromFormat(
         "<Region name=%R>",
-        self->name ? self->name : Py_None,
+        self->name ? self->name : Py_None
     );
 #endif
 
@@ -320,7 +320,6 @@ Region_dealloc(PyObject *self)
     PyTypeObject *tp = Py_TYPE(self);
     freefunc free = PyType_GetSlot(tp, Py_tp_free);
     free(self);
-    Py_DECREF(tp);
 }
 
 /* The region type is intentionally static and immutable to allow save sharing

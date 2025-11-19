@@ -297,13 +297,21 @@ static int regiondata_union_merge(
 
     // Clear the pending tag if present
     _Py_region_data *source_data = (_Py_region_data*) source;
-    if (HAS_OWNER_TAG(source, OWNER_TAG_MERGE_PENDING) && HAS_DATA(target)) {
+    if (HAS_OWNER_TAG(source, OWNER_TAG_MERGE_PENDING)) {
         Py_region_t pending_target = GET_OWNER_PTR(source);
-        assert(pending_target == target);
+        
+        // Validate, that we either merge in the pending target or
+        // into the local region on failure.
+        //
+        // FIXME(regions): xFrednet: I bleive this assert may be false,
+        // if the source region was meant to be merged into a staged
+        // region. And the staged region has been merged first. I have
+        // to see if I can construct a counter exampel
+        assert(pending_target == target || IS_LOCAL_REGION(target));
         regiondata_dec_rc(pending_target);
         source_data->owner = NULL_REGION;
     }
-    ASSERT_REGION_HAS_NO_TAG(target);
+    ASSERT_REGION_OWNER_HAS_NO_TAG(source_data);
 
     int result = 0;
 
@@ -354,14 +362,18 @@ static int regiondata_union_merge(
         goto error;
     }
 
+    // Bump RC of source to make sure it stays until the end
+    regiondata_inc_rc(source);
+
     // Set the owner to the target with the merged tag
     regiondata_inc_rc(target);
     source_data->owner = target | OWNER_TAG_MERGED;
 
     // Update the bridge object
     if (source_data->bridge) {
-        regiondata_dec_rc(source_data->bridge->region);
+        Py_region_t bridge_region = source_data->bridge->region;
         source_data->bridge->region = NULL_REGION;
+        regiondata_dec_rc(bridge_region);
     }
 
     // Merge stats into the `target`
@@ -418,6 +430,7 @@ cleanup:
 
     // Decrement the `target` RC again
     regiondata_dec_rc(target);
+    regiondata_dec_rc(source);
 
     return result;
 }
