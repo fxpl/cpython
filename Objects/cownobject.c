@@ -2,6 +2,8 @@
 
 #include "pycore_cown.h"
 #include "pycore_region.h"
+#include "pycore_time.h"          // _PyTime_FromSeconds()
+#include "pycore_lock.h"
 
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
@@ -10,10 +12,16 @@
 // no interpreter owns the cown.
 #define CUID_RELEASED ((_PyCown_cuid_t)0xff00ff00ff00ff00LL)
 
+typedef enum CownLockStatus {
+    COWN_ACQUIRE_ERROR = -1,
+    COWN_ACQUIRE_FAIL = 0,
+    COWN_ACQUIRE_SUCEESS = 1
+} CownLockStatus;
+
 typedef enum {
-    Cown_RELEASED        = 0,
-    Cown_ACQUIRED        = 1,
-    Cown_PENDING_RELEASE = 2,
+    COWN_RELEASED        = 0,
+    COWN_ACQUIRED        = 1,
+    COWN_PENDING_RELEASE = 2,
     // FIXME(cowns): xFrednet: Do we want/need a poisened state and if
     // so should it be stored here?
     // Cown_POISEN          = 3,
@@ -39,6 +47,18 @@ struct _PyCownObject {
      * or a region object.
      */
     PyObject* value;
+
+    /* A lock used, mainly to support timeouts and queueing for locking.
+     * All other functions should use the `owner` to determine if they can
+     * access the data or not.
+     *
+     * Python's mutexes already implement queueing and timeouts in a good way.
+     * Later we can role our own, if we need but for not this is better. Note
+     * that the optional GIL release from the lock should not be used, as it
+     * doesn't seem to account for waiting threads from different interpreters.
+     * Therefore, we are responsible for releasing and acquireing the GIL.
+     */
+    PyMutex lock;
 };
 
 static _PyCown_cuid_t cown_get_owner(_PyCownObject *obj) {
@@ -129,11 +149,15 @@ _PyCown_cuid_t _PyCown_ConcurrentUnitId(void ) {
 
 int _PyCown_RegionOpen(_PyCownObject *self, _PyBridgeObject* region, _PyCown_cuid_t cuid) {
     BAIL_UNLESS_OWNED_BY(self, cuid, -1);
+    assert(self->value == _PyObject_CAST(region));
+
     return 0;
 }
 
 int _PyCown_RegionClose(_PyCownObject *self, _PyBridgeObject* region, _PyCown_cuid_t cuid) {
     BAIL_UNLESS_OWNED_BY(self, cuid, -1);
+    assert(self->value == _PyObject_CAST(region));
+
     return 0;
 }
 
@@ -148,9 +172,10 @@ static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
-    // Init the cown as being aquired by the current interpreter
+    // Init the cown as being acquired by the current interpreter
     _Py_atomic_store_uint64(&self->owner, _PyCown_ConcurrentUnitId());
-    self->state = Cown_PENDING_RELEASE;
+    self->state = COWN_PENDING_RELEASE;
+    (void)PyMutex_LockFast(&self->lock);
 
     // Set the cown value using the internal function for full validation
     SUCCEEDS(cown_set_value(self, value));
@@ -184,9 +209,158 @@ static void PyCown_dealloc(_PyCownObject *self) {
     Py_TRASHCAN_END
 }
 
+static int
+lock_acquire_parse_args(PyObject *args, PyObject *kwds,
+                        PyTime_t *timeout)
+{
+    // Taken from `Modules/_threadmodule.c`
+
+    char *kwlist[] = {"blocking", "timeout", NULL};
+    int blocking = 1;
+    PyObject *timeout_obj = NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|pO:acquire", kwlist,
+                                     &blocking, &timeout_obj))
+        return -1;
+
+    const PyTime_t unset_timeout = _PyTime_FromSeconds(-1);
+    *timeout = unset_timeout;
+
+    if (timeout_obj
+        && _PyTime_FromSecondsObject(timeout,
+                                     timeout_obj, _PyTime_ROUND_TIMEOUT) < 0)
+        return -1;
+
+    if (!blocking && *timeout != unset_timeout ) {
+        PyErr_SetString(PyExc_ValueError,
+                        "can't specify a timeout for a non-blocking call");
+        return -1;
+    }
+    if (*timeout < 0 && *timeout != unset_timeout) {
+        PyErr_SetString(PyExc_ValueError,
+                        "timeout value must be a non-negative number");
+        return -1;
+    }
+    if (!blocking)
+        *timeout = 0;
+    else if (*timeout != unset_timeout) {
+        PyTime_t microseconds;
+
+        microseconds = _PyTime_AsMicroseconds(*timeout, _PyTime_ROUND_TIMEOUT);
+        if (microseconds > PY_TIMEOUT_MAX) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "timeout value is too large");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Attempt to lock the cown.
+ *
+ * Timeout values:
+ * (-1) => Non-blocking locking
+ *  (0) => Block with no timeout
+ *  (n) => Blocking with timeout
+ */
+static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
+    assert(cown_get_owner(self) != _PyCown_ConcurrentUnitId());
+
+    // Try to lock the mutex directly, without releasing the GIL first
+    PyLockStatus r = _PyMutex_LockTimed(&self->lock, 0, _Py_LOCK_DONT_DETACH);
+
+    // The cown is currently owned by something else. Release the GIL and
+    // wait for the timeout.
+    if (r != PY_LOCK_ACQUIRED && timeout >= 0) {
+        // Release the GIL
+        Py_BEGIN_ALLOW_THREADS;
+    
+        // Attempt to lot the mutex. This uses a PyMutex for the locking,
+        // timeout and signal handling.
+        r = _PyMutex_LockTimed(
+            &self->lock,
+            timeout,
+            _Py_LOCK_DONT_DETACH | _PY_LOCK_HANDLE_SIGNALS
+        );
+    
+        // Acquire the GIL
+        Py_END_ALLOW_THREADS;
+    }
+
+    // The lock was interrupted
+    if (r == PY_LOCK_INTR) {
+        return COWN_ACQUIRE_ERROR;
+    }
+
+    // The lock acquisition failed
+    if (r == PY_LOCK_FAILURE) {
+        return COWN_ACQUIRE_FAIL;
+    }
+
+    // Set the owner to the current cuid, thereby taking ownership
+    _PyCown_cuid_t owner_cuid = CUID_RELEASED;
+    _PyCown_cuid_t this_cuid = _PyCown_ConcurrentUnitId();
+    if (!_Py_atomic_compare_exchange_uint64(
+        &self->owner,
+        &owner_cuid,
+        this_cuid)
+    ) {
+        // Failed to set the owner, this should never happen and points
+        // to a deeper issue.
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "[BUG] failed to set owner on a locked cown\n"
+            "Cown: %U",
+            self
+        );
+
+        _PyMutex_Unlock(&self->lock);
+        return COWN_ACQUIRE_ERROR;
+    }
+
+    // Set the state. This doesn't need to be atomic, since this
+    // value should only ever be read by the owning interpreter
+    self->state = COWN_ACQUIRED;
+
+    return COWN_ACQUIRE_SUCEESS;
+}
+
+static PyObject *
+CownObject_acquire(_PyCownObject *self, PyObject *args, PyObject *kwds)
+{
+    // Parse the arguments
+    PyTime_t timeout;
+    if (lock_acquire_parse_args(args, kwds, &timeout) < 0) {
+        return NULL;
+    }
+
+    // Attempt to lock the cown
+    int res = cown_lock(self, timeout);
+    if (res == COWN_ACQUIRE_ERROR) {
+        return NULL;
+    }
+
+    // Return the result
+    return PyBool_FromLong(res == COWN_ACQUIRE_SUCEESS);
+}
+
 static PyObject* cown_release_unchecked(_PyCownObject* self) {
-    self->state = Cown_RELEASED;
-    _Py_atomic_store_uint64(&self->owner, CUID_RELEASED);
+    self->state = COWN_RELEASED;
+
+    // Set the owner to indicate the released state
+    _PyCown_cuid_t this_cuid = _PyCown_ConcurrentUnitId();
+    if (!_Py_atomic_compare_exchange_uint64(&self->owner, &this_cuid, CUID_RELEASED)) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "interpreter %lld (this) attempted to release a cown owned by someone else\n"
+            "Cown: %U",
+            this_cuid, self);
+        return NULL;
+    }
+
+    // Unlocking should always succeed
+    int res = _PyMutex_TryUnlock(&self->lock);
+    assert(res == 0);
+    (void)res;
 
     Py_RETURN_NONE;
 }
@@ -243,7 +417,7 @@ static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
 
     // Validate that the cown is currently not released, otherwise
     // it should have the `CUID_RELEASED` owner.
-    assert(self->state != Cown_RELEASED);
+    assert(self->state != COWN_RELEASED);
 
     PyObject *value = self->value;
 
@@ -260,10 +434,8 @@ static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
 
 // Define the CownType with methods
 static PyMethodDef PyCown_methods[] = {
-    // {"acquire", (PyCFunction)PyCown_acquire, METH_NOARGS, "Acquire the cown."},
-    // {"release", (PyCFunction)PyCown_release, METH_NOARGS, "Release the cown."},
-    // {"get",     (PyCFunction)PyCown_get,     METH_NOARGS, "Get contents of acquired cown."},
-    {"release", (PyCFunction)CownObject_release, METH_NOARGS, "Set contents of acquired cown."},
+    {"acquire", _PyCFunction_CAST(CownObject_acquire), METH_VARARGS | METH_KEYWORDS, "Acquire the cown."},
+    {"release", _PyCFunction_CAST(CownObject_release), METH_NOARGS, "Release the cown."},
     {NULL}  // Sentinel
 };
 
@@ -297,7 +469,7 @@ static PyObject *PyCown_repr(_PyCownObject *self) {
         );
     }
 
-    // The cown is released and can be aquired
+    // The cown is released and can be acquired
     if (cuid == CUID_RELEASED) {
         return PyUnicode_FromFormat(
             "Cown(interpreter=None, status=Released)"
