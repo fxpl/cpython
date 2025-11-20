@@ -475,7 +475,7 @@ static int regiondata_open(Py_region_t region) {
         // could be hard. Is this assumption/choice correct?
         //
         // uint64_t cuid = PyThreadState_GetID(PyThreadState_Get());
-        uint64_t cuid = _PyCown_ConcurrentUnitId();
+        uint64_t cuid = _PyCown_ThisInterpreterId();
         _PyCownObject *cown = _PyCownObject_CAST(GET_OWNER_PTR(region));
         SUCCEEDS(_PyCown_RegionOpen(cown, data->bridge, cuid));
     } else if (regiondata_get_parent(region) != 0) {
@@ -612,7 +612,7 @@ static int regiondata_close(Py_region_t region) {
         SUCCEEDS(_PyCown_RegionClose(
             _PyCownObject_CAST(GET_OWNER_PTR(region)),
             _Py_region_data_CAST(region)->bridge,
-            _PyCown_ConcurrentUnitId()
+            _PyCown_ThisInterpreterId()
         ));
     } else if (regiondata_get_parent(region) != 0) {
         return regiondata_close(regiondata_get_parent(region));
