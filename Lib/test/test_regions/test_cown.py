@@ -1,6 +1,7 @@
 import unittest
 from regions import Cown, Region, is_local
 from immutable import freeze
+import threading
 
 class TestBasicCownObject(unittest.TestCase):
     def test_valid_cown_construction(self):
@@ -92,3 +93,57 @@ class TestCownValueField(unittest.TestCase):
         with self.assertRaises(RuntimeError) as e:
             c.value = x
 
+class TestCownLocking(unittest.TestCase):
+    def test_release_and_reacquire(self):
+        c = Cown()
+        self.assertTrue(c.locked())
+        self.assertTrue(c.owned())
+        self.assertTrue(c.owned_by_thread())
+
+        c.release()
+        self.assertFalse(c.locked())
+        self.assertFalse(c.owned())
+        self.assertFalse(c.owned_by_thread())
+
+        c.acquire()
+        self.assertTrue(c.locked())
+        self.assertTrue(c.owned())
+        self.assertTrue(c.owned_by_thread())
+    
+    def test_blocking_with_timeout(self):
+        c = Cown()
+        self.assertTrue(c.owned())
+
+        # Blocking in the owning thread is allowed
+        # It should block until the cown is released or the timeout is over
+        self.assertFalse(c.acquire(timeout=0.1))
+        self.assertFalse(c.acquire(blocking=False))
+
+    def test_blocking_with_no_timeout(self):
+        # Setup
+        freeze(True)
+        freeze(False)
+
+        # The cown in question
+        c = Cown(False)
+        self.assertTrue(c.owned())
+
+        def other_thread():
+            # Check that this runs in a different thread
+            self.assertTrue(c.owned())
+            self.assertFalse(c.owned_by_thread())
+
+            # Set the cown value to check ordering
+            c.value = True
+            c.release()
+
+        # Start another thread
+        t2 = threading.Thread(target=other_thread)
+        t2.start()
+
+        # The acquire should block until t2 releases the cown
+        self.assertTrue(c.acquire())
+        self.assertTrue(c.value, "This should be true if the ordering is correct")
+
+        # Cleanup
+        t2.join()

@@ -150,8 +150,6 @@ int cown_set_value(_PyCownObject* self, PyObject* value) {
  *  (n) => Blocking with timeout
  */
 static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
-    assert(cown_get_owner(self) != _PyCown_ThisInterpreterId());
-
     // Try to lock the mutex directly, without releasing the GIL first
     PyLockStatus r = _PyMutex_LockTimed(&self->lock, 0, _Py_LOCK_DONT_DETACH);
 
@@ -160,7 +158,7 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
     if (r != PY_LOCK_ACQUIRED && timeout != NO_BLOCKING_TIMEOUT) {
         // Release the GIL
         Py_BEGIN_ALLOW_THREADS;
-    
+
         // Attempt to lot the mutex. This uses a PyMutex for the locking,
         // timeout and signal handling.
         r = _PyMutex_LockTimed(
@@ -168,7 +166,7 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
             timeout,
             _Py_LOCK_DONT_DETACH | _PY_LOCK_HANDLE_SIGNALS
         );
-    
+
         // Acquire the GIL
         Py_END_ALLOW_THREADS;
     }
@@ -219,7 +217,7 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
  * The caller must hold the GIL.
  */
 _PyCown_ipid_t _PyCown_ThisInterpreterId(void ) {
-    _PyCown_ipid_t ip = PyInterpreterState_GetID(PyInterpreterState_Get()); 
+    _PyCown_ipid_t ip = PyInterpreterState_GetID(PyInterpreterState_Get());
     // This should never happen... if it does... we have a problem...
     assert(ip != RELEASED_IPID);
     return ip;
@@ -230,7 +228,7 @@ _PyCown_ipid_t _PyCown_ThisInterpreterId(void ) {
  * The caller must hold the GIL.
  */
 _PyCown_thread_id_t _PyCown_ThisThreadId(void ) {
-    _PyCown_thread_id_t id = PyThreadState_GetID(PyThreadState_Get()); 
+    _PyCown_thread_id_t id = PyThreadState_GetID(PyThreadState_Get());
     return id;
 }
 
@@ -394,8 +392,8 @@ static PyObject* cown_release_unchecked(_PyCownObject* self) {
 
 static PyObject* cown_release_region(_PyCownObject* self) {
     assert(_PyRegion_IsBridge(self->value));
-    
-    // Fetch the region handle to allow 
+
+    // Fetch the region handle to allow
     Py_region_t region = _PyRegion_Get(self->value);
 
     // Dirty regions may close after cleaning
