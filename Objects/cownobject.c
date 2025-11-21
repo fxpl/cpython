@@ -32,7 +32,8 @@ struct _PyCownObject {
 
     /* The id of the thread that unlocked this cown.
      *
-     * This is only used f
+     * This is provided as additional information to users, it is not validated
+     * or used by this cown implementation.
      */
     _PyCown_thread_id_t locking_thread;
 
