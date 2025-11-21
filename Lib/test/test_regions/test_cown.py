@@ -109,7 +109,7 @@ class TestCownLocking(unittest.TestCase):
         self.assertTrue(c.locked())
         self.assertTrue(c.owned())
         self.assertTrue(c.owned_by_thread())
-    
+
     def test_blocking_with_timeout(self):
         c = Cown()
         self.assertTrue(c.owned())

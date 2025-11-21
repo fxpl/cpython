@@ -19,20 +19,8 @@ typedef enum CownLockStatus {
     COWN_ACQUIRE_SUCEESS = 1
 } CownLockStatus;
 
-typedef enum {
-    COWN_RELEASED        = 0,
-    COWN_ACQUIRED        = 1,
-    COWN_PENDING_RELEASE = 2,
-} CownState;
-
 struct _PyCownObject {
     PyObject_HEAD
-    /* The current state of this cown object.
-     *
-     * This value may be read from and written to from different threads.
-     * Only use atomic operations to access this field.
-     */
-    int state;
     /* The id of the interpreter that currently owns this cown.
      *
      * This value may be read from and written to from different threads.
@@ -202,10 +190,6 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
         return COWN_ACQUIRE_ERROR;
     }
 
-    // Set the state. This doesn't need to be atomic, since this
-    // value should only ever be read by the owning interpreter
-    self->state = COWN_ACQUIRED;
-
     // Set the locking thread.
     self->locking_thread = _PyCown_ThisThreadId();
 
@@ -260,7 +244,6 @@ static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
     // Init the cown as being acquired by the current interpreter
     _Py_atomic_store_uint64(&self->owning_ip, RELEASED_IPID);
     cown_lock(self, NO_BLOCKING_TIMEOUT);
-    self->state = COWN_PENDING_RELEASE;
 
     // Set the cown value using the internal function for full validation
     SUCCEEDS(cown_set_value(self, value));
@@ -369,8 +352,6 @@ interpreter.  The return indicates if the cown was\n\
 was acquired.  The blocking operation is interruptible.");
 
 static PyObject* cown_release_unchecked(_PyCownObject* self) {
-    self->state = COWN_RELEASED;
-
     // Set owning_ip to indicate the released state
     _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
     if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &this_ip, RELEASED_IPID)) {
@@ -439,10 +420,6 @@ static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
         );
         return NULL;
     }
-
-    // Validate that the cown is currently not released, otherwise
-    // it should have the `RELEASED_IPID` owner.
-    assert(self->state != COWN_RELEASED);
 
     PyObject *value = self->value;
 
