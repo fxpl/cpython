@@ -25,8 +25,8 @@ typedef uint64_t _PyCown_thread_id_t;
 // PyAPI_FUNC(int) _PyCown_SetValue(_PyCownObject* self, PyObject* value);
 PyAPI_FUNC(_PyCown_ipid_t) _PyCown_ThisInterpreterId(void);
 PyAPI_FUNC(_PyCown_thread_id_t) _PyCown_ThisThreadId(void);
-PyAPI_FUNC(int) _PyCown_RegionOpen(_PyCownObject *self, _PyBridgeObject* region, _PyCown_ipid_t ip);
-PyAPI_FUNC(int) _PyCown_RegionClose(_PyCownObject *self, _PyBridgeObject* region, _PyCown_ipid_t ip);
+PyAPI_FUNC(int) _PyCown_RegionOpen(_PyCownObject *self, _PyRegionObject* region, _PyCown_ipid_t ip);
+PyAPI_FUNC(int) _PyCown_RegionClose(_PyCownObject *self, _PyRegionObject* region, _PyCown_ipid_t ip);
 
 #ifdef __cplusplus
 }

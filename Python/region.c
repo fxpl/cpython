@@ -9,6 +9,8 @@
 #include "pycore_region.h"
 #include "pycore_runtime.h"    // _Py_ID
 #include "pycore_list.h"
+#include "pycore_region.h"
+#include "pycore_regionobject.h"
 
 #include <stdbool.h>
 
@@ -1427,7 +1429,7 @@ int regiondata_clean(PyObject* bridge) {
         // Refill metadata.
         _Py_region_data* clean_region_data = (_Py_region_data*)clean_region;
         clean_region_data->owner = owner;
-        clean_region_data->bridge = _PyBridgeObject_CAST(item);
+        clean_region_data->bridge = _PyRegionObject_CAST(item);
         clean_region_data->bridge->region = clean_region; // Move RC ownership
         if (!was_open && regiondata_is_open(clean_region)) {
             regiondata_inc_osc(clean_region);
@@ -1483,7 +1485,7 @@ Py_region_t _PyRegion_GetSlow(PyObject *obj) {
 /* Creates a new region and moves the bridge object into it. The new region
  * will be returned.
  */
-int _PyRegion_New(_PyBridgeObject *bridge) {
+int _PyRegion_New(_PyRegionObject *bridge) {
     Py_region_t region = regiondata_new();
     if (region == NULL_REGION) {
         return -1;
@@ -1962,7 +1964,7 @@ int _PyRegion_HasOwner(Py_region_t region) {
  * cown has to hold a strong reference to the region and remove the ownership
  * on deallocation.
  */
-int _PyRegion_SetCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
+int _PyRegion_SetCown(_PyRegionObject* bridge, _PyCownObject *cown) {
     Py_region_t region = _PyRegion_GET(bridge);
 
     // Validation
@@ -1978,7 +1980,7 @@ int _PyRegion_SetCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
  * The cown is passed in to ensure that a cown is only able to remove the owner for
  * regions it owns.
  */
-int _PyRegion_RemoveCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
+int _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown) {
     Py_region_t region = _PyRegion_GET(bridge);
 
     // Validation
@@ -2015,8 +2017,8 @@ int _PyRegion_RemoveCown(_PyBridgeObject* bridge, _PyCownObject *cown) {
 //                I think this is good (famous last words)
 // TODO(regions): xFrednet: Cleanup
 //      - Move write barriers from `pycore_regions.h` to `regions.h`
-//      - Move region type and object into core (Only reexport types via the regionmodule.c)
 //      - Remove _ prefix from public API types and functions (And add it to internal ones)
+//      - Move region error into core and emit it instead of runtime errors
 // TODO(regions): xFrednet: Write Barrier in: Bytecode
 // TODO(regions): xFrednet: Write Barrier in: Dictionary
 // TODO(regions): xFrednet: Dirty on C code

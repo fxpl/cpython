@@ -16,31 +16,8 @@ extern "C" {
 /* Macros for readability */
 #define NULL_REGION 0
 
-/* PyObject_HEAD defines the initial segment of every PyObject used as a region bridge. */
-#define PyBridgeObject_HEAD \
-    PyObject_HEAD; \
-    /* The region value which will be updated and \
-     * still filled when the dealloc function of \
-     * the object is called. \
-     */ \
-    Py_region_t region; \
-    /** The name of the region or NULL */ \
-    PyObject *name;
-
-#define PyBridgeObject_HEAD_INIT(op) \
-    op->region = NULL_REGION; \
-    op->name = NULL;
-
-/**
- * Objects used as bridges need to have an additional region field, which is
- * still filled in the dealloc function. This should be the inital segment,
- * similar to how `PyObject` is the inital segment for other objects.
-*/
-typedef struct _PyBridgeObject {
-    PyBridgeObject_HEAD;
-} _PyBridgeObject;
-
-#define _PyBridgeObject_CAST(op) _Py_CAST(_PyBridgeObject*, op)
+// The region object implemented in `pycore_regionobject.h` and `regionobject.c`
+typedef struct _PyRegionObject _PyRegionObject;
 
 // Defined in pycore_cown.h
 typedef struct _PyCownObject _PyCownObject;
@@ -110,7 +87,7 @@ typedef struct _Py_region_data {
      * This is a weak reference to the brige, meaning the RC is not updated
      * by writes to this field.
      */
-    _PyBridgeObject* bridge;
+    _PyRegionObject* bridge;
 
     /* Objects have to be removed from their local GC cycle, when they're moved
      * into a region. Instead they're moved into this list, to allow GC inside
@@ -126,7 +103,7 @@ typedef struct _Py_region_data {
 #endif
 } _Py_region_data;
 
-PyAPI_FUNC(int) _PyRegion_New(_PyBridgeObject *bridge);
+PyAPI_FUNC(int) _PyRegion_New(_PyRegionObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
 
@@ -150,8 +127,8 @@ PyAPI_FUNC(void) _PyRegion_HackDirtyForPrototype(Py_region_t region);
 
 PyAPI_FUNC(int) _PyRegion_SetCownRegion(_PyCownObject *cown);
 PyAPI_FUNC(int) _PyRegion_HasOwner(Py_region_t region);
-PyAPI_FUNC(int) _PyRegion_SetCown(_PyBridgeObject* bridge, _PyCownObject *cown);
-PyAPI_FUNC(int) _PyRegion_RemoveCown(_PyBridgeObject* bridge, _PyCownObject *cown);
+PyAPI_FUNC(int) _PyRegion_SetCown(_PyRegionObject* bridge, _PyCownObject *cown);
+PyAPI_FUNC(int) _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown);
 
 #ifdef __cplusplus
 }

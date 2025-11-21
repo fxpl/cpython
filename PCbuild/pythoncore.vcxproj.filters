@@ -1205,6 +1205,9 @@
     <ClCompile Include="..\Objects\complexobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
+    <ClCompile Include="..\Objects\cownobject.c">
+      <Filter>Objects</Filter>
+    </ClCompile>
     <ClCompile Include="..\Objects\descrobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
@@ -1260,6 +1263,9 @@
       <Filter>Objects</Filter>
     </ClCompile>
     <ClCompile Include="..\Objects\rangeobject.c">
+      <Filter>Objects</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Objects\regionobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
     <ClCompile Include="..\Objects\setobject.c">

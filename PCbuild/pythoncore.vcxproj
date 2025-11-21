@@ -303,6 +303,7 @@
     <ClInclude Include="..\Include\internal\pycore_qsbr.h" />
     <ClInclude Include="..\Include\internal\pycore_range.h" />
     <ClInclude Include="..\Include\internal\pycore_region.h" />
+    <ClInclude Include="..\Include\internal\pycore_regionobject.h" />
     <ClInclude Include="..\Include\internal\pycore_runtime.h" />
     <ClInclude Include="..\Include\internal\pycore_runtime_init.h" />
     <ClInclude Include="..\Include\internal\pycore_runtime_init_generated.h" />

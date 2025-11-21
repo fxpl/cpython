@@ -1,9 +1,11 @@
 #include "Python.h"
 #include "pymacro.h"
+
 #include "pycore_cown.h"
-#include "pycore_region.h"
-#include "pycore_time.h"          // _PyTime_FromSeconds()
 #include "pycore_lock.h"
+#include "pycore_region.h"
+#include "pycore_regionobject.h"
+#include "pycore_time.h"          // _PyTime_FromSeconds()
 
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
@@ -78,7 +80,7 @@ static int cown_set_value_unchecked(_PyCownObject* self, PyObject* value) {
 
     if (_PyRegion_IsBridge(value)) {
         // Inform owned region about its owner
-        if (_PyRegion_SetCown(_PyBridgeObject_CAST(value), self) != 0) {
+        if (_PyRegion_SetCown(_PyRegionObject_CAST(value), self) != 0) {
             return -1;
         }
     }
@@ -89,7 +91,7 @@ static int cown_set_value_unchecked(_PyCownObject* self, PyObject* value) {
 
     if (_PyRegion_IsBridge(old)) {
         // Inform old region about its abondoment
-        if (_PyRegion_RemoveCown(_PyBridgeObject_CAST(old), self) != 0) {
+        if (_PyRegion_RemoveCown(_PyRegionObject_CAST(old), self) != 0) {
             Py_XDECREF(old);
             return -1;
         }
@@ -217,14 +219,14 @@ _PyCown_thread_id_t _PyCown_ThisThreadId(void ) {
     return id;
 }
 
-int _PyCown_RegionOpen(_PyCownObject *self, _PyBridgeObject* region, _PyCown_ipid_t ip) {
+int _PyCown_RegionOpen(_PyCownObject *self, _PyRegionObject* region, _PyCown_ipid_t ip) {
     BAIL_UNLESS_OWNED_BY(self, ip, -1);
     assert(self->value == _PyObject_CAST(region));
 
     return 0;
 }
 
-int _PyCown_RegionClose(_PyCownObject *self, _PyBridgeObject* region, _PyCown_ipid_t ip) {
+int _PyCown_RegionClose(_PyCownObject *self, _PyRegionObject* region, _PyCown_ipid_t ip) {
     BAIL_UNLESS_OWNED_BY(self, ip, -1);
     assert(self->value == _PyObject_CAST(region));
 
