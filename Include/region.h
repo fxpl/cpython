@@ -48,25 +48,25 @@ static inline int _Py_IsLocal(PyObject *obj) {
 #define _PyRegion_MAX_ARG_COUNT 16
 
 PyAPI_FUNC(PyRegion_staged_ref_t) _PyRegion_StageRef(PyObject *src, PyObject *tgt);
-PyAPI_FUNC(void) _PyRegion_ResetStagedRef(PyRegion_staged_ref_t staged_ref);
-PyAPI_FUNC(void) _PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref);
-#define _PyRegion_STAGEREF(src, tgt) _PyRegion_StageRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+PyAPI_FUNC(void) PyRegion_ResetStagedRef(PyRegion_staged_ref_t staged_ref);
+PyAPI_FUNC(void) PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref);
+#define PyRegion_StageRef(src, tgt) _PyRegion_StageRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
 
 PyAPI_FUNC(int) _PyRegion_AddRef(PyObject *src, PyObject *tgt);
 PyAPI_FUNC(int) _PyRegion_AddRefs(PyObject *src, int tgt_count, ...);
-#define _PyRegion_ADDREF(src, tgt) _PyRegion_AddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
-#define _PyRegion_ADDREFS(src, ...) _PyRegion_AddRefs(_PyObject_CAST(src), _PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+#define PyRegion_AddRef(src, tgt) _PyRegion_AddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+#define PyRegion_AddRefS(src, ...) _PyRegion_AddRefs(_PyObject_CAST(src), _PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 PyAPI_FUNC(int) _PyRegion_RemoveRef(PyObject *src, PyObject *tgt);
-#define _PyRegion_REMOVEREF(src, tgt) _PyRegion_RemoveRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+#define PyRegion_RemoveRef(src, tgt) _PyRegion_RemoveRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
 
 PyAPI_FUNC(int) _PyRegion_AddLocalRef(PyObject *tgt);
 PyAPI_FUNC(int) _PyRegion_AddLocalRefs(int tgt_count, ...);
-#define _PyRegion_ADDLOCALREF(tgt) _PyRegion_AddLocalRef(_PyObject_CAST(tgt))
-#define _PyRegion_ADDLOCALREFS(...) _PyRegion_AddLocalRefs(_PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+#define PyRegion_AddLocalRef(tgt) _PyRegion_AddLocalRef(_PyObject_CAST(tgt))
+#define PyRegion_AddLocalRefs(...) _PyRegion_AddLocalRefs(_PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 PyAPI_FUNC(int) _PyRegion_RemoveLocalRef(PyObject *tgt);
-#define _PyRegion_REMOVELOCALREF(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))
+#define PyRegion_RemoveLocalRef(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))
 
 #ifdef __cplusplus
 }

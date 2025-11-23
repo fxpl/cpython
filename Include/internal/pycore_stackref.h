@@ -10,7 +10,7 @@ extern "C" {
 
 #include "pycore_object.h"        // Py_DECREF_MORTAL
 #include "pycore_object_deferred.h" // _PyObject_HasDeferredRefcount()
-#include "region.h"                 // _PyRegion_RemoveLocalRef()
+#include "region.h"                 // PyRegion_AddLocalRef()
 
 #include <stdbool.h>              // bool
 
@@ -674,7 +674,7 @@ PyStackRef_CLOSE(_PyStackRef ref)
     assert(!PyStackRef_IsNull(ref));
     if (PyStackRef_RefcountOnObject(ref)) {
         PyObject *ob = BITS_TO_PTR(ref);
-        _PyRegion_RemoveLocalRef(ob);
+        PyRegion_RemoveLocalRef(ob);
         Py_DECREF_MORTAL(ob);
     }
 }

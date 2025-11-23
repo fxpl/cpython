@@ -1713,11 +1713,11 @@ PyRegion_staged_ref_t _PyRegion_StageRef(PyObject *src, PyObject *tgt) {
     return regiondata_stage_object(src_region, src, tgt);
 }
 
-void _PyRegion_ResetStagedRef(PyRegion_staged_ref_t staged_ref) {
+void PyRegion_ResetStagedRef(PyRegion_staged_ref_t staged_ref) {
     staged_ref_reset(staged_ref);
 }
 
-void _PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref) {
+void PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref) {
     staged_ref_commit(staged_ref);
 }
 
@@ -1837,7 +1837,7 @@ int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
     }
 
     // Should always succeed
-    _PyRegion_CommitStagedRef(staged_ref);
+    PyRegion_CommitStagedRef(staged_ref);
     return 0;
 }
 
