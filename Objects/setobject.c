@@ -409,6 +409,12 @@ set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 static int
 set_add_key(PySetObject *so, PyObject *key)
 {
+    if(!Py_CHECKWRITE(so)){
+        // TODO(Immutable): Should this be inside the critical section?
+        PyErr_WriteToImmutable(so);
+        return -1;
+    }
+
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
@@ -2825,16 +2831,8 @@ PySet_Add(PyObject *anyset, PyObject *key)
     }
 
     int rv;
-
     Py_BEGIN_CRITICAL_SECTION(anyset);
-    if(!Py_CHECKWRITE(anyset)){
-        PyErr_WriteToImmutable(anyset);
-        rv = -1;
-        goto end;
-    }
-
     rv = set_add_key((PySetObject *)anyset, key);
-end:;
     Py_END_CRITICAL_SECTION();
     return rv;
 }

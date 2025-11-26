@@ -1579,7 +1579,6 @@ array_array_fromfile_impl(arrayobject *self, PyTypeObject *cls, PyObject *f,
         return NULL;
     }
 
-
     array_state *state = get_array_state_by_class(cls);
     assert(state != NULL);
 

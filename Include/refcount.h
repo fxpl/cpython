@@ -51,11 +51,22 @@ increase over time until it reaches _Py_IMMORTAL_INITIAL_REFCNT.
 /*
   Immutability:
     In 64bit builds, we use the ob_flags field to store the immutability status of the object.
+  Immutable SCC algorithm requires three states
+    1. Immutable:
+        a. Direct: The object is immutable and it has the reference count
+        b. Indirect: The object is immutable and is part of an SCC, and another
+        object in the SCC carries the reference count.
+    2. Immutable pending: The object is currently being processed by the freeze
+    algorithm.
  */
 #define _Py_IMMUTABLE_FLAG 8
 #define _Py_IMMUTABLE_SCC_FLAG 16
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
 #define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) refcnt
+
+#define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
+#define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
 #else
 /*
 In 32 bit systems, an object will be treated as immortal if its reference
@@ -79,6 +90,8 @@ Immutability:
 Immutability is tracked in the top bit of the reference count. The immutability
 system also uses the second-to-top bit for managing immutable graphs.
 */
+// TODO(Immutable): Will need more states for IMMUTABLE + SCC, this doesn't
+// currently cover the SCC states.
 #define _Py_IMMUTABLE_FLAG ((Py_ssize_t)1L << 30)
 #define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) (refcnt & ~_Py_IMMUTABLE_FLAG)
 #endif
@@ -119,7 +132,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 
 // Check whether an object is writeable.
 // This check will always succeed during runtime finalization.
-#define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || Py_IsFinalizing()))
+#define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || PyModule_Check(op) || Py_IsFinalizing()))
 #define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
 
 static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
@@ -227,6 +240,9 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
 
         // TODO(Immutable): Do we need to clear the immutability state here?
         // TODO(Immutable): Is here even reachable?
+
+        // TODO(Immutable): Care should be taken to make the whole SCC mutable
+        // again if needed.
     }
 #ifndef Py_GIL_DISABLED
 #if SIZEOF_VOID_P > 4
@@ -314,6 +330,13 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+// TODO(Immutable): Should this not be defined in the LIMITED_API?
+//#if !defined(Py_LIMITED_API)
+// Implements special logic for immutable objects.
+PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
+PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
+//#endif
+
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
 #if defined(Py_LIMITED_API) && (Py_LIMITED_API+0 >= 0x030c0000 || defined(Py_REF_DEBUG))
@@ -353,8 +376,13 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_INCREF_IMMORTAL_STAT_INC();
             return;
         }
-        // Object is immutable.
-        // TODO(Immutable): Will need Atomic RC here
+        if (_Py_IsImmutable(op)) {
+            // Object is immutable.
+            // Slight chance of overflow, and an issue here, so check, and
+            // fall back to original core if it wasn't immutable after all.
+            _Py_RefcntAdd_Immutable(op, 1);
+            return;
+        }
     }
     op->ob_refcnt = (uint32_t)cur_refcnt + 1;
 #else
@@ -363,8 +391,13 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_INCREF_IMMORTAL_STAT_INC();
             return;
         }
-        // Object is immutable.
-        // TODO(Immutable): Will need Atomic RC here
+        if (_Py_IsImmutable(op)) {
+            // Object is immutable.
+            // Slight chance of overflow, and an issue here, so check, and
+            // fall back to original core if it wasn't immutable after all.
+            _Py_RefcntAdd_Immutable(op, 1);
+            return;
+        }
     }
     op->ob_refcnt++;
 #endif
@@ -380,12 +413,6 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 < 0x030b0000
 #  define Py_INCREF(op) Py_INCREF(_PyObject_CAST(op))
 #endif
-
-// TODO(Immutable): Should this not be defined in the LIMITED_API?
-//#if !defined(Py_LIMITED_API)
-// Implements special logic for immutable objects.
-PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
-//#endif
 
 #if !defined(Py_LIMITED_API) && defined(Py_GIL_DISABLED)
 // Implements Py_DECREF on objects not owned by the current thread.
@@ -480,10 +507,13 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        assert(_Py_IsImmutable(op));
-        if (_Py_DecRef_Immutable(op))
-          _Py_Dealloc(op);
-        return;
+        if (_Py_IsImmutable(op))
+        {
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+            return;
+        }
     }
     _Py_DECREF_STAT_INC();
     _Py_DECREF_DecRefTotal();
@@ -505,10 +535,13 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        assert(_Py_IsImmutable(op));
-        if (_Py_DecRef_Immutable(op))
-            _Py_Dealloc(op);
-        return;
+        if (_Py_IsImmutable(op))
+        {
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+            return;
+        }
     }
     _Py_DECREF_STAT_INC();
     if (--op->ob_refcnt == 0) {

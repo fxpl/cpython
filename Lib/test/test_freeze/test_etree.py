@@ -9,7 +9,6 @@ class TestElementTree(BaseNotFreezableTest):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, obj=ElementTree(), **kwargs)
 
-
 class TestXMLParser(BaseNotFreezableTest):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, obj=XMLParser(), **kwargs)

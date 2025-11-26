@@ -1040,6 +1040,7 @@ _decimal_Context__unsafe_setprec_impl(PyObject *self, Py_ssize_t x)
 /*[clinic end generated code: output=dd838edf08e12dd9 input=23a1b19ceb1569be]*/
 {
     mpd_context_t *ctx = CTX(self);
+
     if(!Py_CHECKWRITE(self)){
         PyErr_WriteToImmutable(self);
         return NULL;
@@ -1067,17 +1068,18 @@ _decimal_Context__unsafe_setemin_impl(PyObject *self, Py_ssize_t x)
 /*[clinic end generated code: output=0c49cafee8a65846 input=652f1ecacca7e0ce]*/
 {
     mpd_context_t *ctx = CTX(self);
+
     if(!Py_CHECKWRITE(self)){
         PyErr_WriteToImmutable(self);
         return NULL;
     }
-
 
     if (x < -1070000000L || x > 0) {
         return value_error_ptr(
             "valid range for unsafe emin is [-1070000000, 0]");
     }
 
+    ctx->emin = x;
     Py_RETURN_NONE;
 }
 
@@ -1094,6 +1096,7 @@ _decimal_Context__unsafe_setemax_impl(PyObject *self, Py_ssize_t x)
 /*[clinic end generated code: output=776563e0377a00e8 input=b2a32a9a2750e7a8]*/
 {
     mpd_context_t *ctx = CTX(self);
+
     if(!Py_CHECKWRITE(self)){
         PyErr_WriteToImmutable(self);
         return NULL;

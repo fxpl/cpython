@@ -161,7 +161,7 @@ PyObject_VectorcallDict(PyObject *callable, PyObject *const *args,
 static void
 object_is_not_callable(PyThreadState *tstate, PyObject *callable)
 {
-    if (Py_IS_TYPE(callable, &PyModule_Type)) {
+    if (Py_IS_TYPE(callable, &PyModule_Type) || Py_IS_TYPE(callable, &PyImmModule_Type)) {
         // >>> import pprint
         // >>> pprint(thing)
         // Traceback (most recent call last):

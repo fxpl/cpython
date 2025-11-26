@@ -4434,7 +4434,7 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
 
     if(!Py_CHECKWRITE(d)){
         PyErr_WriteToImmutable(d);
-        goto error;
+        return -1;
     }
 
     if (mp->ma_keys == Py_EMPTY_KEYS) {
@@ -4542,9 +4542,13 @@ PyObject *
 PyDict_SetDefault(PyObject *d, PyObject *key, PyObject *defaultobj)
 {
     PyObject *result;
+    int status;
     Py_BEGIN_CRITICAL_SECTION(d);
-    dict_setdefault_ref_lock_held(d, key, defaultobj, &result, 0);
+    status = dict_setdefault_ref_lock_held(d, key, defaultobj, &result, 0);
     Py_END_CRITICAL_SECTION();
+    if (status == -1) {
+        return NULL;
+    }
     return result;
 }
 
@@ -4567,7 +4571,10 @@ dict_setdefault_impl(PyDictObject *self, PyObject *key,
 /*[clinic end generated code: output=f8c1101ebf69e220 input=9237af9a0a224302]*/
 {
     PyObject *val;
-    dict_setdefault_ref_lock_held((PyObject *)self, key, default_value, &val, 1);
+    int status = dict_setdefault_ref_lock_held((PyObject *)self, key, default_value, &val, 1);
+    if (status == -1) {
+        return NULL;
+    }
     return val;
 }
 

@@ -41,6 +41,7 @@ _types_exec(PyObject *m)
     EXPORT_STATIC_TYPE("MethodType", PyMethod_Type);
     EXPORT_STATIC_TYPE("MethodWrapperType", _PyMethodWrapper_Type);
     EXPORT_STATIC_TYPE("ModuleType", PyModule_Type);
+    EXPORT_STATIC_TYPE("ImmutableModuleType", PyImmModule_Type);
     EXPORT_STATIC_TYPE("NoneType", _PyNone_Type);
     EXPORT_STATIC_TYPE("NotImplementedType", _PyNotImplemented_Type);
     EXPORT_STATIC_TYPE("SimpleNamespace", _PyNamespace_Type);

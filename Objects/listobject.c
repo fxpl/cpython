@@ -1563,21 +1563,7 @@ list_inplace_concat(PyObject *_self, PyObject *other)
     return Py_NewRef(self);
 }
 
-/*[clinic input]
-@critical_section
-list.pop
-
-    index: Py_ssize_t = -1
-    /
-
-Remove and return item at index (default last).
-
-Raises IndexError if list is empty or index is out of range.
-[clinic start generated code]*/
-
-static PyObject *
-list_pop_impl(PyListObject *self, Py_ssize_t index)
-/*[clinic end generated code: output=6bd69dcb3f17eca8 input=c269141068ae4b8f]*/
+PyObject* _Py_ListPop(PyListObject *self, Py_ssize_t index)
 {
     PyObject *v;
     int status;
@@ -1601,17 +1587,10 @@ list_pop_impl(PyListObject *self, Py_ssize_t index)
     PyObject **items = self->ob_item;
     v = items[index];
     const Py_ssize_t size_after_pop = Py_SIZE(self) - 1;
-    if (size_after_pop == 0) {
-        Py_INCREF(v);
-        list_clear(self);
-        status = 0;
+    if ((size_after_pop - index) > 0) {
+        memmove(&items[index], &items[index+1], (size_after_pop - index) * sizeof(PyObject *));
     }
-    else {
-        if ((size_after_pop - index) > 0) {
-            memmove(&items[index], &items[index+1], (size_after_pop - index) * sizeof(PyObject *));
-        }
-        status = list_resize(self, size_after_pop);
-    }
+    status = list_resize(self, size_after_pop);
     if (status >= 0) {
         return v; // and v now owns the reference the list had
     }
@@ -1621,6 +1600,26 @@ list_pop_impl(PyListObject *self, Py_ssize_t index)
         items[index] = v;
         return NULL;
     }
+}
+
+
+/*[clinic input]
+@critical_section
+list.pop
+
+    index: Py_ssize_t = -1
+    /
+
+Remove and return item at index (default last).
+
+Raises IndexError if list is empty or index is out of range.
+[clinic start generated code]*/
+
+static PyObject *
+list_pop_impl(PyListObject *self, Py_ssize_t index)
+/*[clinic end generated code: output=6bd69dcb3f17eca8 input=c269141068ae4b8f]*/
+{
+    return _Py_ListPop(self, index);
 }
 
 /* Reverse a slice of a list in place, from lo up to (exclusive) hi. */

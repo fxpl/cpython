@@ -8347,7 +8347,10 @@
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
                     JUMP_TO_PREDICTED(LOAD_ATTR);
                 }
-                PyDictObject *dict = (PyDictObject *)((PyModuleObject *)owner_o)->md_dict;
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyModuleObject* mod = _PyInterpreterState_GetModuleState(owner_o);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                PyDictObject *dict = (PyDictObject *)mod->md_dict;
                 assert(dict != NULL);
                 PyDictKeysObject *keys = FT_ATOMIC_LOAD_PTR_ACQUIRE(dict->ma_keys);
                 if (FT_ATOMIC_LOAD_UINT32_RELAXED(keys->dk_version) != dict_version) {
@@ -10978,6 +10981,24 @@
                     UPDATE_MISS_STATS(STORE_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                if (!Py_CHECKWRITE(owner_o))
+                {
+                    UNLOCK_OBJECT(dict);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    _PyEval_FormatExcNotWriteable(tstate, _PyFrame_GetCode(frame), oparg);
+                    _PyStackRef tmp = owner;
+                    owner = PyStackRef_NULL;
+                    stack_pointer[-1] = owner;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = value;
+                    value = PyStackRef_NULL;
+                    stack_pointer[-2] = value;
+                    PyStackRef_CLOSE(tmp);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -2;
+                    assert(WITHIN_STACK_BOUNDS());
+                    JUMP_TO_LABEL(error);
                 }
                 assert(PyDict_CheckExact((PyObject *)dict));
                 PyObject *name = GETITEM(FRAME_CO_NAMES, oparg);
