@@ -274,10 +274,8 @@ static int PyCown_clear(_PyCownObject *self) {
 static void PyCown_dealloc(_PyCownObject *self) {
     // Self has already been removed from the GC when it was moved
     // into the cown region.
-    Py_TRASHCAN_BEGIN(self, PyCown_dealloc)
     PyCown_clear(self);
     PyObject_GC_Del(self);
-    Py_TRASHCAN_END
 }
 
 static int

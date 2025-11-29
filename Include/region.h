@@ -68,6 +68,48 @@ PyAPI_FUNC(int) _PyRegion_AddLocalRefs(int tgt_count, ...);
 PyAPI_FUNC(int) _PyRegion_RemoveLocalRef(PyObject *tgt);
 #define PyRegion_RemoveLocalRef(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))
 
+static inline PyObject* _PyRegion_NewRef(PyObject* tgt) {
+    if (PyRegion_AddLocalRef(tgt)) {
+        return NULL;
+    }
+    return Py_NewRef(tgt);
+}
+static inline PyObject* _PyRegion_XNewRef(PyObject* tgt) {
+    if (!tgt) {
+        return NULL;
+    }
+
+    return _PyRegion_NewRef(tgt);
+}
+#define PyRegion_NewRef(tgt) _PyRegion_NewRef(_PyObject_CAST(tgt))
+#define PyRegion_XNewRef(tgt) _PyRegion_XNewRef(_PyObject_CAST(tgt))
+
+static inline int _PyRegion_TakeRef(PyObject *src, PyObject *tgt) {
+    int res = _PyRegion_AddRef(src, tgt);
+    if (res) {
+        return res;
+    }
+
+    // Removing the local reference here is safe. There are three
+    // interesting cases which can happen with this function:
+    //
+    // - src is local & tgt is in region Y
+    //      In this case, Y will remain open, since the `AddRef` call above
+    //      bumped the LRC, basically making this a no-op.
+    // - src and tgt are in the same region
+    //      This call will reduce the LRC, but the region will remain open
+    //      since there is a remaining local reference to src
+    // - src is in region X and tgt is the bridge object of Y
+    //      Removing the local reference may close Y, but X as the new parent
+    //      region of Y will remain open. Closing of Y will therefore only
+    //      modify the OSC of X but not close X. This ensures that no cown is
+    //      released or send off, while we still have remaining references into
+    //      X and Y.
+    return _PyRegion_RemoveLocalRef(tgt);
+}
+
+#define PyRegion_TakeRef(src, tgt) _PyRegion_TakeRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+
 #ifdef __cplusplus
 }
 #endif
