@@ -23,7 +23,7 @@ typedef struct _PyRegionObject _PyRegionObject;
 typedef struct _PyCownObject _PyCownObject;
 
 // FIXME(regions): xFrednet: Several parts of this state should be atomic to
-//      allow weak references from asking if the region is currently accessable.
+//      allow weak references from asking if the region is currently accessible.
 //      This might also be helpful to reduce the level of corruption which can
 //      happen when a region is somehow shared across threads. It would be
 //      interesting to see if using more atomics here has a performance impact.
@@ -49,7 +49,7 @@ typedef struct _Py_region_data {
      * if the region is dirty. This can happen, when we call untrusted C
      * code. A dirty region first has to be cleaned, before it can be closed.
      *
-     * See `_Py_ownership_state.tick` for an explaination of the tick counter.
+     * See `_Py_ownership_state.tick` for an explanation of the tick counter.
      *
      * This value indicates the following states:
      * - (0) => The region is closed
@@ -84,7 +84,7 @@ typedef struct _Py_region_data {
      * NULL, when the bridge was already deallocated but some objects retain
      * a reference to the `_Py_region_data` object.
      *
-     * This is a weak reference to the brige, meaning the RC is not updated
+     * This is a weak reference to the bridge, meaning the RC is not updated
      * by writes to this field.
      */
     _PyRegionObject* bridge;
@@ -92,8 +92,8 @@ typedef struct _Py_region_data {
     /* Objects have to be removed from their local GC cycle, when they're moved
      * into a region. Instead they're moved into this list, to allow GC inside
      * the region.
-     * 
-     * Bridges can't form cycles with objects outside their regions (Mudolo cowns).
+     *
+     * Bridges can't form cycles with objects outside their regions (Modulo cowns).
      * It should therefore be safe to take them out of the GC cycle.
      */
     PyGC_Head gc_list;

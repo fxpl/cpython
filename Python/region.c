@@ -1965,7 +1965,7 @@ int _PyRegion_HasOwner(Py_region_t region) {
  * on deallocation.
  */
 int _PyRegion_SetCown(_PyRegionObject* bridge, _PyCownObject *cown) {
-    Py_region_t region = _PyRegion_GET(bridge);
+    Py_region_t region = _PyRegion_Get(bridge);
 
     // Validation
     assert(cown != NULL);
@@ -1981,7 +1981,7 @@ int _PyRegion_SetCown(_PyRegionObject* bridge, _PyCownObject *cown) {
  * regions it owns.
  */
 int _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown) {
-    Py_region_t region = _PyRegion_GET(bridge);
+    Py_region_t region = _PyRegion_Get(bridge);
 
     // Validation
     assert(cown != NULL);

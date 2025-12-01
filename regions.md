@@ -15,5 +15,7 @@ Getter functions often return a new reference to a contained object using `Py_Ne
     }
 ```
 
-## Taking a reference as an argument
+## Moving References
+
+## Staging References
 

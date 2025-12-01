@@ -34,7 +34,7 @@ static inline Py_region_t _PyRegion_Get(PyObject *obj) {
 
     return _PyRegion_GetSlow(obj);
 }
-#define _PyRegion_GET(obj) _PyRegion_Get(_PyObject_CAST(obj))
+#define _PyRegion_Get(obj) _PyRegion_Get(_PyObject_CAST(obj))
 
 static inline int _Py_IsLocal(PyObject *obj) {
     return _PyRegion_Get(obj) == _Py_LOCAL_REGION;
