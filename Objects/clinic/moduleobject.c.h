@@ -16,6 +16,16 @@ PyDoc_STRVAR(module___init____doc__,
 "\n"
 "The name must be a string; the optional doc argument can have any type.");
 
+// TODO(Immutable):  Added to make the test_inspect happy that the immutable module type
+// has a valid signature in its docstring.  Review in the new year (i.e. Jan 2026).
+PyDoc_STRVAR(immutable_module___init____doc__,
+"immutable_module(name, doc=None)\n"
+"--\n"
+"\n"
+"Create an immutable module object.\n"
+"\n"
+"The name must be a string; the optional doc argument can have any type.");
+
 static int
 module___init___impl(PyModuleObject *self, PyObject *name, PyObject *doc);
 

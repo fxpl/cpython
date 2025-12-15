@@ -7495,9 +7495,9 @@ _PyDateTime_InitTypes(PyInterpreterState *interp)
         }
 
         // TODO(Immutable): Revisit after PLDI deadline.
-        // if(_PyImmutability_RegisterFreezable(capi_types[i]) < 0) {
-        //     return -1;
-        // }
+        if(_PyImmutability_RegisterFreezable(capi_types[i]) < 0) {
+            return _PyStatus_ERR("could not freeze static types");
+        }
     }
 
 #define DATETIME_ADD_MACRO(dict, c, value_expr)         \

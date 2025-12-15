@@ -9,6 +9,16 @@
 #include "pycore_immutability.h"
 #include "pycore_list.h"
 
+
+// This file has many in progress aspects
+//
+// 1. Improve backtracking of freezing in the presence of failures.
+// 2. Support GIL disabled mode properly.
+// 3. Improve storage of freeze_location
+// 4. Improve Mermaid output to handle re-entrancy
+// 5. Add pre-freeze hook to allow custom objects to prepare for freezing.
+
+
 // #define IMMUTABLE_TRACING
 
 #ifdef IMMUTABLE_TRACING
@@ -74,6 +84,12 @@
 #define TRACE_MERMAID_END()
 #endif
 
+#ifdef SIZEOF_VOID_P > 4
+#define IMMUTABLE_FLAG_FIELD(op) (op->ob_flags)
+#else
+#define IMMUTABLE_FLAG_FIELD(op) (op->ob_refcnt)
+#endif
+
 static PyObject *
 _destroy(PyObject* set, PyObject *objweakref)
 {
@@ -107,32 +123,33 @@ type_weakref(struct _Py_immutability_state *state, PyObject *obj)
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    PyObject* frozen_importlib = NULL;
+    // TODO(Immutable): Should we have the following code given the updates to the PEP?
+    // PyObject* frozen_importlib = NULL;
 
-    frozen_importlib = PyImport_ImportModule("_frozen_importlib");
-    if(frozen_importlib == NULL){
-        return -1;
-    }
+    // frozen_importlib = PyImport_ImportModule("_frozen_importlib");
+    // if(frozen_importlib == NULL){
+    //     return -1;
+    // }
 
-    state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
-    if(state->module_locks == NULL){
-        Py_DECREF(frozen_importlib);
-        return -1;
-    }
+    // state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
+    // if(state->module_locks == NULL){
+    //     Py_DECREF(frozen_importlib);
+    //     return -1;
+    // }
 
-    state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
-    if(state->blocking_on == NULL){
-        Py_DECREF(frozen_importlib);
-        return -1;
-    }
+    // state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
+    // if(state->blocking_on == NULL){
+    //     Py_DECREF(frozen_importlib);
+    //     return -1;
+    // }
+
+    // Py_DECREF(frozen_importlib);
 
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
-        Py_DECREF(frozen_importlib);
+        
         return -1;
     }
-
-    Py_DECREF(frozen_importlib);
 
     return 0;
 }
@@ -242,11 +259,7 @@ static bool is_c_wrapper(PyObject* obj){
 static inline void _Py_SetImmutable(PyObject *op)
 {
     if(op) {
-#if SIZEOF_VOID_P > 4
-        op->ob_flags |= _Py_IMMUTABLE_FLAG;
-#else
-        op->ob_refcnt |= _Py_IMMUTABLE_FLAG;
-#endif
+        IMMUTABLE_FLAG_FIELD(op) |= _Py_IMMUTABLE_FLAG;
     }
 }
 
@@ -258,31 +271,17 @@ static inline void _Py_SetImmutable(PyObject *op)
  * both builds, and we can optimize later.
  **/
 struct FreezeState {
+#ifndef GIL_DISABLED
     // Used to track traversal order
     PyObject *dfs;
     // Used to track SCC to handle cycles during traversal
     PyObject *pending;
-
-// TODO(Free-Threaded) Needed for Free-threaded build.
-//   This is done in the old GC header for no-GIL builds.
-#ifdef GIL_DISABLED
-    // Used to represent SCCs with union find.
-    // The representative reuse this information as follows.
-    //  The bottom bit represents if this representative can reach mutable state.
-    //  Second bit unset, pointer towards representative
-    //  Second bit set, this is a representative
-    //     Third bit set, this is a complete representative
-    //        The higher bits represent the reference count for this scc
-    //        that has not be discovered in the current free graph
-    //     Third bit unset, this is a pending representative that is still being explored.
-    //        The higher bits represent the reference count from outside this scc
-    //        this is the total of rcs for current visited objects,
-    //        minus any internal edges we have explored.
-    _Py_hashtable_t *rep;
-
-    // Forms cyclic singly linked list of elements of a scc.
-    _Py_hashtable_t *next;
 #endif
+    // Used to track visited nodes that don't have inline GC state.
+    // This is required to be able to backtrack a failed freeze.
+    // It is also used to track nodes in GIL_DISABLED builds.
+    _Py_hashtable_t *visited;
+
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
     PyObject* freeze_location;
@@ -291,6 +290,7 @@ struct FreezeState {
     PyObject* start;
 #endif
 };
+
 
 #define REPRESENTATIVE_FLAG 1
 #define COMPLETE_FLAG 2
@@ -311,16 +311,13 @@ struct FreezeState {
 
 int init_freeze_state(struct FreezeState *state)
 {
+#ifndef GIL_DISABLED
     state->dfs = PyList_New(0);
     state->pending = PyList_New(0);
-#ifdef GIL_DISABLED
-    state->rep = _Py_hashtable_new(
-        _Py_hashtable_hash_ptr,
-        _Py_hashtable_compare_direct);
-    state->next = _Py_hashtable_new(
-        _Py_hashtable_hash_ptr,
-        _Py_hashtable_compare_direct);
 #endif
+    state->visited = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
 #endif
@@ -331,15 +328,12 @@ int init_freeze_state(struct FreezeState *state)
 
 void deallocate_FreezeState(struct FreezeState *state)
 {
-#ifdef GIL_DISABLED
-    _Py_hashtable_destroy(state->rep);
-    _Py_hashtable_destroy(state->next);
-#endif
+    _Py_hashtable_destroy(state->visited);
 
+#ifndef GIL_DISABLED
     // We can't call the destructor directly as we didn't newref the objects
-    // on push.
-    //  TODO(Immutable): Implement a proper stack for borrowing RCs so this can
-    //   be just a deallocation, and not need to traverse the stacks.
+    // on push.  This is a slow path if there are still objects in the stack,
+    // so there is no need to optimize it.
     while(PyList_Size(state->pending) > 0){
         pop(state->pending);
     }
@@ -349,16 +343,13 @@ void deallocate_FreezeState(struct FreezeState *state)
 
     Py_DECREF(state->dfs);
     Py_DECREF(state->pending);
+#endif
 }
 
 void set_direct_rc(PyObject* obj)
 {
 #ifndef GIL_DISABLED
-#if SIZEOF_VOID_P > 4
-    obj->ob_flags = (obj->ob_flags & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_DIRECT;
-#else
-    obj->ob_refcnt = (obj->ob_refcnt & ~_Py_IMMUTABLE_FLAG) | _Py_IMMUTABLE_DIRECT;
-#endif
+    IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_DIRECT;
 #else
     (void)obj;
 #endif
@@ -367,11 +358,7 @@ void set_direct_rc(PyObject* obj)
 void set_indirect_rc(PyObject* obj)
 {
 #ifndef GIL_DISABLED
-#if SIZEOF_VOID_P > 4
-    obj->ob_flags = (obj->ob_flags & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_INDIRECT;
-#else
-    obj->ob_refcnt = (obj->ob_refcnt & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_INDIRECT;
-#endif
+    IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_INDIRECT;
 #else
     (void)obj;
 #endif
@@ -381,10 +368,8 @@ bool has_direct_rc(PyObject* obj)
 {
 #ifdef GIL_DISABLED
     return false;
-#elif SIZEOF_VOID_P > 4
-    return (obj->ob_flags & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_DIRECT;
 #else
-    return (obj->ob_refcnt & _Py_IMMUTABLE_FLAG) == _Py_IMMUTABLE_DIRECT;
+    return (IMMUTABLE_FLAG_FIELD(obj) & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_DIRECT;
 #endif
 }
 
@@ -471,36 +456,19 @@ void scc_init(PyObject* obj)
         _PyObject_GC_UNTRACK(obj);
     }
 
-#if SIZEOF_VOID_P > 4
     // Mark as pending so we can detect back edges in the traversal.
-    obj->ob_flags |= _Py_IMMUTABLE_PENDING;
-#else
-    obj->ob_refcnt |= _Py_IMMUTABLE_PENDING;
-#endif
+
+    IMMUTABLE_FLAG_FIELD(obj) |= _Py_IMMUTABLE_PENDING;
     set_scc_rank(obj, 0);
 }
 
 bool scc_is_pending(PyObject* obj)
 {
-#if SIZEOF_VOID_P > 4
-    return (obj->ob_flags & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_PENDING;
-#else
-    return (obj->ob_refcnt & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_PENDING;
-#endif
+    return (IMMUTABLE_FLAG_FIELD(obj) & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_PENDING;
 }
 
 PyObject* get_representative(PyObject* obj, struct FreezeState *state)
 {
-#ifdef GIL_DISABLED
-    // TODO(Immutable): Union find path compressions.
-    void* next = _Py_hashtable_get(state->rep, obj);
-    while (((uintptr_t)next & REPRESENTATIVE_FLAG) == 0) {
-        obj = (PyObject*)next;
-        assert(obj != NULL);
-        next = _Py_hashtable_get(state->rep, obj);
-    }
-    return obj;
-#else
     if (is_representative(obj, state)) {
         return obj;
     }
@@ -518,7 +486,6 @@ PyObject* get_representative(PyObject* obj, struct FreezeState *state)
         grandparent = parent;
     }
     return rep;
-#endif
 }
 
 bool
@@ -536,7 +503,6 @@ union_scc(PyObject* a, PyObject* b, struct FreezeState *state)
     if (rep_a == rep_b)
         return false;
 
-#ifndef GIL_DISABLED
     // Determine rank, and switch so that rep_a has higher rank.
     size_t rank_a = scc_rank(rep_a);
     size_t rank_b = scc_rank(rep_b);
@@ -557,56 +523,18 @@ union_scc(PyObject* a, PyObject* b, struct FreezeState *state)
     set_scc_next(rep_a, next_b);
     set_scc_next(rep_b, next_a);
     return true;
-#else
-    // TODO(Immutable): Can probably throw away SCC code for no-GIL build.
-
-    void** value_a_ref = &(_Py_hashtable_get_entry(state->rep, rep_a)->value);
-    void** value_b_ref = &(_Py_hashtable_get_entry(state->rep, rep_b)->value);
-
-    uintptr_t value_a = (uintptr_t)*value_a_ref;
-    uintptr_t value_b = (uintptr_t)*value_b_ref;
-
-    // Combined the rc information for the two partial SCCs.
-    // Subtract one from the rc as this corresponds to collapsing an internal edge in
-    // an SCC
-    size_t rc_a = (value_a >> REFCOUNT_SHIFT);
-    size_t rc_b = (value_b >> REFCOUNT_SHIFT);
-    size_t new_rc = rc_a + rc_b - 1;
-
-    debug("Merging %p and %p, new rc = %zu\n", rep_a, rep_b, new_rc);
-
-    // TODO(Immutable): Use rank to decide which way to merge.
-    // Reparent
-    *value_b_ref = rep_a;
-
-    // Update root to combine values
-    *value_a_ref = (void*)(REPRESENTATIVE_FLAG | (new_rc << REFCOUNT_SHIFT));
-
-    // Merge cyclic lists.
-    void* next_a = _Py_hashtable_get(state->next, rep_a);
-    void* next_b = _Py_hashtable_get(state->next, rep_b);
-    _Py_hashtable_get_entry(state->next, rep_a)->value = next_b;
-    _Py_hashtable_get_entry(state->next, rep_b)->value = next_a;
-
-    return true;
-#endif
 }
 
-PyObject* get_next(PyObject* obj, struct FreezeState *state)
+PyObject* get_next(PyObject* obj, struct FreezeState *)
 {
-#ifdef GIL_DISABLED
-    PyObject* next = (PyObject*)_Py_hashtable_get(state->next, obj);
-    assert(next != NULL);
-#else
     PyObject* next = scc_next(obj);
-#endif
     return next;
 }
 
 int has_visited(struct FreezeState *state, PyObject* obj)
 {
 #ifdef GIL_DISABLED
-    return _Py_hashtable_get(state->next, obj) != NULL;
+    return _Py_hashtable_get(state->visited, obj) != NULL;
 #else
     return _Py_IsImmutable(obj);
 #endif
@@ -675,9 +603,7 @@ int debug_print_scc_visit(_Py_hashtable_t *ht, const void *key, const void *valu
 void debug_print_all_sccs(struct FreezeState *state)
 {
 #ifdef IMMUTABLE_TRACING
-    // debug ("Printing all SCCs\n");
-    // _Py_hashtable_foreach(state->rep, debug_print_scc_visit, state);
-    // debug("----\n");
+    // TODO this code needs reinstating.
 #else
     (void)state;
 #endif
@@ -972,6 +898,7 @@ int add_visited(PyObject* obj, struct FreezeState *state)
     assert (!has_visited(state, obj));
 
 #ifdef Py_DEBUG
+    // TODO(Immutable): Re-enable this code.
     // // We need to add this attribute before traversing, so that if it creates a
     // // dictionary, then this dictionary is frozen.
     // if (state->freeze_location != NULL) {
@@ -986,31 +913,21 @@ int add_visited(PyObject* obj, struct FreezeState *state)
     // }
 #endif
 #ifdef GIL_DISABLED
-    // Mark the object as visited
-    if (_Py_hashtable_set(state->next, obj, obj) == -1)
-        return -1;
-
-    size_t rc = _Py_REFCNT(obj);
-    void* rep_value = (void*)(REPRESENTATIVE_FLAG | (rc << REFCOUNT_SHIFT));
-
-    debug_obj("Adding visited  %s (%p)\n", obj);
-    // Use one to represent a pending SCC.
-    if (_Py_hashtable_set(state->rep, obj, rep_value) == -1) {
-        PyErr_SetString(PyExc_RuntimeError, "Failed to add to hashtable, OOM?");
-        return -1;
-    }
-
-    return 0;
+    // TODO(Immutable): Need to mark as immutable but not deeply immutable here.
 #else
     debug_obj("Adding visited  %s (%p)\n", obj);
     if (_PyObject_IS_GC(obj))
     {
         scc_init(obj);
+        return 0;
     } else {
         set_direct_rc(obj);
     }
-    return 0;
 #endif
+    if (_Py_hashtable_set(state->visited, obj, obj) == -1)
+        return -1;
+    return 0;
+
 }
 
 /*
@@ -1019,13 +936,7 @@ int add_visited(PyObject* obj, struct FreezeState *state)
 int
 is_pending(PyObject* obj, struct FreezeState *state)
 {
-#ifdef GIL_DISABLED
-    PyObject* rep = get_representative(obj, state);
-    uintptr_t result = (uintptr_t)_Py_hashtable_get(state->rep, rep);
-    return (result & COMPLETE_FLAG) == 0;
-#else
     return scc_is_pending(obj);
-#endif
 }
 
 /*
@@ -1040,15 +951,6 @@ is_pending(PyObject* obj, struct FreezeState *state)
 void
 complete_scc(PyObject* obj, struct FreezeState *state)
 {
-#ifdef GIL_DISABLED
-    PyObject* rep = get_representative(obj, state);
-    void** value_ref = &(_Py_hashtable_get_entry(state->rep, rep)->value);
-    // Mark completed
-    *value_ref = (void*)(((uintptr_t)*value_ref) | COMPLETE_FLAG);
-    // Decrement reference count.
-    *value_ref = (void*)((uintptr_t)*value_ref - (1 << REFCOUNT_SHIFT));
-    return ((uintptr_t)*value_ref) >> REFCOUNT_SHIFT == 0;
-#else
     PyObject* c = scc_next(obj);
     if (c == NULL) {
         debug_obj("Completing SCC %s (%p) with single member rc = %zd\n", obj, Py_REFCNT(obj));
@@ -1077,18 +979,13 @@ complete_scc(PyObject* obj, struct FreezeState *state)
     // TODO use this for backtracking purposes?
     set_scc_parent(obj, NULL);
     debug_obj("Completed SCC %s (%p) with %zu members with rc %zu \n", obj, count, rc - (count - 1));
-#endif
 }
 
 void add_internal_reference(PyObject* obj, struct FreezeState *state)
 {
-#ifdef GIL_DISABLED
-    // TODO
-#else
     obj->ob_refcnt--;
     debug_obj("Decrementing rc of %s (%p) to %zd\n", obj, _Py_REFCNT(obj));
     assert(_Py_REFCNT(obj) > 0);
-#endif
 }
 
 /*
@@ -1108,7 +1005,7 @@ int mark_frozen(_Py_hashtable_t*, const void* key, const void*, void*)
 void mark_all_frozen(struct FreezeState *state)
 {
 #ifdef GIL_DISABLED
-    _Py_hashtable_foreach(state->rep, mark_frozen, state);
+    _Py_hashtable_foreach(state->visited, mark_frozen, state);
 #endif
 }
 
@@ -1423,6 +1320,9 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj)
     if(is_freezable_builtin(obj->ob_type)){
         return 0;
     }
+
+    // TODO(Immutable): Fail is type is not already frozen.
+    // This will require the test suite to be updated.
 
     int result = is_explicitly_freezable(state, obj);
     if(result == -1){
@@ -1752,28 +1652,6 @@ int _PyImmutability_Freeze(PyObject* obj)
         SUCCEEDS(traverse_freeze(item, &freeze_state));
     }
 
-    // TODO: This disables the self-contained check.
-    // should remove properly
-
-    // Every scc we encountered should be closed.
-    // if (closed_sccs != total_sccs)
-    // {
-    //     // Account for initial stack reference that was passed in.
-    //     if (add_internal_reference(obj, &freeze_state))
-    //     {
-    //         closed_sccs++;
-    //     }
-    //     if (closed_sccs != total_sccs)
-    //     {
-    //         debug("Failed to freeze!\n");
-    //         debug_print_all_sccs(&freeze_state);
-    //         debug("Total SCCs %d, closed SCCs %d\n", total_sccs, closed_sccs);
-    //         // set an error here.
-    //         PyErr_SetString(PyExc_RuntimeError, "Cannot freeze a graph that is not self-contained!");
-    //         goto error;
-    //     }
-    // }
-    // Mark all the objects as frozen
     mark_all_frozen(&freeze_state);
 
     goto finally;
@@ -1788,6 +1666,10 @@ error:
         unfreeze(item);
     }
     result = -1;
+
+    // TODO(Immutable): In error case, we should unfreeze the completed SCCs too.
+    // This requires we create the linked list of all SCCs completed during the same
+    // freeze operation. 
 
 finally:
     deallocate_FreezeState(&freeze_state);

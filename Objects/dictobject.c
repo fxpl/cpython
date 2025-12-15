@@ -4434,7 +4434,7 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
 
     if(!Py_CHECKWRITE(d)){
         PyErr_WriteToImmutable(d);
-        return -1;
+        goto error;
     }
 
     if (mp->ma_keys == Py_EMPTY_KEYS) {

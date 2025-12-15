@@ -330,12 +330,9 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
-// TODO(Immutable): Should this not be defined in the LIMITED_API?
-//#if !defined(Py_LIMITED_API)
 // Implements special logic for immutable objects.
 PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
 PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
-//#endif
 
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {

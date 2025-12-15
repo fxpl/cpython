@@ -1621,7 +1621,7 @@ PyTypeObject PyImmModule_Type = {
     0,                                          /* tp_as_buffer */
     (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
         Py_TPFLAGS_BASETYPE) & (~Py_TPFLAGS_MANAGED_DICT),                    /* tp_flags */
-    module___init____doc__,                     /* tp_doc */
+    immutable_module___init____doc__,           /* tp_doc */
     module_traverse,                            /* tp_traverse */
     module_clear,                               /* tp_clear */
     0,                                          /* tp_richcompare */
