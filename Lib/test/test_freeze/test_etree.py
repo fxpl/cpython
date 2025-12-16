@@ -1,4 +1,4 @@
-from xml.etree.ElementTree import ElementTree, Element, XMLParser
+from xml.etree.ElementTree import Element, XMLParser
 import unittest
 
 

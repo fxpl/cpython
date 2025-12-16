@@ -147,7 +147,6 @@ int init_state(struct _Py_immutability_state *state)
 
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
-        
         return -1;
     }
 
@@ -1669,7 +1668,7 @@ error:
 
     // TODO(Immutable): In error case, we should unfreeze the completed SCCs too.
     // This requires we create the linked list of all SCCs completed during the same
-    // freeze operation. 
+    // freeze operation.
 
 finally:
     deallocate_FreezeState(&freeze_state);
