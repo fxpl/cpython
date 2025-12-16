@@ -94,6 +94,7 @@ system also uses the second-to-top bit for managing immutable graphs.
 // currently cover the SCC states.
 #define _Py_IMMUTABLE_FLAG ((Py_ssize_t)1L << 30)
 #define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) (refcnt & ~_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG)
 #endif
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is

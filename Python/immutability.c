@@ -992,8 +992,9 @@ void add_internal_reference(PyObject* obj, struct FreezeState *state)
   Function for use in _Py_hashtable_foreach.
   Marks the key as immutable/frozen.
 */
-int mark_frozen(_Py_hashtable_t*, const void* key, const void* value, void* state)
+int mark_frozen(_Py_hashtable_t* tbl, const void* key, const void* value, void* state)
 {
+    (void)tbl;
     (void)value;
     (void)state;
     // Mark as frozen, this can only reach immutable objects so safe.
