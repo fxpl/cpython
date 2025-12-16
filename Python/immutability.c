@@ -84,7 +84,7 @@
 #define TRACE_MERMAID_END()
 #endif
 
-#ifdef SIZEOF_VOID_P > 4
+#if SIZEOF_VOID_P > 4
 #define IMMUTABLE_FLAG_FIELD(op) (op->ob_flags)
 #else
 #define IMMUTABLE_FLAG_FIELD(op) (op->ob_refcnt)
@@ -524,8 +524,9 @@ union_scc(PyObject* a, PyObject* b, struct FreezeState *state)
     return true;
 }
 
-PyObject* get_next(PyObject* obj, struct FreezeState *)
+PyObject* get_next(PyObject* obj, struct FreezeState *freeze_state)
 {
+    (void)freeze_state;
     PyObject* next = scc_next(obj);
     return next;
 }
@@ -991,8 +992,10 @@ void add_internal_reference(PyObject* obj, struct FreezeState *state)
   Function for use in _Py_hashtable_foreach.
   Marks the key as immutable/frozen.
 */
-int mark_frozen(_Py_hashtable_t*, const void* key, const void*, void*)
+int mark_frozen(_Py_hashtable_t*, const void* key, const void* value, void* state)
 {
+    (void)value;
+    (void)state;
     // Mark as frozen, this can only reach immutable objects so safe.
     _Py_SetImmutable((PyObject*)key);
     return 0;
