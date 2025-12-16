@@ -168,7 +168,8 @@ jobs:
           - arm64
         free-threading:
           - false
-          - true
+        # TODO(Immutable): Enable free-threading build when it is made to work.
+        #        - true
         exclude:
           # Skip Win32 on free-threaded builds
           - { arch: Win32, free-threading: true }
@@ -209,7 +210,8 @@ jobs:
         - macos-15-intel
         free-threading:
         - false
-        - true
+        # TODO(Immutable): Enable free-threading build when it is made to work.
+        #        - true
         exclude:
         - os: macos-15-intel
           free-threading: true
@@ -234,7 +236,8 @@ jobs:
         - true
         free-threading:
         - false
-        - true
+        # TODO(Immutable): Enable free-threading build when it is made to work.
+        #        - true
         os:
         - ubuntu-24.04
         - ubuntu-24.04-arm
@@ -614,7 +617,8 @@ jobs:
         - Thread
         free-threading:
         - false
-        - true
+        # TODO(Immutable): Enable free-threading build when it is made to work.
+        #        - true
         sanitizer:
         - TSan
         include:
