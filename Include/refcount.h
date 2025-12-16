@@ -80,10 +80,10 @@ immortality, but the execution would still be correct.
 Reference count increases and decreases will first go through an immortality
 check by comparing the reference count field to the minimum immortality refcount.
 */
-#define _Py_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(5L << 27))
-#define _Py_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(1L << 29))
-#define _Py_STATIC_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(7L << 27))
-#define _Py_STATIC_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(6L << 27))
+#define _Py_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(5L << 26))
+#define _Py_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(1L << 28))
+#define _Py_STATIC_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(7L << 26))
+#define _Py_STATIC_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(6L << 26))
 /*
 Immutability:
 
@@ -92,9 +92,13 @@ system also uses the second-to-top bit for managing immutable graphs.
 */
 // TODO(Immutable): Will need more states for IMMUTABLE + SCC, this doesn't
 // currently cover the SCC states.
-#define _Py_IMMUTABLE_FLAG ((Py_ssize_t)1L << 30)
-#define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) (refcnt & ~_Py_IMMUTABLE_FLAG)
-#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_FLAG ((Py_ssize_t)1L << 29)
+#define _Py_IMMUTABLE_SCC_FLAG ((Py_ssize_t)1L << 30)
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
+#define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) (refcnt & ~_Py_IMMUTABLE_MASK)
+#define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
+#define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
 #endif
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
@@ -126,7 +130,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 #if SIZEOF_VOID_P > 4
     return (op->ob_flags & _Py_IMMUTABLE_MASK) != 0;
 #else
-    return (op->ob_refcnt & _Py_IMMUTABLE_FLAG) > 0;
+    return (op->ob_refcnt & _Py_IMMUTABLE_MASK) != 0;
 #endif
 }
 #define _Py_IsImmutable(op) _Py_IsImmutable(_PyObject_CAST(op))
@@ -141,7 +145,7 @@ static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
 #if SIZEOF_VOID_P > 4
     op->ob_flags &= ~_Py_IMMUTABLE_MASK;
 #else
-    op->ob_refcnt &= ~_Py_IMMUTABLE_FLAG;
+    op->ob_refcnt &= ~_Py_IMMUTABLE_MASK;
 #endif
 }
 
