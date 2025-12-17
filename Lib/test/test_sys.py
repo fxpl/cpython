@@ -1725,9 +1725,9 @@ class SizeofTest(unittest.TestCase):
         check(int(PyLong_BASE**2), vsize('') + 3*self.longdigit)
         # module
         if support.Py_GIL_DISABLED:
-            check(unittest, size('PPPPPP'))
+            check(unittest, size('PPPPPPP'))
         else:
-            check(unittest, size('PPPPP'))
+            check(unittest, size('PPPPPP'))
         # None
         check(None, size(''))
         # NotImplementedType

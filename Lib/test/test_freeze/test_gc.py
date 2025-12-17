@@ -1,6 +1,6 @@
 from gc import collect
 import unittest
-from immutable import freeze, NotFreezable, isfrozen
+from immutable import freeze
 
 class GCInteropTest(unittest.TestCase):
   def test_collect(self):

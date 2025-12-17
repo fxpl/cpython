@@ -7494,8 +7494,9 @@ _PyDateTime_InitTypes(PyInterpreterState *interp)
             return _PyStatus_ERR("could not initialize static types");
         }
 
+        // TODO(Immutable): Revisit after PLDI deadline.
         if(_PyImmutability_RegisterFreezable(capi_types[i]) < 0) {
-            return -1;
+            return _PyStatus_ERR("could not freeze static types");
         }
     }
 

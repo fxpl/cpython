@@ -13069,9 +13069,8 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
     }
 
     if(!(tp->tp_getset == NULL ||
-         tp->tp_getset == subtype_getsets_full ||
-         tp->tp_getset == subtype_getsets_weakref_only ||
-         tp->tp_getset == subtype_getsets_dict_only))
+         tp->tp_getset == &subtype_getset_dict ||
+         tp->tp_getset == &subtype_getset_weakref))
     {
         bool getset_ext = true;
         for(Py_ssize_t i=1; i < mro_size; i++)

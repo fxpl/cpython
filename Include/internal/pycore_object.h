@@ -137,6 +137,10 @@ static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
         _Py_INCREF_IMMORTAL_STAT_INC();
         return;
     }
+    if (_Py_IsImmutable(op)) {
+        _Py_RefcntAdd_Immutable(op, n);
+        return;
+    }
 #ifndef Py_GIL_DISABLED
     Py_ssize_t refcnt = _Py_REFCNT(op);
     Py_ssize_t new_refcnt = refcnt + n;
@@ -465,6 +469,13 @@ static inline void Py_DECREF_MORTAL(const char *filename, int lineno, PyObject *
     if (!_Py_IsImmortal(op)) {
         _Py_DECREF_DecRefTotal();
     }
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (_Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+        return;
+    }
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -481,6 +492,15 @@ static inline void _Py_DECREF_MORTAL_SPECIALIZED(const char *filename, int linen
     if (!_Py_IsImmortal(op)) {
         _Py_DECREF_DecRefTotal();
     }
+
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (_Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+        return;
+    }
+
     if (--op->ob_refcnt == 0) {
 #ifdef Py_TRACE_REFS
         _Py_ForgetReference(op);
@@ -495,9 +515,15 @@ static inline void _Py_DECREF_MORTAL_SPECIALIZED(const char *filename, int linen
 
 static inline void Py_DECREF_MORTAL(PyObject *op)
 {
-    // TODO(Immutable): Need to catch immutable things here
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (_Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+        return;
+    }
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -506,9 +532,16 @@ static inline void Py_DECREF_MORTAL(PyObject *op)
 
 static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruct)
 {
-    // TODO(Immutable): Need to catch immutable things here
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
+    // TODO(Immutable): Check this is okay, does it perform okay?
+    if (_Py_IsImmutable(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            destruct(op);
+        }
+        return;
+    }
+
     if (--op->ob_refcnt == 0) {
         _PyReftracerTrack(op, PyRefTracer_DESTROY);
         destruct(op);
@@ -1058,8 +1091,12 @@ extern int _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict);
 #ifndef Py_GIL_DISABLED
 static inline Py_ALWAYS_INLINE void _Py_INCREF_MORTAL(PyObject *op)
 {
-    // TODO(Immutable): This is new, and we should check what is needed for immutable objects.
     assert(!_Py_IsStaticImmortal(op));
+    if (_Py_IsImmutable(op)) {
+        _Py_RefcntAdd_Immutable(op, 1);
+        return;
+    }
+
     op->ob_refcnt++;
     _Py_INCREF_STAT_INC();
 #if defined(Py_REF_DEBUG) && !defined(Py_LIMITED_API)

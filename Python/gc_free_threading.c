@@ -1388,6 +1388,7 @@ gc_mark_alive_from_roots(PyInterpreterState *interp,
             } \
         }
     MARK_ENQUEUE(interp->sysdict);
+    MARK_ENQUEUE(interp->mutable_modules);
 #ifdef GC_MARK_ALIVE_EXTRA_ROOTS
     MARK_ENQUEUE(interp->builtins);
     MARK_ENQUEUE(interp->dict);

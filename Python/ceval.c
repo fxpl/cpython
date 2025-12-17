@@ -87,12 +87,14 @@
                 _Py_DECREF_IMMORTAL_STAT_INC(); \
                 break; \
             } \
-            if (_Py_DecRef_Immutable(op)) { \
-                _PyReftracerTrack(op, PyRefTracer_DESTROY); \
-                destructor dealloc = Py_TYPE(op)->tp_dealloc; \
-                (*dealloc)(op); \
+            if (_Py_IsImmutable(op)) { \
+                if (_Py_DecRef_Immutable(op)) { \
+                    _PyReftracerTrack(op, PyRefTracer_DESTROY); \
+                    destructor dealloc = Py_TYPE(op)->tp_dealloc; \
+                    (*dealloc)(op); \
+                } \
+                break; \
             } \
-            break; \
         } \
         _Py_DECREF_STAT_INC(); \
         if ((--op->ob_refcnt) == 0) { \
@@ -111,12 +113,14 @@
                 _Py_DECREF_IMMORTAL_STAT_INC(); \
                 break; \
             } \
-            if (_Py_DecRef_Immutable(op)) { \
-                _PyReftracerTrack(op, PyRefTracer_DESTROY); \
-                destructor d = (destructor)(dealloc); \
-                d(op); \
+            if (_Py_IsImmutable(op)) { \
+                if (_Py_DecRef_Immutable(op)) { \
+                    _PyReftracerTrack(op, PyRefTracer_DESTROY); \
+                    destructor d = (destructor)(dealloc); \
+                    d(op); \
+                } \
+                break; \
             } \
-            break; \
         } \
         _Py_DECREF_STAT_INC(); \
         if (--op->ob_refcnt == 0) { \

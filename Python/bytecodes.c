@@ -2435,7 +2435,8 @@ dummy_func(
         op(_LOAD_ATTR_MODULE, (dict_version/2, index/1, owner -- attr)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
             DEOPT_IF(Py_TYPE(owner_o)->tp_getattro != PyModule_Type.tp_getattro);
-            PyDictObject *dict = (PyDictObject *)((PyModuleObject *)owner_o)->md_dict;
+            PyModuleObject* mod = _PyInterpreterState_GetModuleState(owner_o);
+            PyDictObject *dict = (PyDictObject *)mod->md_dict;
             assert(dict != NULL);
             PyDictKeysObject *keys = FT_ATOMIC_LOAD_PTR_ACQUIRE(dict->ma_keys);
             DEOPT_IF(FT_ATOMIC_LOAD_UINT32_RELAXED(keys->dk_version) != dict_version);

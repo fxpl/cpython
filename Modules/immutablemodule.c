@@ -130,7 +130,14 @@ PyType_Spec not_freezable_error_spec = {
  */
 
 
-PyDoc_STRVAR(immutable_module_doc, "");
+PyDoc_STRVAR(immutable_module_doc,
+"immutable\n"
+"--\n"
+"\n"
+"Module for immutability support.\n"
+"\n"
+"This module provides functions to freeze objects and their graphs,\n"
+"making them immutable at runtime.");
 
 static struct PyMethodDef immutable_methods[] = {
     IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
