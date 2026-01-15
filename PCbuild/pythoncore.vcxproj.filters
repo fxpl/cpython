@@ -993,6 +993,9 @@
     <ClCompile Include="..\Modules\_heapqmodule.c">
       <Filter>Modules</Filter>
     </ClCompile>
+    <ClCompile Include="..\Modules\_immutablemodule.c" >
+      <Filter>Modules</Filter>
+    </ClCompile>
     <ClCompile Include="..\Modules\_json.c">
       <Filter>Modules</Filter>
     </ClCompile>
@@ -1066,9 +1069,6 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\hmacmodule.c">
-    <ClCompile Include="..\Modules\immutablemodule.c" >
-      <Filter>Modules</Filter>
-    </ClCompile>
     <ClCompile Include="..\Modules\itertoolsmodule.c">
       <Filter>Modules</Filter>
     </ClCompile>

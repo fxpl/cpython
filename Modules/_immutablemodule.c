@@ -1,4 +1,4 @@
-/* immutable module */
+/* _immutable module */
 
 #ifndef Py_BUILD_CORE_BUILTIN
 #  define Py_BUILD_CORE_MODULE 1
@@ -11,17 +11,17 @@
 #include "pycore_object.h"
 
 /*[clinic input]
-module immutable
+module _immutable
 [clinic start generated code]*/
 /*[clinic end generated code: output=da39a3ee5e6b4b0d input=46b92e14e140418a]*/
 
-#include "clinic/immutablemodule.c.h"
+#include "clinic/_immutablemodule.c.h"
 
 typedef struct {
     PyObject *not_freezable_error_obj;
 } immutable_state;
 
-static struct PyModuleDef immutablemodule;
+static struct PyModuleDef _immutablemodule;
 
 static inline immutable_state*
 get_immutable_state(PyObject *module)
@@ -54,7 +54,7 @@ immutable_free(void *module)
 }
 
 /*[clinic input]
-immutable.register_freezable
+_immutable.register_freezable
     obj: object
     /
 
@@ -78,7 +78,7 @@ immutable_register_freezable(PyObject *module, PyObject *obj)
 }
 
 /*[clinic input]
-immutable.freeze
+_immutable.freeze
     obj: object
     /
 
@@ -97,7 +97,7 @@ immutable_freeze(PyObject *module, PyObject *obj)
 }
 
 /*[clinic input]
-immutable.isfrozen
+_immutable.isfrozen
     obj: object
     /
 
@@ -120,7 +120,7 @@ static PyType_Slot not_freezable_error_slots[] = {
 };
 
 PyType_Spec not_freezable_error_spec = {
-    .name = "immutable.NotFreezableError",
+    .name = "_immutable.NotFreezableError",
     .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     .slots = not_freezable_error_slots,
 };
@@ -131,7 +131,7 @@ PyType_Spec not_freezable_error_spec = {
 
 
 PyDoc_STRVAR(immutable_module_doc,
-"immutable\n"
+"_immutable\n"
 "--\n"
 "\n"
 "Module for immutability support.\n"
@@ -186,9 +186,9 @@ static PyModuleDef_Slot immutable_slots[] = {
     {0, NULL}
 };
 
-static struct PyModuleDef immutablemodule = {
+static struct PyModuleDef _immutablemodule = {
     PyModuleDef_HEAD_INIT,
-    "immutable",
+    "_immutable",
     immutable_module_doc,
     sizeof(immutable_state),
     immutable_methods,
@@ -199,7 +199,7 @@ static struct PyModuleDef immutablemodule = {
 };
 
 PyMODINIT_FUNC
-PyInit_immutable(void)
+PyInit__immutable(void)
 {
-    return PyModuleDef_Init(&immutablemodule);
+    return PyModuleDef_Init(&_immutablemodule);
 }

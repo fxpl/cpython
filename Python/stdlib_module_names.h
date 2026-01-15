@@ -40,6 +40,7 @@ static const char* _Py_stdlib_module_names[] = {
 "_hashlib",
 "_heapq",
 "_hmac",
+"_immutable",
 "_imp",
 "_interpchannels",
 "_interpqueues",

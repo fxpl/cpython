@@ -455,6 +455,7 @@
     </ClCompile>
     <ClCompile Include="..\Modules\_heapqmodule.c" />
     <ClCompile Include="..\Modules\_json.c" />
+    <ClCompile Include="..\Modules\_immutablemodule.c" />
     <ClCompile Include="..\Modules\_localemodule.c" />
     <ClCompile Include="..\Modules\_lsprof.c" />
     <ClCompile Include="..\Modules\_pickle.c" />
@@ -479,7 +480,6 @@
     <ClCompile Include="..\Modules\gcmodule.c" />
     <ClCompile Include="..\Modules\getbuildinfo.c" />
     <ClCompile Include="..\Modules\hmacmodule.c" />
-    <ClCompile Include="..\Modules\immutablemodule.c" />
     <ClCompile Include="..\Modules\itertoolsmodule.c" />
     <ClCompile Include="..\Modules\main.c" />
     <ClCompile Include="..\Modules\mathmodule.c" />
