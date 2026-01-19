@@ -33,6 +33,10 @@ static int Region_init(_PyRegionObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
+    // Regions should not be tracked in normal GC, those fields will be
+    // used to track subregions 
+    PyObject_GC_UnTrack(self);
+
     self->region = NULL_REGION;
     self->name = NULL;
 
@@ -159,6 +163,12 @@ static PyObject* Region_get__osc(PyObject* self, void* closure) {
     return PyLong_FromSize_t(osc);
 }
 
+static PyObject* Region_get__subregions(PyObject* self, void* closure) {
+    CHECK_BRIDGE(self);
+
+    return _PyRegion_GetSubregions(_PyRegion_Get(self));
+}
+
 static PyGetSetDef Region_getset[] = {
     {"is_open", (getter)Region_is_open, NULL,
         "indicates if the region is currently open or closed", NULL},
@@ -172,6 +182,8 @@ static PyGetSetDef Region_getset[] = {
         "the local-reference count, mainly intended for debugging", NULL},
     {"_osc", (getter)Region_get__osc, NULL, 
         "the open-subregion count, mainly intended for debugging", NULL},
+    {"_subregions", (getter)Region_get__subregions, NULL, 
+        "returns a list of all subregions, mainly intended for debugging", NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
