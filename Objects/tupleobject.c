@@ -139,14 +139,13 @@ PyTuple_SetItem(PyObject *op, Py_ssize_t i, PyObject *newitem)
                         "tuple assignment index out of range");
         return -1;
     }
-    if (PyRegion_TakeRef(op, newitem)) {
+
+    p = ((PyTupleObject *)op) -> ob_item + i;
+    if (PyRegion_XSETREF(op, *p, newitem)) {
         PyRegion_RemoveLocalRef(newitem);
         Py_XDECREF(newitem);
         return -1;
     }
-
-    p = ((PyTupleObject *)op) -> ob_item + i;
-    Py_XSETREF(*p, newitem);
     return 0;
 }
 

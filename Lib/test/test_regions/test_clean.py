@@ -2,22 +2,42 @@ import unittest
 from regions import Region, is_local
 import sys
 
-
 class TestCleanRegion(unittest.TestCase):
     def mark_region_as_dirty(self, region: Region):
         region._make_dirty()
 
         self.assertTrue(region.is_dirty, "Region should be dirty here")
 
-    def test_try_close_dirty_with_local_ref(self):
+    def test_clean_marks_region_as_clean(self):
         region = Region()
 
         self.mark_region_as_dirty(region)
-        region.clean()
+        cleaned = region.clean()
 
         self.assertFalse(region.is_dirty)
+        self.assertEqual(cleaned, 1)
 
-    def test_try_close_sub_region(self):
+    def test_clean_ignores_clean_subregions(self):
+        region = Region()
+        self.mark_region_as_dirty(region)
+        region.sub = Region()
+        detached_object = {}
+        region.sub.obj = detached_object
+        region.sub.obj = None
+
+        # Precondition
+        self.assertFalse(region.sub.is_dirty, "The subregion should be clean")
+        self.assertTrue(region.sub.owns(detached_object))
+
+        # Action - Only dirty regions should be effected by this clean call
+        cleaned = region.clean()
+
+        # Postcondition
+        self.assertEqual(cleaned, 1)
+        self.assertFalse(region.is_dirty, "The parent region should be cleaned")
+        self.assertTrue(region.sub.owns(detached_object), "The subregion should remain uncleaned")
+
+    def test_cleaning_also_cleans_dirty_subregion(self):
         region = Region()
         region.sub = Region()
         self.mark_region_as_dirty(region)
@@ -26,11 +46,12 @@ class TestCleanRegion(unittest.TestCase):
         sub = region.sub
 
         # Cleaning a dirty parent region should clean the child as well
-        region.clean()
+        cleaned = region.clean()
 
-        # The regions should now be clean
+        # The regions should now be clean and the LRC should be correct
+        self.assertEqual(cleaned, 2)
         self.assertFalse(sub.is_dirty)
-        self.assertEqual(sub._lrc, 1, "The local should be the only known reference")
+        self.assertEqual(sub._lrc, 1, "The sub region should only have an LRC of 1")
         self.assertEqual(sub._osc, 0, "No subregions should be present")
         self.assertEqual(region._osc, 1)
 
@@ -38,6 +59,27 @@ class TestCleanRegion(unittest.TestCase):
         sub = None
         self.assertEqual(region._osc, 0)
 
+    def test_cleaning_finds_dirty_subregion(self):
+        region = Region()
+        region.sub = Region()
+        region.sub.sub = Region()
+        detached_object = {}
+        region.sub.sub.obj = detached_object
+        region.sub.sub.obj = None
+        self.mark_region_as_dirty(region.sub.sub)
+
+        # Precondition
+        self.assertFalse(region.is_dirty, "The region should be clean")
+        self.assertFalse(region.sub.is_dirty, "The subregion should be clean")
+        self.assertTrue(region.sub.sub.owns(detached_object))
+
+        # Action: Clean should find the dirty subsubregion
+        cleaned = region.clean()
+
+        # Postcondition
+        self.assertEqual(cleaned, 1)
+        self.assertTrue(is_local(detached_object))
+        self.assertFalse(region.sub.sub.is_dirty, "The subsubregion should be clean")
 
     def test_clean_removes_unreachable(self):
         region = Region()

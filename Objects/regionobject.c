@@ -97,11 +97,12 @@ static PyObject* Region_owns(PyObject *self, PyObject *other) {
 static PyObject* Region_clean(PyObject *op) {
     CHECK_BRIDGE(op);
 
-    if (_PyRegion_Clean(_PyRegion_Get(op))) {
+    int cleaning_res = _PyRegion_Clean(_PyRegion_Get(op));
+    if (cleaning_res < 0) {
         return NULL;
     }
 
-    Py_RETURN_NONE;
+    return PyLong_FromInt32(cleaning_res);
 }
 
 static PyObject* Region__make_dirty(PyObject *op) {
@@ -140,13 +141,13 @@ static PyObject* Region_get_parent(PyObject *self, void *closure) {
     CHECK_BRIDGE(self);
 
     Py_region_t parent_region = _PyRegion_GetParent(_PyRegion_Get(self));
-    return _Py_NewRef(_PyRegion_GetBridge(parent_region));
+    return _PyRegion_NewRef(_PyRegion_GetBridge(parent_region));
 }
 
 static PyObject* Region_get_name(PyObject *self, void *closure) {
     CHECK_BRIDGE(self);
 
-    return Py_NewRef(_PyRegionObject_CAST(self)->name);
+    return PyRegion_NewRef(_PyRegionObject_CAST(self)->name);
 }
 
 static PyObject* Region_get__lrc(PyObject* self, void* closure) {
@@ -233,7 +234,8 @@ Region_clear(PyObject *op)
         self->region = NULL_REGION;
     }
 
-    // Clear members
+    // Clear members. This doesn't need write barriers since both are owned by
+    // this region
     Py_CLEAR(self->name);
     Py_CLEAR(self->dict);
     return 0;

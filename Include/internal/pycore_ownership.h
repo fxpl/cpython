@@ -44,6 +44,13 @@ typedef struct _Py_ownership_state {
     //     unfreezable fields or thread local wrappers.
     PyObject *module_locks;
     PyObject *blocking_on;
+#ifdef Py_DEBUG
+    /* The name of the last type that marked all open regions as dirty.
+    *
+    * This is only intended for debugging
+    */
+    PyObject* last_dirty_reason;
+#endif
 #ifdef Py_OWNERSHIP_INVARIANT
     /* Tracks the state of the ownership invariant. Some ownership-related
      * operations may temporarily violate the invariant. To handle this safely,
@@ -79,7 +86,7 @@ typedef struct _Py_ownership_state {
 PyAPI_FUNC(Py_ssize_t) _PyOwnership_get_current_tick(void);
 
 /* Returns the tick which should be used for `region.open_tick` or 0 if the
-* ownerstate is currently unavialble.
+* ownerstate is currently unavailble.
 */
 PyAPI_FUNC(Py_ssize_t) _PyOwnership_get_open_region_tick(void);
 
@@ -88,8 +95,8 @@ PyAPI_FUNC(Py_ssize_t) _PyOwnership_get_open_region_tick(void);
 *
 * It can fail, if the ownership state is currently unavailable
 */
-PyAPI_FUNC(int) _PyOwnership_notify_untrusted_code(void);
-
+PyAPI_FUNC(int) _PyOwnership_notify_untrusted_code(const char* reason);
+PyAPI_FUNC(PyObject*) _PyOwnership_get_last_dirty_region(void);
 
 PyAPI_FUNC(int) _PyOwnership_is_c_wrapper(PyObject *obj);
 

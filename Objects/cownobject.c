@@ -203,7 +203,7 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
  *
  * The caller must hold the GIL.
  */
-_PyCown_ipid_t _PyCown_ThisInterpreterId(void ) {
+_PyCown_ipid_t _PyCown_ThisInterpreterId(void) {
     _PyCown_ipid_t ip = PyInterpreterState_GetID(PyInterpreterState_Get());
     // This should never happen... if it does... we have a problem...
     assert(ip != RELEASED_IPID);
@@ -214,7 +214,7 @@ _PyCown_ipid_t _PyCown_ThisInterpreterId(void ) {
  *
  * The caller must hold the GIL.
  */
-_PyCown_thread_id_t _PyCown_ThisThreadId(void ) {
+_PyCown_thread_id_t _PyCown_ThisThreadId(void) {
     _PyCown_thread_id_t id = PyThreadState_GetID(PyThreadState_Get());
     return id;
 }
@@ -264,7 +264,7 @@ error:
     return -1;
 }
 
-static int PyCown_traverse(_PyCownObject *self, visitproc, void*) {
+static int PyCown_traverse(_PyCownObject *self, visitproc _ignore1, void* _ignore2) {
     // tp_traverse should never be called on cowns since they're not
     // tracked by the GC or in any other GC list. The cown type
     // still defines `tp_traverse` to ensure that this is never
@@ -384,19 +384,16 @@ static PyObject* cown_release_unchecked(_PyCownObject* self) {
 static PyObject* cown_release_region(_PyCownObject* self) {
     assert(_PyRegion_IsBridge(self->value));
 
-    // Fetch the region handle
-    Py_region_t region = _PyRegion_Get(self->value);
-
-    // Dirty regions may close after cleaning
-    if (_PyRegion_IsDirty(region)) {
-        SUCCEEDS(_PyRegion_Clean(region));
-
-        // Update the region handle
-        region = _PyRegion_Get(self->value);
+    // If the region is open attempt to close it by cleaning it.
+    if (!_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
+        int cleaning_res = _PyRegion_Clean(_PyRegion_Get(self->value));
+        if (cleaning_res < 0) {
+            goto error;
+        }
     }
 
     // A closed region is safe to release
-    if (_PyRegion_IsOpen(region) == false) {
+    if (!_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
         return cown_release_unchecked(self);
     }
 
