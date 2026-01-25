@@ -12,8 +12,10 @@
 
 // The interpreter id 0 is used. This value will be used to indicate that
 // no interpreter owns the cown.
-#define RELEASED_IPID ((_PyCown_ipid_t)0xff00ff00ff00ff00LL)
+#define RELEASED_IPID       ((_PyCown_ipid_t)0xff00ff00ff00ff00LL)
+#define GC_IPID             ((_PyCown_ipid_t)0xffff00ff00ff00ffLL)
 #define NO_BLOCKING_TIMEOUT -1
+#define UNSET_THREAD_ID     ((_PyCown_ipid_t)0xff00000000000000LL)
 
 typedef enum CownLockStatus {
     COWN_ACQUIRE_ERROR = -1,
@@ -140,7 +142,10 @@ int cown_set_value(_PyCownObject* self, PyObject* value) {
  *  (0) => Block with no timeout
  *  (n) => Blocking with timeout
  */
-static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
+static int cown_lock(_PyCownObject* self, PyTime_t timeout, _PyCown_ipid_t locking_ip, bool has_gil) {
+    // A blocking time should only be set, if this call holds the GIL
+    assert(has_gil || timeout == NO_BLOCKING_TIMEOUT);
+
     // Try to lock the mutex directly, without releasing the GIL first
     PyLockStatus r = _PyMutex_LockTimed(&self->lock, 0, _Py_LOCK_DONT_DETACH);
 
@@ -174,11 +179,10 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
 
     // Set the owning_ip to the current interpreter, thereby taking ownership
     _PyCown_ipid_t released_value = RELEASED_IPID;
-    _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
     if (!_Py_atomic_compare_exchange_uint64(
         &self->owning_ip,
         &released_value,
-        this_ip)
+        locking_ip)
     ) {
         // Failed to set owning_ip, this should never happen and points
         // to a deeper issue.
@@ -194,7 +198,11 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout) {
     }
 
     // Set the locking thread.
-    self->locking_thread = _PyCown_ThisThreadId();
+    if (has_gil) {
+        self->locking_thread = _PyCown_ThisThreadId();
+    } else {
+        self->locking_thread = UNSET_THREAD_ID;
+    }
 
     return COWN_ACQUIRE_SUCCESS;
 }
@@ -246,9 +254,9 @@ static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
     }
 
     // Init the cown as being acquired by the current interpreter
+    _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
     _Py_atomic_store_uint64(&self->owning_ip, RELEASED_IPID);
-    if (cown_lock(self, NO_BLOCKING_TIMEOUT) != COWN_ACQUIRE_SUCCESS) {
-        _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
+    if (cown_lock(self, NO_BLOCKING_TIMEOUT, this_ip, true) != COWN_ACQUIRE_SUCCESS) {
         PyErr_Format(
             PyExc_RuntimeError,
             "Newly created cown couldn't be acquired by interpreter %lld (this)",
@@ -343,7 +351,8 @@ CownObject_acquire(_PyCownObject *self, PyObject *args, PyObject *kwds)
     }
 
     // Attempt to lock the cown
-    int res = cown_lock(self, timeout);
+    _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
+    int res = cown_lock(self, timeout, this_ip, true);
     if (res == COWN_ACQUIRE_ERROR) {
         return NULL;
     }
@@ -361,16 +370,15 @@ until the cown can be aquired, even when acquire is called from the same\n\
 interpreter.  The return indicates if the cown was\n\
 was acquired.  The blocking operation is interruptible.");
 
-static PyObject* cown_release_unchecked(_PyCownObject* self) {
+static int cown_release_unchecked(_PyCownObject* self, _PyCown_ipid_t unlocking_ip) {
     // Set owning_ip to indicate the released state
-    _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
-    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &this_ip, RELEASED_IPID)) {
+    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &unlocking_ip, RELEASED_IPID)) {
         PyErr_Format(
             PyExc_RuntimeError,
             "interpreter %lld (this) attempted to release a cown owned by someone else\n"
             "Cown: %U",
-            this_ip, self);
-        return NULL;
+            unlocking_ip, self);
+        return -1;
     }
 
     // Unlocking should always succeed
@@ -378,10 +386,10 @@ static PyObject* cown_release_unchecked(_PyCownObject* self) {
     assert(res == 0);
     (void)res;
 
-    Py_RETURN_NONE;
+    return 0;
 }
 
-static PyObject* cown_release_region(_PyCownObject* self) {
+static int cown_release_region(_PyCownObject* self, _PyCown_ipid_t unlocking_ip) {
     assert(_PyRegion_IsBridge(self->value));
 
     // If the region is open attempt to close it by cleaning it.
@@ -394,38 +402,37 @@ static PyObject* cown_release_region(_PyCownObject* self) {
 
     // A closed region is safe to release
     if (!_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
-        return cown_release_unchecked(self);
+        return cown_release_unchecked(self, unlocking_ip);
     }
 
     PyErr_Format(
         PyExc_RuntimeError,
         "the cown can't be released, since the contained region is still open");
 error:
-    return NULL;
+    return -1;
 }
 
-static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
+static int cown_release(_PyCownObject *self, _PyCown_ipid_t unlocking_ip) {
     _PyCown_ipid_t owning_ip = cown_get_owner(self);
-    _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
 
     // Error if the cown is already released
     if (owning_ip == RELEASED_IPID) {
         PyErr_Format(
             PyExc_RuntimeError,
             "interpreter %lld attempted to release a released cown",
-            this_ip
+            unlocking_ip
         );
-        return NULL;
+        return -1;
     }
 
     // Error if the cown is owned by a different interpreter
-    if (owning_ip != this_ip) {
+    if (owning_ip != unlocking_ip) {
         PyErr_Format(
             PyExc_RuntimeError,
             "interpreter %lld attempted to release a cown owned by %lld",
-            this_ip, owning_ip
+            unlocking_ip, owning_ip
         );
-        return NULL;
+        return -1;
     }
 
     PyObject *value = self->value;
@@ -434,11 +441,19 @@ static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
     // restrictions
     Py_region_t value_region = _PyRegion_Get(value);
     if (value_region == _Py_COWN_REGION || value_region == _Py_IMMUTABLE_REGION) {
-        return cown_release_unchecked(self);
+        return cown_release_unchecked(self, unlocking_ip);
     }
 
     assert(value_region != _Py_LOCAL_REGION);
-    return cown_release_region(self);
+    return cown_release_region(self, unlocking_ip);
+}
+static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
+    _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
+    if (cown_release(self, this_ip) < 0) {
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
 }
 
 PyDoc_STRVAR(CownObject_release_doc,
@@ -591,3 +606,36 @@ PyTypeObject _PyCown_Type = {
     PyType_GenericNew,                       /* tp_new */
     .tp_flags2 = Py_TPFLAGS2_REGION_AWARE
 };
+
+/* This acquires the current cown for the GC. The cown returns a borrowed
+ * reference to the contained region via the `region` argument.
+ *
+ * Possible returns:
+ *  (-1): Indicates a error state. (This should never happen).
+ *   (0): the acquisition failed, probably because a different thread
+ *        acquired the cown first.
+ *   (1): The cown was acquired and the `region` argument was updated. The
+ *        cown needs to be manually released via `_PyCown_ReleaseGC`.
+ */
+int _PyCown_AcquireGC(_PyCownObject *self, Py_region_t *region) {
+    // Attempt to lock the cown
+    int res = cown_lock(self, NO_BLOCKING_TIMEOUT, GC_IPID, false);
+    if (res == COWN_ACQUIRE_ERROR) {
+        return -1;
+    }
+
+    // The cown was snatched up by something else. This is fine for
+    // the GC
+    if (res != COWN_ACQUIRE_FAIL) {
+        return 0;
+    }
+    assert(res == COWN_ACQUIRE_SUCCESS);
+
+    // This accesses the value directly, to keep a potential region closed
+    *region = _PyRegion_Get(self->value);
+    return 1;
+}
+
+int _PyCown_ReleaseGC(_PyCownObject *self) {
+    return cown_release(self, GC_IPID);
+}

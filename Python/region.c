@@ -736,11 +736,9 @@ static int regiondata_close(Py_region_t region) {
 
     // Notify the owner
     if (HAS_OWNER_TAG(region, OWNER_TAG_COWN)) {
-        SUCCEEDS(_PyCown_RegionClose(
-            _PyCownObject_CAST(GET_OWNER_PTR(region)),
-            _Py_region_data_CAST(region)->bridge,
-            _PyCown_ThisInterpreterId()
-        ));
+        // We don't notify the owning cown, mainly because this would add
+        // a potential failure state to this function which may be called
+        // from error paths.
     } else if (regiondata_get_parent(region) != 0) {
         Py_region_t parent = regiondata_get_parent(region);
         regiondata_dec_osc(parent);
