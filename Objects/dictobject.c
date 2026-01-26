@@ -1827,13 +1827,16 @@ insert_split_key(PyDictKeysObject *keys, PyObject *key, Py_hash_t hash)
     assert(PyUnicode_CheckExact(key));
     Py_ssize_t ix;
 
-
 #ifdef Py_GIL_DISABLED
     ix = unicodekeys_lookup_unicode_threadsafe(keys, key, hash);
     if (ix >= 0) {
         return ix;
     }
 #endif
+
+    // Regions: Since the key is a PyUnicode object we know
+    // that it will be frozen when its added to a region. This
+    // should always succeed.
 
     LOCK_KEYS(keys);
     ix = unicodekeys_lookup_unicode(keys, key, hash);
@@ -1852,11 +1855,14 @@ insert_split_key(PyDictKeysObject *keys, PyObject *key, Py_hash_t hash)
     return ix;
 }
 
-static void
+static int
 insert_split_value(PyInterpreterState *interp, PyDictObject *mp, PyObject *key, PyObject *value, Py_ssize_t ix)
 {
     assert(PyUnicode_CheckExact(key));
     ASSERT_DICT_LOCKED(mp);
+    if (PyRegion_AddRef(mp, value)) {
+        return -1;
+    }
     PyObject *old_value = mp->ma_values->values[ix];
     if (old_value == NULL) {
         _PyDict_NotifyEvent(interp, PyDict_EVENT_ADDED, mp, key, value);
@@ -1873,6 +1879,7 @@ insert_split_value(PyInterpreterState *interp, PyDictObject *mp, PyObject *key, 
         Py_DECREF(old_value);
     }
     ASSERT_CONSISTENT(mp);
+    return 0;
 }
 
 /*
@@ -1903,7 +1910,9 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
     if (_PyDict_HasSplitTable(mp)) {
         Py_ssize_t ix = insert_split_key(mp->ma_keys, key, hash);
         if (ix != DKIX_EMPTY) {
-            insert_split_value(interp, mp, key, value, ix);
+            if (insert_split_value(interp, mp, key, value, ix)) {
+                goto Fail;
+            }
             PyRegion_RemoveLocalRef(key);
             PyRegion_RemoveLocalRef(value);
             Py_DECREF(key);
@@ -1935,12 +1944,9 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     if (old_value != value) {
-        // FIXME(regions): xFrednet: PyRegion_TakeRefs
-        if (PyRegion_AddRefs(mp, key, value)) {
+        if (PyRegion_TakeRefs(mp, key, value)) {
             goto Fail;
         }
-        PyRegion_RemoveLocalRef(key);
-        PyRegion_RemoveLocalRef(value);
 
         _PyDict_NotifyEvent(interp, PyDict_EVENT_MODIFIED, mp, key, value);
         assert(old_value != NULL);
@@ -1992,16 +1998,13 @@ insert_to_emptydict(PyInterpreterState *interp, PyDictObject *mp,
         return -1;
     }
 
-    // FIXME(regions): xFrednet: PyRegion_TakeRefs
-    if (PyRegion_AddRefs(mp, key, value) != 0) {
+    if (PyRegion_TakeRefs(mp, key, value) != 0) {
         PyRegion_RemoveLocalRef(key);
         PyRegion_RemoveLocalRef(value);
         Py_DECREF(key);
         Py_DECREF(value);
         return -1;
     }
-    PyRegion_RemoveLocalRef(key);
-    PyRegion_RemoveLocalRef(value);
 
     _PyDict_NotifyEvent(interp, PyDict_EVENT_ADDED, mp, key, value);
 
@@ -3216,6 +3219,14 @@ _PyDict_Pop_KnownHash(PyDictObject *mp, PyObject *key, Py_hash_t hash,
         return 0;
     }
 
+    // This should always succeed, since we have a reference to mp
+    if (PyRegion_AddLocalRef(old_value)) {
+        if (result) {
+            *result = NULL;
+        }
+        return -1;
+    }
+
     assert(old_value != NULL);
     PyInterpreterState *interp = _PyInterpreterState_GET();
     _PyDict_NotifyEvent(interp, PyDict_EVENT_DELETED, mp, key, NULL);
@@ -3307,7 +3318,7 @@ dict_pop_default(PyObject *dict, PyObject *key, PyObject *default_value)
     PyObject *result;
     if (PyDict_Pop(dict, key, &result) == 0) {
         if (default_value != NULL) {
-            return Py_NewRef(default_value);
+            return PyRegion_NewRef(default_value);
         }
         _PyErr_SetKeyError(key);
         return NULL;
@@ -3583,17 +3594,9 @@ dict_repr_lock_held(PyObject *self)
             goto error;
         }
 
-        if (PyRegion_RemoveLocalRef(key)) {
-            // Clear the key to prevent a second remove ref call during
-            // error handling
-            Py_CLEAR(key);
-            goto error;
-        }
+        PyRegion_RemoveLocalRef(key);
+        PyRegion_RemoveLocalRef(value);
         Py_CLEAR(key);
-        if (PyRegion_RemoveLocalRef(value)) {
-            Py_CLEAR(value);
-            goto error;
-        }
         Py_CLEAR(value);
     }
 
@@ -4625,19 +4628,13 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
 
     if (!PyDict_Check(d)) {
         PyErr_BadInternalCall();
-        if (result) {
-            *result = NULL;
-        }
-        return -1;
+        goto error;
     }
 
     hash = _PyObject_HashFast(key);
     if (hash == -1) {
         dict_unhashable_type(key);
-        if (result) {
-            *result = NULL;
-        }
-        return -1;
+        goto error;
     }
 
     if(!Py_CHECKWRITE(d)){
@@ -4646,25 +4643,30 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
     }
 
     if (mp->ma_keys == Py_EMPTY_KEYS) {
+        // Regions: Ensure that we can create these referemces
+        if (PyRegion_AddRefs(mp, key, default_value)) {
+            goto error;
+        }
         if (insert_to_emptydict(interp, mp, Py_NewRef(key), hash,
                                 Py_NewRef(default_value)) < 0) {
-            if (result) {
-                *result = NULL;
-            }
-            return -1;
+            goto error;
         }
         if (result) {
-            *result = incref_result ? Py_NewRef(default_value) : default_value;
+            if (incref_result) {
+                // This should always succeed, since we have a local refernce to mp
+                if (PyRegion_AddLocalRef(default_value)) {
+                    goto error;
+                }
+                Py_INCREF(default_value);
+            }
+            *result = default_value;
         }
         return 0;
     }
 
     if (!PyUnicode_CheckExact(key) && DK_IS_UNICODE(mp->ma_keys)) {
         if (insertion_resize(mp, 0) < 0) {
-            if (result) {
-                *result = NULL;
-            }
-            return -1;
+            goto error;
         }
     }
 
@@ -4674,11 +4676,20 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
             PyObject *value = mp->ma_values->values[ix];
             int already_present = value != NULL;
             if (!already_present) {
-                insert_split_value(interp, mp, key, default_value, ix);
+                if (insert_split_value(interp, mp, key, default_value, ix)) {
+                    goto error;
+                }
                 value = default_value;
             }
             if (result) {
-                *result = incref_result ? Py_NewRef(value) : value;
+                if (incref_result) {
+                    // This should always succeed, since we have a local refernce to mp
+                    if (PyRegion_AddLocalRef(value)) {
+                        goto error;
+                    }
+                    Py_INCREF(value);
+                }
+                *result = value;
             }
             return already_present;
         }
@@ -4693,30 +4704,37 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
 
     Py_ssize_t ix = _Py_dict_lookup(mp, key, hash, &value);
     if (ix == DKIX_ERROR) {
-        if (result) {
-            *result = NULL;
-        }
-        return -1;
+        goto error;
     }
 
     if (ix == DKIX_EMPTY) {
         assert(!_PyDict_HasSplitTable(mp));
         value = default_value;
 
+        // Regions: This should always succeed, since we have local references
+        if (PyRegion_AddLocalRefs(key, value)) {
+            goto error;
+        }
         if (insert_combined_dict(interp, mp, hash, Py_NewRef(key), Py_NewRef(value)) < 0) {
+            PyRegion_RemoveLocalRef(key);
+            PyRegion_RemoveLocalRef(value);
             Py_DECREF(key);
             Py_DECREF(value);
-            if (result) {
-                *result = NULL;
-            }
-            return -1;
+            goto error;
         }
 
         STORE_USED(mp, mp->ma_used + 1);
         assert(mp->ma_keys->dk_usable >= 0);
         ASSERT_CONSISTENT(mp);
         if (result) {
-            *result = incref_result ? Py_NewRef(value) : value;
+            if (incref_result) {
+                // This should always succeed, since we have a local refernce to mp
+                if (PyRegion_AddLocalRef(value)) {
+                    goto error;
+                }
+                Py_INCREF(value);
+            }
+            *result = value;
         }
         return 0;
     }
@@ -4724,7 +4742,14 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
     assert(value != NULL);
     ASSERT_CONSISTENT(mp);
     if (result) {
-        *result = incref_result ? Py_NewRef(value) : value;
+        if (incref_result) {
+            // This should always succeed, since we have a local refernce to mp
+            if (PyRegion_AddLocalRef(value)) {
+                return -1;
+            }
+            Py_INCREF(value);
+        }
+        *result = value;
     }
     return 1;
 
@@ -4913,6 +4938,13 @@ dict_popitem_impl(PyDictObject *self)
     assert(dictkeys_get_index(self->ma_keys, j) == i);
     dictkeys_set_index(self->ma_keys, j, DKIX_DUMMY);
 
+    // This should always succeed
+    if (PyRegion_AddRefs(res, key, value)) {
+        Py_DECREF(res);
+        return NULL;
+    }
+    PyRegion_RemoveRef(self, key);
+    PyRegion_RemoveRef(self, value);
     PyTuple_SET_ITEM(res, 0, key);
     PyTuple_SET_ITEM(res, 1, value);
     /* We can't dk_usable++ since there is DKIX_DUMMY in indices */
@@ -5974,11 +6006,14 @@ dictiter_iternextitem(PyObject *self)
 #ifdef Py_GIL_DISABLED
     if (dictiter_iternext_threadsafe(d, self, &key, &value) == 0) {
 #else
+    // Regions: This function returns two new local references, these
+    // are then moved into a local object. Therefore we don't
+    // need more write barriers here.
     if (dictiter_iternextitem_lock_held(d, self, &key, &value) == 0) {
 
 #endif
         PyObject *result = di->di_result;
-        if (acquire_iter_result(result) && PyRegion_IsLocal(result)) {
+        if (result && acquire_iter_result(result) && PyRegion_IsLocal(result)) {
             PyObject *oldkey = PyTuple_GET_ITEM(result, 0);
             PyObject *oldvalue = PyTuple_GET_ITEM(result, 1);
             PyTuple_SET_ITEM(result, 0, key);
@@ -5992,6 +6027,11 @@ dictiter_iternextitem(PyObject *self)
             _PyTuple_Recycle(result);
         }
         else {
+            // Something prevented the tuple from being reused. Clear it to
+            // make sure that this cache doesn't interfear with regions.
+            if (di->di_result) {
+                PyRegion_CLEAR(di, di->di_result);
+            }
             result = PyTuple_New(2);
             if (result == NULL)
                 return NULL;
@@ -7280,8 +7320,11 @@ store_instance_attr_lock_held(PyObject *obj, PyDictValues *values,
             // Make the dict but don't publish it in the object
             // so that no one else will see it.
             dict = make_dict_from_instance_attributes(keys, values);
-            if (dict == NULL ||
-                _PyDict_SetItem_LockHeld(dict, name, value) < 0) {
+            if (dict == NULL
+                || _PyDict_SetItem_LockHeld(dict, name, value) < 0
+                || PyRegion_TakeRef(obj, dict) != 0
+            ) {
+                PyRegion_RemoveLocalRef(dict);
                 Py_XDECREF(dict);
                 return -1;
             }
@@ -7303,6 +7346,10 @@ store_instance_attr_lock_held(PyObject *obj, PyDictValues *values,
                         "'%.100s' object has no attribute '%U'",
                         Py_TYPE(obj)->tp_name, name);
         (void)_PyObject_SetAttributeErrorContext(obj, name);
+        return -1;
+    }
+
+    if (PyRegion_AddRefs(obj, name, value)) {
         return -1;
     }
 
@@ -7331,6 +7378,7 @@ store_instance_attr_lock_held(PyObject *obj, PyDictValues *values,
                 STORE_USED(dict, dict->ma_used - 1);
             }
         }
+        PyRegion_RemoveRef(dict, old_value);
         Py_DECREF(old_value);
     }
     return 0;

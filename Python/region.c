@@ -15,7 +15,7 @@
 #include <stdbool.h>
 
 /* Macro that jumps to error, if the expression `x` does not succeed. */
-#define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
+#define SUCCEEDS(x) do { int r = (x); if (r != 0) goto error; } while (0)
 
 /* Checks for predefined static regions without data */
 #define IS_LOCAL_REGION(r)        ((Py_region_t)(r) == _Py_LOCAL_REGION)
@@ -56,7 +56,7 @@
 
 // Prototypes
 static int regiondata_inc_osc(Py_region_t region);
-static int regiondata_dec_osc(Py_region_t region);
+static void regiondata_dec_osc(Py_region_t region);
 static int regiondata_is_open(Py_region_t data);
 static Py_region_t regiondata_get_parent(Py_region_t region);
 static Py_region_t regiondata_get_parent_follow_pending(Py_region_t region);
@@ -76,7 +76,9 @@ static PyObject* list_pop(PyObject* s){
     if(item == NULL){
         return NULL;
     }
+    // This should never fail, since we shrink the size
     if(PyList_SetSlice(s, size - 1, size, NULL)){
+        Py_DECREF(item);
         return NULL;
     }
     return item;
@@ -109,6 +111,21 @@ static inline int
 gc_list_is_empty(PyGC_Head *list)
 {
     return (list->_gc_next == (uintptr_t)list);
+}
+
+/* Remove `node` from the gc list it's currently in. */
+static inline void
+gc_list_remove(PyGC_Head *node)
+{
+    PyGC_Head *prev = GC_PREV(node);
+    PyGC_Head *next = GC_NEXT(node);
+
+    _PyGCHead_SET_NEXT(prev, next);
+    _PyGCHead_SET_PREV(next, prev);
+
+    // Clear the node pointers
+    node->_gc_prev = node->_gc_prev & _PyGC_PREV_MASK_FINALIZED;
+    node->_gc_next = 0;
 }
 
 /* Move `node` from the gc list it's currently in (which is not explicitly
@@ -161,6 +178,115 @@ get_gc_state(void)
     return &interp->gc;
 }
 #endif // Py_GIL_DISABLED
+// **********************************************************************
+// Modified from the GC functions above
+// **********************************************************************
+
+/* Prepend `node` to `list`. */
+static inline void
+gc_list_prepend(PyGC_Head *node, PyGC_Head *list)
+{
+    assert((list->_gc_prev & ~_PyGC_PREV_MASK) == 0);
+    PyGC_Head *first = GC_NEXT(list);
+
+    // first <-> node
+    _PyGCHead_SET_NEXT(node, first);
+    _PyGCHead_SET_PREV(first, node);
+
+    // node <-> list
+    _PyGCHead_SET_NEXT(list, node);
+    _PyGCHead_SET_PREV(node, list);
+}
+
+/* This merges two region lists, this keeps bridge objects of subregions
+ * at the beginning of the list and other contained objects at the end.
+ */
+static void
+gc_region_list_merge(PyGC_Head *from, PyGC_Head *to)
+{
+    assert(from != to);
+    if (gc_list_is_empty(from)) {
+        return;
+    }
+
+    // Move sub-regions to the start of the `to` list
+    PyGC_Head *from_bridges = GC_NEXT(from);
+    while (from_bridges != from) {
+        PyObject* item = _Py_FROM_GC(from_bridges);
+        // Break if this is not a bride
+        if (Py_TYPE(item) != &_PyRegion_Type) {
+            break;
+        }
+        from_bridges = GC_NEXT(from_bridges);
+    }
+    if (from_bridges != GC_NEXT(from)) {
+        // We have bridges which should be moved:
+        PyGC_Head *bridges_start = GC_NEXT(from);
+        PyGC_Head *bridges_end = GC_PREV(from_bridges);
+        PyGC_Head *to_head = GC_NEXT(to);
+
+        // Remove bridges from the `from` list
+        _PyGCHead_SET_NEXT(from, from_bridges);
+        _PyGCHead_SET_PREV(from_bridges, from);
+
+        // Insert bridges into the `to` list
+        _PyGCHead_SET_NEXT(to, bridges_start);
+        _PyGCHead_SET_NEXT(bridges_end, to_head);
+        _PyGCHead_SET_PREV(to_head, bridges_end);
+        _PyGCHead_SET_PREV(bridges_start, to);
+    }
+
+    // Move all other contained objects
+    gc_list_merge(from, to);
+}
+
+typedef int (*gc_list_callback_t)(Py_region_t region, void *data);
+/* Calls the given callback with the bridge of each subregion */
+static int gc_list_for_each_subregion(PyGC_Head *list, gc_list_callback_t callback, void* data) {
+    PyGC_Head *node = GC_NEXT(list);
+    while (node != list) {
+        // Grab the next node here, since the callback may modify the list
+        PyGC_Head *next = GC_NEXT(node);
+
+        // Stop looping if this is not a bridge
+        PyObject *obj = _Py_FROM_GC(node);
+        if (Py_TYPE(obj) != &_PyRegion_Type) {
+            break;
+        }
+
+        // Call the callback
+        int res = callback(_PyRegion_Get(obj), data);
+        if (res != 0) {
+            return res;
+        }
+
+        node = next;
+    }
+
+    return 0;
+}
+
+static int _gc_region_list_dissolve_callback(Py_region_t region, void* _ignore) {
+    PyObject* obj = _PyRegion_GetBridge(region);
+    // Bump LRC for the reference which was previously owning this
+    // region and made it a sub-region. This should also update the
+    // parent pointer
+    PyRegion_AddLocalRef(obj);
+    if (PyObject_GC_IsTracked(obj)) {
+        gc_list_remove(_Py_AS_GC(obj));
+    }
+
+    return 0;
+}
+
+static void gc_region_list_dissolve(PyGC_Head *list) {
+    gc_list_for_each_subregion(list, (gc_list_callback_t)_gc_region_list_dissolve_callback, NULL);
+
+    struct _gc_runtime_state* gc_state = get_gc_state();
+    // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
+    gc_list_merge(list, &(gc_state->old[0].head));
+}
+
 // **********************************************************************
 
 // This uses the given arguments to create and throw a `RegionError`
@@ -324,7 +450,7 @@ static int regiondata_union_merge(
     _Py_region_data *source_data = (_Py_region_data*) source;
     if (HAS_OWNER_TAG(source, OWNER_TAG_MERGE_PENDING)) {
         Py_region_t pending_target = GET_OWNER_PTR(source);
-        
+
         // Validate, that we either merge in the pending target or
         // into the local region on failure.
         //
@@ -347,9 +473,6 @@ static int regiondata_union_merge(
         return -1;
     }
 
-    // TODO: insert COWN callbacks where needed
-    // TODO: insert specific cown handling were needed (clean???)
-
     // Increase the RC of `target` to make sure none of the following
     // operations deallocates it by accident.
     regiondata_inc_rc(target);
@@ -367,7 +490,7 @@ static int regiondata_union_merge(
     // If `target` is the parent of `source` it can be merged. This unsets
     // the parent of `source` to correctly update the OSC and RC.
     Py_region_t source_parent = regiondata_get_parent_follow_pending(source);
-    if (source_parent == target) {
+    if (source_parent == target && source_parent != NULL_REGION) {
         // Set parent can't fail here, since this function has increased the
         // OSC, thereby keeping the region open if it was previously open.
         regiondata_set_parent(source, NULL_REGION);
@@ -406,7 +529,9 @@ static int regiondata_union_merge(
         _Py_region_data *target_data = (_Py_region_data*)target;
         target_data->lrc += source_data->lrc;
         target_data->osc += source_data->osc;
-        gc_list_merge(&source_data->gc_list, &target_data->gc_list);
+        // Do a region merge, which keeps the bridge objects at the start
+        // of the list and the contained objects at the end
+        gc_region_list_merge(&source_data->gc_list, &target_data->gc_list);
 
         // Check how the `open_tick` should be updated
         if (target_data->open_tick == OPEN_TICK_CLOSED) {
@@ -430,9 +555,9 @@ static int regiondata_union_merge(
         // Check if the region can be opened or closed.
         regiondata_check_status(target);
     } else if (IS_LOCAL_REGION(target)) {
-        struct _gc_runtime_state* gc_state = get_gc_state();
-        // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
-        gc_list_merge(&(source_data->gc_list), &(gc_state->old[0].head));
+        // The function below also bumps the LRC of the sub-regions
+        // meaning this should be all covered now.
+        gc_region_list_dissolve(&(source_data->gc_list));
     }
 
     // Remove information from `source`
@@ -453,7 +578,7 @@ cleanup:
     // This returns the OSC which was acquired earlier to keep it open during
     // this merge.
     if (cleanup_inc_osc) {
-        result |= regiondata_dec_osc(target);
+        regiondata_dec_osc(target);
     }
 
     // Decrement the `target` RC again
@@ -519,33 +644,6 @@ error:
     // Mark the region as closed on failure.
     data->open_tick = OPEN_TICK_CLOSED;
     return 1;
-}
-
-static int regiondata_mark_as_clean(Py_region_t region) {
-    // Invariant:
-    ASSERT_IS_UNION_ROOT(region);
-    assert(regiondata_is_open(region));
-
-    // Regions without metadata are always clean
-    if (!HAS_DATA(region)) {
-        return 0;
-    }
-
-    // Mark the region as open.
-    _Py_region_data *data = (_Py_region_data*)region;
-    Py_ssize_t old_open_tick = data->open_tick;
-    data->open_tick = _PyOwnership_get_open_region_tick();
-
-    // Check if an error occured
-    if (data->open_tick == OPEN_TICK_CLOSED) {
-        data->open_tick = old_open_tick;
-        return -1;
-    }
-
-    // The open tick should always be even, see invariant
-    assert((data->open_tick % 2) == 0);
-
-    return 0;
 }
 
 static int regiondata_is_open(Py_region_t region) {
@@ -614,7 +712,6 @@ static int regiondata_is_dirty(Py_region_t region) {
  * This operation may fail if:
  * - The region is dirty (potentially caused by `_Py_ownership_state` being unavailable)
  * - Closing a parent region failed
- * - TODO: xFrednet: If the owing cown is released.
  *
  * The region might still be closed, if the error came from an owner.
  */
@@ -639,14 +736,12 @@ static int regiondata_close(Py_region_t region) {
 
     // Notify the owner
     if (HAS_OWNER_TAG(region, OWNER_TAG_COWN)) {
-        SUCCEEDS(_PyCown_RegionClose(
-            _PyCownObject_CAST(GET_OWNER_PTR(region)),
-            _Py_region_data_CAST(region)->bridge,
-            _PyCown_ThisInterpreterId()
-        ));
+        // We don't notify the owning cown, mainly because this would add
+        // a potential failure state to this function which may be called
+        // from error paths.
     } else if (regiondata_get_parent(region) != 0) {
         Py_region_t parent = regiondata_get_parent(region);
-        SUCCEEDS(regiondata_dec_osc(parent));
+        regiondata_dec_osc(parent);
         SUCCEEDS(regiondata_check_status(parent));
     }
 
@@ -766,24 +861,32 @@ static int regiondata_inc_lrc(Py_region_t region) {
 
 /* This decreases the local reference count.
  *
- * This might close this and parent regions, which can fail. See
- * `regiondata_close` for possible failures.
  * */
-static int regiondata_dec_lrc(Py_region_t region) {
+static void regiondata_dec_lrc(Py_region_t region) {
     // Invariant:
     ASSERT_IS_UNION_ROOT(region);
 
     // Static regions don't need to be updated
     if (!HAS_DATA(region)) {
-        return 0;
+        return;
     }
 
     // Update the LRC
     _Py_region_data *data = (_Py_region_data*)region;
     if (data->lrc == 0) {
-        // Open the region, to mark it as dirty
-        SUCCEEDS(regiondata_open(region));
-        regiondata_mark_as_dirty(region);
+        // Try to open the region to mark it as dirty
+        //
+        // This can fail if the region is owned by a cown which
+        // is currently not owned by the current interpreter
+        if (regiondata_open(region) == 0) {
+            regiondata_mark_as_dirty(region);
+        } else {
+            // Check if opening the failed attempt to open the region
+            // set an exception, and if so clear it.
+            if (PyErr_Occurred()) {
+                PyErr_Clear();
+            }
+        }
     } else {
         data->lrc -= 1;
 
@@ -791,15 +894,13 @@ static int regiondata_dec_lrc(Py_region_t region) {
         SUCCEEDS(regiondata_check_close(region));
     }
 
-    // Return 0 on success
-    return 0;
+    return;
 
 error:
     // Undo the LRC decrement
     data->lrc += 1;
 
-    // Propagate the failure information
-    return 1;
+    assert(false && "Decrementing the LRC should never error");
 }
 
 /* This increases the open-subregion count. (This does not update RC)
@@ -833,13 +934,13 @@ static int regiondata_inc_osc(Py_region_t region) {
  * This might close this and parent regions, which can fail. See
  * `regiondata_close` for possible failures.
  * */
-static int regiondata_dec_osc(Py_region_t region) {
+static void regiondata_dec_osc(Py_region_t region) {
     // Invariant:
     ASSERT_IS_UNION_ROOT(region);
 
     // Static regions don't need to be updated
     if (!HAS_DATA(region)) {
-        return 0;
+        return;
     }
 
     // Update the OSC
@@ -850,14 +951,13 @@ static int regiondata_dec_osc(Py_region_t region) {
     SUCCEEDS(regiondata_check_close(region));
 
     // Return 0 on success
-    return 0;
+    return;
 
 error:
     // Undo the OSC decrement
     data->osc += 1;
 
-    // Propagate the failure information
-    return 1;
+    assert(false && "Decrementing the OSC should never error");
 }
 
 /* Setting the parent of an open region, might open the new parent region
@@ -885,13 +985,19 @@ static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent) {
             return 1;
         }
 
-        // TODO(regions): xFrednet: This is probably wrong? At least cleaning
-        // (a region and sub region) seems to have a off-by-one counting a OSC of 2
-        if (regiondata_dec_osc(old_parent)) {
-            // Undo the inc_osc from above.
-            regiondata_dec_osc(new_parent);
-            return 1;
-        }
+        regiondata_dec_osc(old_parent);
+    }
+
+    // Make sure the sub-region is removed from the old parent and added to the
+    // GC list of the new parent
+    if (HAS_DATA(old_parent)) {
+        assert(PyObject_GC_IsTracked(_PyObject_CAST(data->bridge)));
+        gc_list_remove(_Py_AS_GC(_PyObject_CAST(data->bridge)));
+    }
+    assert(!PyObject_GC_IsTracked(_PyObject_CAST(data->bridge)));
+    if (HAS_DATA(new_parent)) {
+        _Py_region_data *parent_data = _Py_region_data_CAST(new_parent);
+        gc_list_prepend(_Py_AS_GC(_PyObject_CAST(data->bridge)), &parent_data->gc_list);
     }
 
     // Only set the parent here, once all the failable operations are done
@@ -1078,7 +1184,7 @@ static bool regiondata_is_bridge(Py_region_t region, PyObject *obj) {
  * from the GC list.
  *
  * This will just update the RC of the old and new region, all other state,
- * like the LRC, has to be updated separatly.
+ * like the LRC, has to be updated separately.
  */
 static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
     // Invariant:
@@ -1086,9 +1192,14 @@ static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
     ASSERT_IS_UNION_ROOT(new_region);
     ASSERT_REGION_HAS_NO_TAG(new_region);
 
-    // Remove the object from its GC list. This has to be done before the
-    // updating the region RC to make sure that the list head remains allocated
-    if (PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
+    // Set the region first, this is important for the bridge check
+    Py_region_t old_region = obj->ob_region;
+    obj->ob_region = new_region;
+
+    // Remove the object from its GC list.
+    if (Py_TYPE(obj) == &_PyRegion_Type) {
+        // Nothing to do here, bridges are moved by `set_parent`
+    } else if (PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
         if (HAS_DATA(new_region)) {
             _Py_region_data *data = (_Py_region_data *)new_region;
             gc_set_old_space(_Py_AS_GC(obj), 0);
@@ -1103,9 +1214,7 @@ static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
         }
     }
 
-    // Update the region and region rc
-    Py_region_t old_region = obj->ob_region;
-    obj->ob_region = new_region;
+    // Update the RC last to make sure the used GC lists stay allocated
     regiondata_inc_rc(new_region);
     regiondata_dec_rc(old_region);
 }
@@ -1144,7 +1253,7 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
         return Py_OWNERSHIP_TRAVERSE_SKIP;
     }
-    
+
     if (PyUnicode_CheckExact(tgt)) {
         if (_PyImmutability_Freeze(tgt)) {
             return Py_OWNERSHIP_TRAVERSE_ERR;
@@ -1318,7 +1427,7 @@ PyRegion_staged_ref_t regiondata_stage_objects(
         add_state.add_ref_target = true;
         result = _add_to_region_visit(src, tgt, (void*)&add_state);
         add_state.add_ref_target = false;
-        
+
         switch (result)
         {
         case Py_OWNERSHIP_TRAVERSE_VISIT:
@@ -1376,8 +1485,7 @@ void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
         // and the one below is not the root of the union root? There is an
         // assert for this in `regiondata_dec_lrc`
         Py_region_t region = STAGED_AS_PTR(staged_ref);
-        int res = regiondata_dec_lrc(region);
-        assert(res == 0);
+        regiondata_dec_lrc(region);
         regiondata_dec_rc(region);
         return;
     }
@@ -1392,8 +1500,7 @@ void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
             Py_region_t region = regions[i];
 
             // Decrement the LRC
-            int res = regiondata_dec_lrc(region);
-            assert(res == 0);
+            regiondata_dec_lrc(region);
             regiondata_dec_rc(region);
 
             i += 1;
@@ -1471,6 +1578,18 @@ PyRegion_staged_ref_t regiondata_add_object(Py_region_t subject_region, PyObject
     return 0;
 }
 
+static int _clean_collect_subregions(Py_region_t region, PyObject *pending_list) {
+    assert(HAS_DATA(region));
+
+    // Ignore the region if it's currently closed
+    if (!regiondata_is_open(region)) {
+        return 0;
+    }
+
+    // Enqueue the region to be cleaned
+    _Py_region_data *data = _Py_region_data_CAST(region);
+    return PyList_Append(pending_list, _PyObject_CAST(data->bridge));
+}
 int regiondata_clean(PyObject* bridge) {
     // Invariant
     assert(HAS_DATA(_PyRegion_GetFollowPending(bridge)));
@@ -1499,18 +1618,39 @@ int regiondata_clean(PyObject* bridge) {
     if (pending_list == NULL) {
         goto error;
     }
-    PyList_SET_ITEM(_PyList_CAST(pending_list), 0, Py_NewRef(bridge));
+    PyList_SET_ITEM(_PyList_CAST(pending_list), 0, PyRegion_NewRef(bridge));
 
     while(PyList_Size(pending_list) != 0){
         PyObject* item = list_pop(pending_list);
         Py_region_t item_region = _PyRegion_Get(item);
+        _Py_region_data* dirty_region_data = _Py_region_data_CAST(item_region);
 
+        // Invariant
+        ASSERT_REGION_OWNER_HAS_NO_TAG(item_region);
         assert(regiondata_is_bridge(item_region, item));
+        assert(HAS_DATA(item_region));
+
+        // Clean path: If the region is clean, we collect the subregions to
+        // check if they need cleaning
+        if (!regiondata_is_dirty(item_region)) {
+            // Only collect subregions, if any of them is actually open.
+            // It should be impossible to have a dirty subregion without
+            // the parent knowing about them.
+            if (dirty_region_data->osc > 0) {
+                SUCCEEDS(gc_list_for_each_subregion(
+                    &dirty_region_data->gc_list,
+                    (gc_list_callback_t)_clean_collect_subregions,
+                    pending_list
+                ));
+            }
+
+            // The region doesn't need cleaning, proceed to the next one
+            continue;
+        }
 
         // Store metadata for the new region
-        assert(HAS_DATA(item_region));
-        Py_region_t owner = ((_Py_region_data*)item_region)->owner;
-        ((_Py_region_data*)item_region)->owner = 0;
+        Py_region_t owner = dirty_region_data->owner;
+        dirty_region_data->owner = 0;
         bool was_open = regiondata_is_open(item_region);
 
         // Merge the region into local
@@ -1534,16 +1674,15 @@ int regiondata_clean(PyObject* bridge) {
         }
         staged_ref_commit(staged_ref);
 
-        // TODO: Account in LRC for reference from owner, if present.
-
-
-        // TODO(regions): xFrednet: This doesn't account for region union...
-        //
         // `stage_objects` doesn't know about the reference from the owner and
         // counts it as a local reference. Meaning the LRC counts one more
         // reference than present.
+        //
+        // Owner may reference a cown, region, or (pending) merged region. Each of
+        // these would add a reference, expect cases when the region has been merged
+        // into the local region. But then we should never have a reference to it.
         if (owner != 0) {
-            SUCCEEDS(regiondata_dec_lrc(clean_region));
+            regiondata_dec_lrc(clean_region);
         }
 
         // The region should now be marked as clean
@@ -1557,6 +1696,9 @@ int regiondata_clean(PyObject* bridge) {
         if (!was_open && regiondata_is_open(clean_region)) {
             regiondata_inc_osc(clean_region);
         }
+
+        // Increase the number of regions which have been cleaned
+        result += 1;
     }
 
     goto finally;
@@ -1735,8 +1877,8 @@ Py_region_t _PyRegion_GetParent(Py_region_t child) {
 
 /* This cleans the region by reconstructing it from the bridge object.
  *
- * FIXME(regions): xFrednet: This could be smarter, by only cleaning
- * the region if it's dirty (or a subregion) is dirty.
+ * This returns the number of regions which have been cleaned or a negative
+ * number on failure.
  */
 int _PyRegion_Clean(Py_region_t region) {
     if (!HAS_DATA(region)) {
@@ -1749,6 +1891,31 @@ int _PyRegion_Clean(Py_region_t region) {
 
 void _PyRegion_MakeDirty(Py_region_t region) {
     regiondata_mark_as_dirty(region);
+}
+
+static int _get_subregion_callback(Py_region_t region, PyObject* list) {
+    assert(HAS_DATA(region));
+
+    _Py_region_data *data = _Py_region_data_CAST(region);
+    return PyList_Append(list, _PyObject_CAST(data->bridge));
+}
+PyObject* _PyRegion_GetSubregions(Py_region_t region) {
+    PyObject* list = PyList_New(0);
+    if (!HAS_DATA(region)) {
+        return list;
+    }
+
+    _Py_region_data *data = _Py_region_data_CAST(region);
+    int res = gc_list_for_each_subregion(
+        &data->gc_list,
+        (gc_list_callback_t)_get_subregion_callback,
+        (void*)list);
+    if (res != 0) {
+        Py_DECREF(list);
+        return NULL;
+    }
+
+    return list;
 }
 
 int _PyRegion_IsBridge(PyObject *obj) {
@@ -1885,7 +2052,7 @@ static int _add_local_refs(PyObject *src, int tgt_count, PyObject **targets) {
 error:
     for (int undo_i = 0; undo_i < arg_i; undo_i += 1) {
         PyObject* tgt = targets[undo_i];
-        result |= regiondata_dec_lrc(_PyRegion_Get(tgt));
+        regiondata_dec_lrc(_PyRegion_Get(tgt));
     }
     return result;
 }
@@ -1992,6 +2159,18 @@ void PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref) {
     staged_ref_commit(staged_ref);
 }
 
+static int add_refs_va_list(PyObject *src, int argc, va_list *args) {
+    PyRegion_staged_ref_t staged_ref = stage_va_list(src, argc, args);
+
+    if (staged_ref == PyRegion_staged_ref_ERR) {
+        return -1;
+    }
+
+    // Should always succeed
+    PyRegion_CommitStagedRef(staged_ref);
+    return 0;
+}
+
 /* Checks if the references from `src` to the targets are allowed and
  * updates the internal region state accordingly.
  *
@@ -2004,16 +2183,10 @@ void PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref) {
 int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
     va_list args;
     va_start(args, argc);
-    PyRegion_staged_ref_t staged_ref = stage_va_list(src, argc, &args);
+    int res = add_refs_va_list(src, argc, &args);
     va_end(args);
 
-    if (staged_ref == PyRegion_staged_ref_ERR) {
-        return -1;
-    }
-
-    // Should always succeed
-    PyRegion_CommitStagedRef(staged_ref);
-    return 0;
+    return res;
 }
 
 /* Removes the reference from `src` to `tgt` and updates the internal state of
@@ -2021,9 +2194,9 @@ int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
  *
  * Returns 0 on success.
  */
-int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
+void _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
     if (tgt == NULL) {
-        return 0;
+        return;
     }
 
     Py_region_t src_region = _PyRegion_GetFollowPending(src);
@@ -2031,12 +2204,12 @@ int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
 
     if (src_region == tgt_region) {
         // Intra-region references are always permitted and not tracket
-        return 0;
+        return;
     }
 
     if (IS_IMMUTABLE_REGION(tgt_region) || IS_COWN_REGION(tgt_region)) {
         // References to immutable objects or cowns are always permitted
-        return 0;
+        return;
     }
 
     // Mark the target region as dirty, if the source wasn't passed in.
@@ -2044,13 +2217,14 @@ int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
     // include the dict object
     if (src == NULL) {
         regiondata_mark_as_dirty(_PyRegion_Get(tgt));
-        return 0;
+        return;
     }
 
     if (IS_LOCAL_REGION(src_region)) {
         // Decrease the target region LRC since this reference came from
         // the local region
-        return regiondata_dec_lrc(_PyRegion_Get(tgt));
+        regiondata_dec_lrc(_PyRegion_Get(tgt));
+        return;
     }
 
     if (regiondata_is_bridge(tgt_region, tgt)
@@ -2059,7 +2233,11 @@ int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
         assert(tgt_region == _PyRegion_Get(tgt));
         // The removed reference was the owning references. The target region
         // gets unparented and is now free.
-        return regiondata_set_parent(tgt_region, NULL_REGION);
+        //
+        // This should always succeed, since this action may only close regions
+        // but not open any.
+        int res = regiondata_set_parent(tgt_region, NULL_REGION);
+        assert(res == 0);
     } else {
         // The reference came from `src` to `tgt` while the target region
         // already had a parent. This is not allowed but can happen in
@@ -2071,9 +2249,6 @@ int _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
         // for builds without asserts.
         regiondata_mark_as_dirty(src_region);
         regiondata_mark_as_dirty(tgt_region);
-
-        // Still return 0, since the reference could be should be removed.
-        return 0;
     }
 }
 
@@ -2112,8 +2287,34 @@ int _PyRegion_AddLocalRefs(int argc, ...) {
     return _add_local_refs(NULL, list_size, list);
 }
 
-int _PyRegion_RemoveLocalRef(PyObject *tgt) {
-    return regiondata_dec_lrc(_PyRegion_Get(tgt));
+void _PyRegion_RemoveLocalRef(PyObject *tgt) {
+    regiondata_dec_lrc(_PyRegion_Get(tgt));
+}
+
+int _PyRegion_TakeRefs(PyObject *src, int argc, ...) {
+    // See comment in `_PyRegion_TakeRef` to explain how this
+    // function works and why it should be safe.
+    va_list args;
+    va_start(args, argc);
+
+    // Add references
+    va_list add_ref_args;
+    va_copy(add_ref_args, args);
+    int res = add_refs_va_list(src, argc, &add_ref_args);
+    va_end(add_ref_args);
+    if (res != 0) {
+        va_end(args);
+        return res;
+    }
+
+    // Remove the local references
+    for (int arg_i = 0; arg_i < argc; arg_i += 1) {
+        PyObject* tgt = va_arg(args, PyObject*);
+        PyRegion_RemoveLocalRef(tgt);
+    }
+
+    va_end(args);
+    return res;
 }
 
 int _PyRegion_SetCownRegion(_PyCownObject *cown) {
@@ -2176,6 +2377,28 @@ int _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown) {
     return regiondata_set_cown(region, NULL);
 }
 
+/* This function should be called when a function of the given type is
+* called from C. This will check if the type is marked as Pyrona aware
+* meaning that it has the needed write barriers.
+*
+* If the type is not aware of regions, we'll assume that the code is
+* untrusted and mark all currently open regions as dirty. This ensures
+* that the region invariant can be trusted for clean regions.
+*
+* This operation requires the GIL.
+*
+* This function will also store the name of the type, to be accessible
+* on demand to help with debugging.
+*/
+void PyRegion_NotifyTypeUse(PyTypeObject* tp) {
+    if ((tp->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) != 0) {
+        return;
+    }
+
+    _PyOwnership_notify_untrusted_code(tp->tp_name);
+}
+
+
 // TODO(regions): xFrednet: Cleanup
 //      - Move region error into core and emit it instead of runtime errors
 // TODO(regions): xFrednet: Regions with pending merges can still be closed and send off.
@@ -2187,12 +2410,6 @@ int _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown) {
 // TODO(regions): xFrednet: Weak Reference into regions
 // TODO(regions): xFrednet: Add new `MergedRegion` so that the Region type
 //                          correlates with it being the bridge.
-// TODO(regions): xFrednet: Merging a region into the local region should open
-//                          subregions, if the merge didn't happened for error handling
-//                          (Make sure subregions are always at the start of the region CG list)
-//                          (This might need a custom list, since bridges are currently part of
-//                             their regions list)
-//                          (Can this opening be done by checking if the parent is local?)
 // TODO(regions): xFrednet: Add notion of movability.
 //          - Cowns (Should be in cown region)
 //          - Immutable (Should be in immutable region)

@@ -15,14 +15,14 @@ class TestBasicRegionObject(unittest.TestCase):
         # The region should be open since r points into it
         self.assertTrue(r.is_open)
 
-        # FIXME(regions): xFrednet: Regions currently default to being dirty
-        # while most write barriers are missing
-        #
         # A new region should be clean
-        # self.assertFalse(r.is_dirty)
+        self.assertFalse(r.is_dirty)
 
         # A new region has no parent
         self.assertIsNone(r.parent)
+
+        # A new region should have not subregions
+        self.assertListEqual(r._subregions, [])
 
     def test_fields_read_only(self):
         r = Region()
@@ -36,6 +36,15 @@ class TestBasicRegionObject(unittest.TestCase):
 
         with self.assertRaises(AttributeError):
             r.parent = None
+
+        with self.assertRaises(AttributeError):
+            r._lrc = None
+
+        with self.assertRaises(AttributeError):
+            r._osc = None
+
+        with self.assertRaises(AttributeError):
+            r._subregions = None
 
     def test_instance_dict_is_owned(self):
         r = Region()
@@ -202,3 +211,56 @@ class TestInterRegionRelations(unittest.TestCase):
 
         # Check that r2 has no parent
         self.assertIsNone(r2.parent)
+
+    def test_subregions(self):
+        r1 = Region()
+        r2 = Region()
+        r3 = Region()
+        r4 = Region()
+
+        # r1 starts with no children
+        self.assertEqual(len(r1._subregions), 0)
+
+        # This should add r2 as a subregion
+        r1.r2 = r2
+        self.assertEqual(len(r1._subregions), 1)
+        self.assertIn(r2, r1._subregions)
+
+        # This should add r3 as a subregion
+        r1.r3 = r3
+        self.assertEqual(len(r1._subregions), 2)
+        self.assertIn(r2, r1._subregions)
+        self.assertIn(r3, r1._subregions)
+
+        # This should replace r3 as a subregion
+        r1.r3 = r4
+        self.assertEqual(len(r1._subregions), 2)
+        self.assertIn(r2, r1._subregions)
+        self.assertIn(r4, r1._subregions)
+        self.assertNotIn(r3, r1._subregions)
+
+        # The subregions list should be temporary and clear the LRC after
+        self.assertEqual(r2._lrc, 1)
+        self.assertEqual(r3._lrc, 1)
+        self.assertEqual(r4._lrc, 1)
+
+    def test_region_dissolve_bumps_subregion_lrc(self):
+        r1 = Region()
+        r2 = Region()
+        obj = self.A()
+
+        # Make r2 a subregion of 1
+        r1.obj = obj
+        obj.r2 = r2
+
+        # Precondition
+        self.assertEqual(r2.parent, r1)
+        r2_lrc = r2._lrc
+
+        # Dissolve parent region
+        r1 = None
+
+        # Postcondition
+        self.assertEqual(r2._lrc, r2_lrc + 1)
+        self.assertIsNone(r2.parent)
+        self.assertTrue(is_local(obj))

@@ -33,6 +33,10 @@ static int Region_init(_PyRegionObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
+    // Regions should not be tracked in normal GC, those fields will be
+    // used to track subregions
+    PyObject_GC_UnTrack(self);
+
     self->region = NULL_REGION;
     self->name = NULL;
 
@@ -93,11 +97,12 @@ static PyObject* Region_owns(PyObject *self, PyObject *other) {
 static PyObject* Region_clean(PyObject *op) {
     CHECK_BRIDGE(op);
 
-    if (_PyRegion_Clean(_PyRegion_Get(op))) {
+    int cleaning_res = _PyRegion_Clean(_PyRegion_Get(op));
+    if (cleaning_res < 0) {
         return NULL;
     }
 
-    Py_RETURN_NONE;
+    return PyLong_FromInt32(cleaning_res);
 }
 
 static PyObject* Region__make_dirty(PyObject *op) {
@@ -136,13 +141,13 @@ static PyObject* Region_get_parent(PyObject *self, void *closure) {
     CHECK_BRIDGE(self);
 
     Py_region_t parent_region = _PyRegion_GetParent(_PyRegion_Get(self));
-    return _Py_NewRef(_PyRegion_GetBridge(parent_region));
+    return _PyRegion_NewRef(_PyRegion_GetBridge(parent_region));
 }
 
 static PyObject* Region_get_name(PyObject *self, void *closure) {
     CHECK_BRIDGE(self);
 
-    return Py_NewRef(_PyRegionObject_CAST(self)->name);
+    return PyRegion_NewRef(_PyRegionObject_CAST(self)->name);
 }
 
 static PyObject* Region_get__lrc(PyObject* self, void* closure) {
@@ -159,6 +164,12 @@ static PyObject* Region_get__osc(PyObject* self, void* closure) {
     return PyLong_FromSize_t(osc);
 }
 
+static PyObject* Region_get__subregions(PyObject* self, void* closure) {
+    CHECK_BRIDGE(self);
+
+    return _PyRegion_GetSubregions(_PyRegion_Get(self));
+}
+
 static PyGetSetDef Region_getset[] = {
     {"is_open", (getter)Region_is_open, NULL,
         "indicates if the region is currently open or closed", NULL},
@@ -168,10 +179,12 @@ static PyGetSetDef Region_getset[] = {
         "the parent of the region", NULL},
     {"name", (getter)Region_get_name, NULL,
         "the name of the region", NULL},
-    {"_lrc", (getter)Region_get__lrc, NULL, 
+    {"_lrc", (getter)Region_get__lrc, NULL,
         "the local-reference count, mainly intended for debugging", NULL},
-    {"_osc", (getter)Region_get__osc, NULL, 
+    {"_osc", (getter)Region_get__osc, NULL,
         "the open-subregion count, mainly intended for debugging", NULL},
+    {"_subregions", (getter)Region_get__subregions, NULL,
+        "returns a list of all subregions, mainly intended for debugging", NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
@@ -221,7 +234,8 @@ Region_clear(PyObject *op)
         self->region = NULL_REGION;
     }
 
-    // Clear members
+    // Clear members. This doesn't need write barriers since both are owned by
+    // this region
     Py_CLEAR(self->name);
     Py_CLEAR(self->dict);
     return 0;

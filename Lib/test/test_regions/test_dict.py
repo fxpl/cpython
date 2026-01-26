@@ -1,5 +1,4 @@
 import unittest
-import sys
 from regions import Region, is_local
 from immutable import freeze, isfrozen
 
@@ -183,23 +182,26 @@ class BaseTestRegionDictKeys(unittest.TestCase):
         # Post-condition
         self.assertEqual(r._lrc, lrc + 1)
 
-    def check_loop_lrc_change(self, region, iter_src, loop_lrc_effect, iter_lrc_cost = 1):
+    def check_loop_lrc_change(self, region, iter_src, loop_lrc_effect, iter_lrc_cost = 1, check_lrc_reset=True):
         # Check loop iterations change the LRC
         lrc = region._lrc
         i = 0
         for v in iter_src:
             self.assertEqual(region._lrc, lrc + iter_lrc_cost + loop_lrc_effect,
                              f"Fail in iteration: {i} base LRC {lrc} + {iter_lrc_cost} for iter")
-            # Reassigning v should reset the LRC
-            v = None
-            self.assertEqual(region._lrc, lrc + iter_lrc_cost,
-                             f"LRC didn't reset in iteration: {i} base LRC {lrc} + {iter_lrc_cost} for iter")
+            if check_lrc_reset:
+                v = None
+                self.assertEqual(region._lrc, lrc + iter_lrc_cost,
+                                f"LRC didn't reset in iteration: {i} base LRC {lrc} + {iter_lrc_cost} for iter")
             i += 1
+
+        # Setting v to none should reset the LRC to pre-loop levels
+        v = None
 
         # Check LRC is back to pre-loop levels
         self.assertEqual(region._lrc, lrc)
 
-    def check_dict_view(self, key1, key2, create_view, loop_lrc_effect, iter_lrc_cost = 1):
+    def check_dict_view(self, key1, key2, create_view, loop_lrc_effect, iter_lrc_cost = 1, check_lrc_reset=True):
         class SomeObject:
             pass
         freeze(SomeObject())
@@ -213,7 +215,130 @@ class BaseTestRegionDictKeys(unittest.TestCase):
         # Create the view
         view = create_view(r.dict)
 
-        self.check_loop_lrc_change(r, view, loop_lrc_effect, iter_lrc_cost)
+        self.check_loop_lrc_change(r, view, loop_lrc_effect, iter_lrc_cost, check_lrc_reset)
+
+    def check_pop(self, key):
+        class SomeObject:
+            pass
+        freeze(SomeObject())
+
+        # Setup
+        r = Region()
+        r.obj = SomeObject()
+        d = {}
+
+        # Precondition
+        d[key] = r.obj
+        base_lrc = r._lrc
+        self.assertGreaterEqual(base_lrc, 1)
+
+        # Action
+        d.pop(key)
+        self.assertEqual(r._lrc, base_lrc - 1)
+
+        # Check pop(key, default) with a new dictionary
+        d = {}
+        base_lrc = r._lrc
+        local_ref = d.pop(key, r.obj)
+        self.assertEqual(r._lrc, base_lrc + 1)
+        local_ref = None
+        self.assertEqual(r._lrc, base_lrc)
+
+    def check_popitem(self, key1, key2, lrc_for_key):
+        class Value:
+            pass
+        freeze(Value())
+
+        # Setup
+        r = Region()
+        r.obj1 = Value()
+        r.obj2 = Value()
+        r.key1 = key1
+        r.key2 = key2
+        d = {}
+
+        # Pre-condition
+        d[key1] = r.obj1
+        d[key2] = r.obj2
+
+        # Pop 1. item
+        base_lrc = r._lrc
+        local_ref = d.popitem()
+        self.assertEqual(r._lrc, base_lrc, "The LRC should remain unchanged due to `local_ref`")
+        local_ref = None
+        self.assertEqual(r._lrc, base_lrc - lrc_for_key - 1)
+
+        # Pop 2. item
+        base_lrc = r._lrc
+        local_ref = d.popitem()
+        self.assertEqual(r._lrc, base_lrc, "The LRC should remain unchanged due to `local_ref`")
+        local_ref = None
+        self.assertEqual(r._lrc, base_lrc - lrc_for_key - 1)
+
+        # Make sure the dict is empty
+        with self.assertRaises(KeyError):
+            d.popitem()
+
+    def check_setdefault_new_key(self, key, lrc_for_key):
+        """
+        Checks that the `setdefault()` method of the dictionary correctly adjusts the LRC.
+        This tests the case case then the key is not present in the set
+        """
+        class SomeObject:
+            pass
+        freeze(SomeObject())
+
+        # Setup
+        r = Region()
+        r.obj = SomeObject()
+        r.key = key
+        d = {}
+        base_lrc = r._lrc
+
+        # Pre-condition
+        self.assertGreater(base_lrc, 0)
+
+        # Action: setdefault with non-existing key
+        local_ref = d.setdefault(key, r.obj)
+
+        # Post-condition: LRC should increase for the inserted key, value pair
+        # plus the returned reference
+        self.assertEqual(r._lrc, base_lrc + 1 + lrc_for_key + 1,
+                         f"LRC should increase when setdefault inserts a new value")
+
+        # Removing the local reference should only remove one LRC
+        local_ref = None
+        self.assertEqual(r._lrc, base_lrc + 1 + lrc_for_key)
+
+    def check_setdefault_present_key(self, key, lrc_for_key):
+        """
+        Checks that the `setdefault()` method of the dictionary correctly adjusts the LRC.
+        This tests the case case then the key is not present in the set
+        """
+        class SomeObject:
+            pass
+        freeze(SomeObject())
+
+        # Setup
+        r1 = Region()
+        r1.obj = SomeObject()
+        r1.key = key
+        d = {}
+        d[key] = r1.obj
+        r1_base_lrc = r1._lrc
+
+        r2 = Region()
+        r2.unused_default = SomeObject()
+        r2_base_lrc = r2._lrc
+
+        # Action: setdefault with non-existing key
+        local_ref = d.setdefault(key, r2.unused_default)
+
+        # Post-condition
+        self.assertEqual(r2._lrc, r2_base_lrc, "r2.unused_default should be unused")
+        self.assertEqual(r1._lrc, r1_base_lrc + 1, "the new local ref should be tracked")
+        local_ref = None
+        self.assertEqual(r1._lrc, r1_base_lrc, "LRC should be reset")
 
 class TestRegionDictUnicodeKeys(BaseTestRegionDictKeys):
     @unittest.expectedFailure # FIXME(regions): xFrednet: Broken until WBs in zip have been added
@@ -266,15 +391,23 @@ class TestRegionDictUnicodeKeys(BaseTestRegionDictKeys):
     def test_wb_copy(self):
         self.check_dict_item_access("another key", lambda dict, key: dict.copy())
 
+    def test_wb_pop(self):
+        self.check_pop("Cool Key")
+
+    def test_wb_popitem(self):
+        self.check_popitem("Cool Key", "Best Key", lrc_for_key=0)
+
     def test_wb_keys_view(self):
         self.check_dict_view("K1", "K2", lambda d: d.keys(), loop_lrc_effect=0)
 
     def test_wb_values_view(self):
         self.check_dict_view("K1", "K2", lambda d: d.values(), loop_lrc_effect=1)
 
-    @unittest.expectedFailure # FIXME(regions): xFrednet: Broken until WBs in tuples have been added
     def test_wb_items_view(self):
-        self.check_dict_view("K1", "K2", lambda d: d.items(), loop_lrc_effect=1)
+        # Python's dictionary iterator caches the tuple used during iteration.
+        # This is good for performance, but means that the LRC doesn't
+        # reset if we clear the loop variable.
+        self.check_dict_view("K1", "K2", lambda d: d.items(), loop_lrc_effect=1, check_lrc_reset=False)
 
     def test_wb_iter_dict(self):
         self.check_dict_view("K1", "K2", lambda d: d, loop_lrc_effect=0)
@@ -282,6 +415,10 @@ class TestRegionDictUnicodeKeys(BaseTestRegionDictKeys):
     def test_wb_iter_dict_reversed(self):
         # The iterator doesn't effect the LRC, since we create it with the `reversed`
         self.check_dict_view("K1", "K2", lambda d: reversed(d), loop_lrc_effect=0, iter_lrc_cost=0)
+
+    def test_wb_setdefault(self):
+        self.check_setdefault_new_key("setdefault-key", lrc_for_key=0)
+        self.check_setdefault_present_key("Meow", lrc_for_key=0)
 
 class TestRegionDictObjectKeys(BaseTestRegionDictKeys):
     class Key:
@@ -362,6 +499,12 @@ class TestRegionDictObjectKeys(BaseTestRegionDictKeys):
         # LRC increase of 2: 1x for the key 1x for the item
         self.check_dict_item_access(self.Key(), lambda dict, key: dict.copy(), lrc_offset = 2)
 
+    def test_wb_pop(self):
+        self.check_pop(self.Key())
+
+    def test_wb_popitem(self):
+        self.check_popitem(self.Key(), self.Key(), lrc_for_key=1)
+
     def test_wb_key_list(self):
         self.check_dict_item_access(self.Key(), lambda dict, key: list(dict))
 
@@ -371,9 +514,11 @@ class TestRegionDictObjectKeys(BaseTestRegionDictKeys):
     def test_wb_values_view(self):
         self.check_dict_view(self.Key(), self.Key(), lambda d: d.values(), 1)
 
-    @unittest.expectedFailure # FIXME(regions): xFrednet: Broken until WBs in tuples have been added
     def test_wb_items_view(self):
-        self.check_dict_view(self.Key(), self.Key(), lambda d: d.items(), 2)
+        # Python's dictionary iterator caches the tuple used during iteration.
+        # This is good for performance, but means that the LRC doesn't
+        # reset if we clear the loop variable.
+        self.check_dict_view(self.Key(), self.Key(), lambda d: d.items(), loop_lrc_effect=2, check_lrc_reset=False)
 
     def test_wb_iter_dict(self):
         self.check_dict_view(self.Key(), self.Key(), lambda d: d, loop_lrc_effect=1)
@@ -382,17 +527,15 @@ class TestRegionDictObjectKeys(BaseTestRegionDictKeys):
         # The iterator doesn't effect the LRC, since we create it with the `reversed`
         self.check_dict_view(self.Key(), self.Key(), lambda d: reversed(d), loop_lrc_effect=1, iter_lrc_cost=0)
 
+    def test_wb_setdefault(self):
+        self.check_setdefault_new_key(self.Key(), lrc_for_key=1)
+        self.check_setdefault_present_key(self.Key(), lrc_for_key=1)
+
 
 # FIXME(regions): xFrednet: Set operations on views, like `&`, `^` and `|`
 #                           are currently not tested and probably don't work.
 
 # TODO: classmethod fromkeys(iterable, value=None, /)
-# TODO: dict.pop(key)
-# TODO: dict.pop(key, default)
-# TODO: dict.popitem(key)
-# TODO: reversed(dict)
-# TODO: dict.setdefault(key)
-# TODO: dict.setdefault(key, default)
 # TODO: dict.update(???)
 # TODO: dict1 | dict2
 # TODO: dict1 |= dict2

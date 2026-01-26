@@ -104,13 +104,29 @@ Return True the object is in the local region.
 
 static int
 regions_is_local_impl(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=e113b6b045da92b4 input=17b3dedc5693f308]*/
+/*[clinic end generated code: output=e113b6b045da92b4 input=9e5338e938093877]*/
 {
     return PyRegion_IsLocal(obj);
 }
 
+/*[clinic input]
+regions.get_last_dirty_reason
+
+Returns the last reason for marking open regions as dirty.
+
+Return value: str
+[clinic start generated code]*/
+
+static PyObject *
+regions_get_last_dirty_reason_impl(PyObject *module)
+/*[clinic end generated code: output=7fa56844889d85b8 input=56996052e520f95d]*/
+{
+    return _PyOwnership_get_last_dirty_region();
+}
+
 static struct PyMethodDef regions_methods[] = {
     REGIONS_IS_LOCAL_METHODDEF
+    REGIONS_GET_LAST_DIRTY_REASON_METHODDEF
     { NULL, NULL }
 };
 
