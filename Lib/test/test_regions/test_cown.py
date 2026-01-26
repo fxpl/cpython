@@ -147,3 +147,27 @@ class TestCownLocking(unittest.TestCase):
 
         # Cleanup
         t2.join()
+
+    def test_release_fails_for_open_regions(self):
+        r = Region()
+        c = Cown(r)
+
+        # Releasing a cown with an open region should error
+        with self.assertRaises(RuntimeError):
+            c.release()
+
+        r = None
+
+        # This release should succeed, since `r` should be closed
+        c.release()
+
+    def test_release_cleans_region(self):
+        c = Cown(Region())
+        c.value._make_dirty()
+
+        self.assertTrue(c.value.is_dirty)
+
+        # Releasing the cown should clean the region first in an
+        # attempt to close it
+        with self.assertRaises(RuntimeError):
+            c.release()
