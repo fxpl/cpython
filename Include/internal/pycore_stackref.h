@@ -687,6 +687,11 @@ PyStackRef_MakeHeapSafe(_PyStackRef ref)
         return ref;
     }
     PyObject *obj = BITS_TO_PTR_MASKED(ref);
+
+    // This should always succeed, since we already have a reference on the stack
+    int res = PyRegion_AddLocalRef(obj);
+    assert(res == 0);
+    (void)res;
     Py_INCREF(obj);
     ref.bits = (uintptr_t)obj;
     PyStackRef_CheckValid(ref);

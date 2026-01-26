@@ -745,11 +745,20 @@ list_slice_lock_held(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh)
 
     src = a->ob_item + ilow;
     dest = np->ob_item;
+    // Pyrona: Normally removing a reference does't undo the add reference
+    // since objects are not moved out of the region. However, in this
+    // case we know that np is new and therefore local. Since these are
+    // just LRC updates they can be safely undone
+    assert(PyRegion_IsLocal(np));
     for (i = 0; i < len; i++) {
         PyObject *v = src[i];
-        // FIXME(regions): This doesn't undo the previous loops
-        if (PyRegion_AddRef(np, v))
+        if (PyRegion_AddLocalRef(v)) {
+            /* Undo previous additions on error */
+            for (Py_ssize_t j = 0; j < i; j++) {
+                PyRegion_RemoveLocalRef(src[j]);
+            }
             goto fail;
+        }
         dest[i] = Py_NewRef(v);
     }
     Py_SET_SIZE(np, len);
@@ -804,20 +813,36 @@ list_concat_lock_held(PyListObject *a, PyListObject *b)
     }
     src = a->ob_item;
     dest = np->ob_item;
+    // Pyrona: Normally removing a reference does't undo the add reference
+    // since objects are not moved out of the region. However, in this
+    // case we know that np is new and therefore local. Since these are
+    // just LRC updates they can be safely undone
+    assert(PyRegion_IsLocal(np));
     for (i = 0; i < Py_SIZE(a); i++) {
         PyObject *v = src[i];
-        // FIXME(regions): This doesn't undo the previous loops
-        if (PyRegion_AddRef(np, v))
+        if (PyRegion_AddLocalRef(v)) {
+            /* Undo previous additions on error */
+            for (Py_ssize_t j = 0; j < i; j++) {
+                PyRegion_RemoveLocalRef(a->ob_item[j]);
+            }
             goto fail;
+        }
         dest[i] = Py_NewRef(v);
     }
     src = b->ob_item;
     dest = np->ob_item + Py_SIZE(a);
     for (i = 0; i < Py_SIZE(b); i++) {
         PyObject *v = src[i];
-        // FIXME(regions): This doesn't undo the previous loops
-        if (PyRegion_AddRef(np, v))
+        if (PyRegion_AddLocalRef(v)) {
+            /* Undo previous additions on error from both loops */
+            for (Py_ssize_t j = 0; j < Py_SIZE(a); j++) {
+                PyRegion_RemoveLocalRef(a->ob_item[j]);
+            }
+            for (Py_ssize_t j = 0; j < i; j++) {
+                PyRegion_RemoveLocalRef(b->ob_item[j]);
+            }
             goto fail;
+        }
         dest[i] = Py_NewRef(v);
     }
     Py_SET_SIZE(np, size);
@@ -4023,7 +4048,7 @@ list_ass_subscript_lock_held(PyObject *_self, PyObject *item, PyObject *value)
             PyRegion_RemoveLocalRef(seq);
             Py_DECREF(seq);
 
-            return 0;
+            return res;
         }
     }
     else {
@@ -4318,7 +4343,7 @@ PyTypeObject PyListRevIter_Type = {
     listreviter_next,                           /* tp_iternext */
     listreviter_methods,                /* tp_methods */
     0,
-   .tp_flags2 = Py_TPFLAGS2_REGION_AWARE, 
+   .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /*[clinic input]

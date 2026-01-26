@@ -200,7 +200,7 @@ Py_ssize_t _PyOwnership_get_open_region_tick(void) {
     return state->tick;
 }
 
-int _PyOwnership_notify_untrusted_code(void) {
+int _PyOwnership_notify_untrusted_code(const char* reason) {
     _Py_ownership_state* state = get_ownership_state();
     if (state == NULL) {
         return 1;
@@ -212,8 +212,30 @@ int _PyOwnership_notify_untrusted_code(void) {
     }
     assert(!IS_OPEN_REGION_TICK(state->tick));
 
+#ifdef Py_DEBUG
+    PyObject* name = PyUnicode_InternFromString(reason);
+    if (name != NULL) {
+        Py_XSETREF(state->last_dirty_reason, name);
+    }
+#endif
     // Everything is alright
     return 0;
+}
+
+PyObject* _PyOwnership_get_last_dirty_region(void) {
+#ifdef Py_DEBUG
+    _Py_ownership_state* state = get_ownership_state();
+    if (state == NULL) {
+        return NULL;
+    }
+
+    PyObject* reason = PyRegion_XNewRef(state->last_dirty_reason);
+    if (reason) {
+        return reason;
+    }
+#endif
+
+    Py_RETURN_NONE;
 }
 
 /* This function returns true for C wrappers around functions, types and
@@ -891,7 +913,7 @@ static int check_invariant_visit_owned(PyObject* tgt, _check_invariant_state* st
             Py_None);
         return -1;
     }
-    
+
     // This is the owning reference to the target region, but target doesn't know about it
     if (_PyRegion_IsBridge(tgt) && !_PyRegion_IsParent(tgt_region, src_region)) {
         throw_invariant_error(

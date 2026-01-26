@@ -29,4 +29,24 @@ regions_is_local(PyObject *module, PyObject *obj)
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=4d408aceaaaa05ff input=a9049054013a1b77]*/
+
+PyDoc_STRVAR(regions_get_last_dirty_reason__doc__,
+"get_last_dirty_reason($module, /)\n"
+"--\n"
+"\n"
+"Returns the last reason for marking open regions as dirty.\n"
+"\n"
+"Return value: str");
+
+#define REGIONS_GET_LAST_DIRTY_REASON_METHODDEF    \
+    {"get_last_dirty_reason", (PyCFunction)regions_get_last_dirty_reason, METH_NOARGS, regions_get_last_dirty_reason__doc__},
+
+static PyObject *
+regions_get_last_dirty_reason_impl(PyObject *module);
+
+static PyObject *
+regions_get_last_dirty_reason(PyObject *module, PyObject *Py_UNUSED(ignored))
+{
+    return regions_get_last_dirty_reason_impl(module);
+}
+/*[clinic end generated code: output=42af3f0e45d27e2f input=a9049054013a1b77]*/

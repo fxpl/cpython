@@ -144,6 +144,7 @@ PyAPI_FUNC(int) _PyRegion_ClosesWithLrc(Py_region_t region, Py_ssize_t lrc);
 PyAPI_FUNC(Py_region_t) _PyRegion_GetParent(Py_region_t child);
 PyAPI_FUNC(int) _PyRegion_Clean(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_MakeDirty(Py_region_t region);
+PyAPI_FUNC(PyObject*) _PyRegion_GetSubregions(Py_region_t region);
 
 PyAPI_FUNC(int) _PyRegion_IsBridge(PyObject *obj);
 PyAPI_FUNC(PyObject*) _PyRegion_GetBridge(Py_region_t region);

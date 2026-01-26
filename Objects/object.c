@@ -1489,10 +1489,8 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
         // Check if the type is Pyrona aware, otherwise, mark all open
         // regions as dirty
-        if (tp->tp_setattro != PyObject_GenericSetAttr
-            && (tp->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) == 0
-        ) {
-            _PyOwnership_notify_untrusted_code();
+        if (tp->tp_setattro != PyObject_GenericSetAttr) {
+            PyRegion_NotifyTypeUse(tp);
         }
 
         // Call the setattro function of the type

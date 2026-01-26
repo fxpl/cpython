@@ -31,7 +31,7 @@ PyAPI_FUNC(int) _PyRegion_AddRefs(PyObject *src, int tgt_count, ...);
 #define PyRegion_AddRef(src, tgt) _PyRegion_AddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
 #define PyRegion_AddRefs(src, ...) _PyRegion_AddRefs(_PyObject_CAST(src), _PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
-PyAPI_FUNC(int) _PyRegion_RemoveRef(PyObject *src, PyObject *tgt);
+PyAPI_FUNC(void) _PyRegion_RemoveRef(PyObject *src, PyObject *tgt);
 #define PyRegion_RemoveRef(src, tgt) _PyRegion_RemoveRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
 
 PyAPI_FUNC(int) _PyRegion_AddLocalRef(PyObject *tgt);
@@ -39,7 +39,7 @@ PyAPI_FUNC(int) _PyRegion_AddLocalRefs(int tgt_count, ...);
 #define PyRegion_AddLocalRef(tgt) _PyRegion_AddLocalRef(_PyObject_CAST(tgt))
 #define PyRegion_AddLocalRefs(...) _PyRegion_AddLocalRefs(_PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
-PyAPI_FUNC(int) _PyRegion_RemoveLocalRef(PyObject *tgt);
+PyAPI_FUNC(void) _PyRegion_RemoveLocalRef(PyObject *tgt);
 #define PyRegion_RemoveLocalRef(tgt) _PyRegion_RemoveLocalRef(_PyObject_CAST(tgt))
 
 static inline PyObject* _PyRegion_NewRef(PyObject* tgt) {
@@ -60,7 +60,7 @@ static inline PyObject* _PyRegion_XNewRef(PyObject* tgt) {
 
 static inline int _PyRegion_TakeRef(PyObject *src, PyObject *tgt) {
     int res = _PyRegion_AddRef(src, tgt);
-    if (res) {
+    if (res != 0) {
         return res;
     }
 
@@ -79,9 +79,12 @@ static inline int _PyRegion_TakeRef(PyObject *src, PyObject *tgt) {
     //      modify the OSC of X but not close X. This ensures that no cown is
     //      released or send off, while we still have remaining references into
     //      X and Y.
-    return _PyRegion_RemoveLocalRef(tgt);
+    _PyRegion_RemoveLocalRef(tgt);
+    return 0;
 }
+PyAPI_FUNC(int) _PyRegion_TakeRefs(PyObject *src, int tgt_count, ...);
 #define PyRegion_TakeRef(src, tgt) _PyRegion_TakeRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
+#define PyRegion_TakeRefs(src, ...) _PyRegion_TakeRefs(_PyObject_CAST(src), _PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
 
 static inline int _PyRegion_XSetRef(PyObject *src, PyObject **field, PyObject *val) {
     PyObject *old = *field;
@@ -118,6 +121,7 @@ static inline void _PyRegion_Clear(PyObject *src, PyObject **field) {
 }
 #define PyRegion_CLEAR(src, dst) _PyRegion_Clear(_PyObject_CAST(src), (PyObject **)&(dst))
 
+PyAPI_FUNC(void) PyRegion_NotifyTypeUse(PyTypeObject* type);
 
 #ifdef __cplusplus
 }
