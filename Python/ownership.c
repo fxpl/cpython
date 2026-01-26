@@ -913,7 +913,7 @@ static int check_invariant_visit_owned(PyObject* tgt, _check_invariant_state* st
             Py_None);
         return -1;
     }
-    
+
     // This is the owning reference to the target region, but target doesn't know about it
     if (_PyRegion_IsBridge(tgt) && !_PyRegion_IsParent(tgt_region, src_region)) {
         throw_invariant_error(

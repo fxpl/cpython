@@ -1,5 +1,4 @@
 import unittest
-import sys
 from regions import Region, is_local
 from immutable import freeze, isfrozen
 

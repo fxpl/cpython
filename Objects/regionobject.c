@@ -34,7 +34,7 @@ static int Region_init(_PyRegionObject *self, PyObject *args, PyObject *kwds) {
     }
 
     // Regions should not be tracked in normal GC, those fields will be
-    // used to track subregions 
+    // used to track subregions
     PyObject_GC_UnTrack(self);
 
     self->region = NULL_REGION;
@@ -179,11 +179,11 @@ static PyGetSetDef Region_getset[] = {
         "the parent of the region", NULL},
     {"name", (getter)Region_get_name, NULL,
         "the name of the region", NULL},
-    {"_lrc", (getter)Region_get__lrc, NULL, 
+    {"_lrc", (getter)Region_get__lrc, NULL,
         "the local-reference count, mainly intended for debugging", NULL},
-    {"_osc", (getter)Region_get__osc, NULL, 
+    {"_osc", (getter)Region_get__osc, NULL,
         "the open-subregion count, mainly intended for debugging", NULL},
-    {"_subregions", (getter)Region_get__subregions, NULL, 
+    {"_subregions", (getter)Region_get__subregions, NULL,
         "returns a list of all subregions, mainly intended for debugging", NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };

@@ -1,6 +1,5 @@
 import unittest
 from regions import Region, is_local
-import sys
 
 class TestCleanRegion(unittest.TestCase):
     def mark_region_as_dirty(self, region: Region):

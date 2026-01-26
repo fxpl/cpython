@@ -4343,7 +4343,7 @@ PyTypeObject PyListRevIter_Type = {
     listreviter_next,                           /* tp_iternext */
     listreviter_methods,                /* tp_methods */
     0,
-   .tp_flags2 = Py_TPFLAGS2_REGION_AWARE, 
+   .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /*[clinic input]
