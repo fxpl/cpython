@@ -7944,7 +7944,7 @@ ensure_nonmanaged_dict(PyObject *obj, PyObject **dictptr)
             // TODO(Immutable): For subinterpreters this will probably also need a lock!
             _PyImmutability_Freeze(_PyObject_CAST(dict));
         } else {
-            PyRegion_AddRef(obj, dict);
+            PyRegion_TakeRef(obj, dict);
         }
 
         FT_ATOMIC_STORE_PTR_RELEASE(*dictptr, dict);

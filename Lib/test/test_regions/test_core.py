@@ -58,6 +58,13 @@ class TestBasicRegionObject(unittest.TestCase):
         # The instance attribute should be initialised and owned
         self.assertTrue(r.owns(r.__dict__))
 
+    def test_instance_attribute_is_lrc_neutral(self):
+        r = Region()
+        self.assertEqual(r._lrc, 1)
+
+        r.field = {}
+        self.assertEqual(r._lrc, 1)
+
 
 class TestRegionCounts(unittest.TestCase):
     def test_osc_1(self):
