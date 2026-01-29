@@ -148,6 +148,20 @@ class TestCownLocking(unittest.TestCase):
         # Cleanup
         t2.join()
 
+    def test_release_with_region_with_instance_dict(self):
+        # This is a regression test
+        r = Region()
+        r.array = [1]
+        c = Cown(r)
+
+        # Releasing a cown with an open region should error
+        with self.assertRaises(RuntimeError):
+            c.release()
+
+        r = None
+
+        c.release()
+
     def test_release_fails_for_open_regions(self):
         r = Region()
         c = Cown(r)
@@ -162,12 +176,15 @@ class TestCownLocking(unittest.TestCase):
         c.release()
 
     def test_release_cleans_region(self):
-        c = Cown(Region())
-        c.value._make_dirty()
+        r = Region()
+        c = Cown(r)
+        r._make_dirty()
 
-        self.assertTrue(c.value.is_dirty)
+        self.assertTrue(r.is_dirty)
 
         # Releasing the cown should clean the region first in an
-        # attempt to close it
+        # attempt to close it. It will then fail, due to the local r
         with self.assertRaises(RuntimeError):
             c.release()
+
+        self.assertFalse(r.is_dirty)

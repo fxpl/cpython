@@ -108,7 +108,7 @@ class BaseTestRegionDictKeys(unittest.TestCase):
 
         # Post-condition
         self.assertTrue(r.owns(key) or isfrozen(key))
-        self.assertTrue(value)
+        self.assertTrue(r.owns(value))
 
     def check_dict_remove_ref(self, key, action):
         """

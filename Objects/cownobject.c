@@ -78,8 +78,6 @@ static _PyCown_ipid_t cown_get_owner(_PyCownObject *obj) {
 #define BAIL_UNLESS_OWNED_NULL(o) BAIL_UNLESS_OWNED(o, NULL)
 
 static int cown_set_value_unchecked(_PyCownObject* self, PyObject* value) {
-    PyObject *old = self->value;
-
     if (_PyRegion_IsBridge(value)) {
         // Inform owned region about its owner
         if (_PyRegion_SetCown(_PyRegionObject_CAST(value), self) != 0) {
@@ -88,6 +86,7 @@ static int cown_set_value_unchecked(_PyCownObject* self, PyObject* value) {
     }
 
     // Update the value
+    PyObject *old = self->value;
     Py_INCREF(value);
     self->value = value;
 
@@ -393,7 +392,7 @@ static int cown_release_region(_PyCownObject* self, _PyCown_ipid_t unlocking_ip)
     assert(_PyRegion_IsBridge(self->value));
 
     // If the region is open attempt to close it by cleaning it.
-    if (!_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
+    if (_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
         int cleaning_res = _PyRegion_Clean(_PyRegion_Get(self->value));
         if (cleaning_res < 0) {
             goto error;

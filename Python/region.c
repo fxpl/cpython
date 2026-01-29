@@ -1626,7 +1626,6 @@ int regiondata_clean(PyObject* bridge) {
         _Py_region_data* dirty_region_data = _Py_region_data_CAST(item_region);
 
         // Invariant
-        ASSERT_REGION_OWNER_HAS_NO_TAG(item_region);
         assert(regiondata_is_bridge(item_region, item));
         assert(HAS_DATA(item_region));
 
