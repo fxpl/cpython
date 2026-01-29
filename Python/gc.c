@@ -28,29 +28,89 @@ typedef struct _gc_runtime_state GCState;
 // #define GC_EXTRA_DEBUG
 
 
+/*
+_gc_prev values
+---------------
+
+Between collections, _gc_prev is used for doubly linked list.
+
+Lowest two bits of _gc_prev are used for flags.
+_PyGC_PREV_MASK_COLLECTING is used only while collecting
+and cleared before GC ends or _PyObject_GC_UNTRACK() is called.
+
+During a collection, _gc_prev is temporary used for gc_refs, and the gc list
+is singly linked until _gc_prev is restored.
+
+gc_refs
+    At the start of a collection, update_refs() copies the true refcount
+    to gc_refs, for each object in the generation being collected.
+    subtract_refs() then adjusts gc_refs so that it equals the number of
+    times an object is referenced directly from outside the generation
+    being collected.
+
+_PyGC_PREV_MASK_FINALIZED
+    This bit is set when the object's finalizer (tp_finalize) has been called.
+    The flag ensures that the finalizer is only called once.
+
+_PyGC_PREV_MASK_COLLECTING
+    This bit is set when the object is in generation which is GCed currently.
+
+    update_refs() set this bit for all objects in current generation.
+    subtract_refs() and move_unreachable() uses this to distinguish
+    visited object is in GCing or not.
+
+    move_unreachable() removes this flag from reachable objects.
+    Only unreachable objects have this flag.
+
+    No objects in interpreter have this flag after GC ends.
+
+
+_gc_next values
+---------------
+
+_gc_next takes these values:
+
+0
+    The object is not tracked
+
+!= 0
+    Pointer to the next object in the GC list.
+    Additionally, lowest two bits are used for flags as described below.
+
+_PyGC_NEXT_MASK_OLD_SPACE_1
+    This bit is the old space bit.
+    It describes the generation space the object is in.
+    It is set as follows:
+    * Young: gcstate->visited_space
+    * old[0]: 0
+    * old[1]: 1
+    * permanent: 0
+
+    old[gcstate->visited_space] is the visited space,
+    old[1-gcstate->visited_space] is the pending space.
+    The objects in the pending space are yet to be processed
+    during future incremental collections.
+
+    During a collection all objects handled should have the bit set to
+    gcstate->visited_space, as the objects are moved into the visited space.
+
+_PyGC_NEXT_MASK_UNREACHABLE
+    This flag represents the object is in the unreachable list
+    in move_unreachable().
+    When the object is moved back to the reachable set, the bit is cleared.
+
+    Although this flag is used only in move_unreachable(), move_unreachable()
+    doesn't clear this flag to skip unnecessary iteration.
+    move_legacy_finalizers() removes this flag instead.
+    Between them, unreachable list is not normal list and we can not use
+    most gc_list_* functions for it.
+*/
+
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
 
-// update_refs() set this bit for all objects in current generation.
-// subtract_refs() and move_unreachable() uses this to distinguish
-// visited object is in GCing or not.
-//
-// move_unreachable() removes this flag from reachable objects.
-// Only unreachable objects have this flag.
-//
-// No objects in interpreter have this flag after GC ends.
 #define PREV_MASK_COLLECTING   _PyGC_PREV_MASK_COLLECTING
-
-// Lowest bit of _gc_next is used for UNREACHABLE flag.
-//
-// This flag represents the object is in unreachable list in move_unreachable()
-//
-// Although this flag is used only in move_unreachable(), move_unreachable()
-// doesn't clear this flag to skip unnecessary iteration.
-// move_legacy_finalizers() removes this flag instead.
-// Between them, unreachable list is not normal list and we can not use
-// most gc_list_* functions for it.
-#define NEXT_MASK_UNREACHABLE  2
+#define NEXT_MASK_UNREACHABLE  _PyGC_NEXT_MASK_UNREACHABLE
 
 #define AS_GC(op) _Py_AS_GC(op)
 #define FROM_GC(gc) _Py_FROM_GC(gc)
@@ -191,57 +251,6 @@ _PyGC_Init(PyInterpreterState *interp)
     return _PyStatus_OK();
 }
 
-
-/*
-_gc_prev values
----------------
-
-Between collections, _gc_prev is used for doubly linked list.
-
-Lowest two bits of _gc_prev are used for flags.
-PREV_MASK_COLLECTING is used only while collecting and cleared before GC ends
-or _PyObject_GC_UNTRACK() is called.
-
-During a collection, _gc_prev is temporary used for gc_refs, and the gc list
-is singly linked until _gc_prev is restored.
-
-gc_refs
-    At the start of a collection, update_refs() copies the true refcount
-    to gc_refs, for each object in the generation being collected.
-    subtract_refs() then adjusts gc_refs so that it equals the number of
-    times an object is referenced directly from outside the generation
-    being collected.
-
-PREV_MASK_COLLECTING
-    Objects in generation being collected are marked PREV_MASK_COLLECTING in
-    update_refs().
-
-
-_gc_next values
----------------
-
-_gc_next takes these values:
-
-0
-    The object is not tracked
-
-!= 0
-    Pointer to the next object in the GC list.
-    Additionally, lowest bit is used temporary for
-    NEXT_MASK_UNREACHABLE flag described below.
-
-NEXT_MASK_UNREACHABLE
-    move_unreachable() then moves objects not reachable (whether directly or
-    indirectly) from outside the generation into an "unreachable" set and
-    set this flag.
-
-    Objects that are found to be reachable have gc_refs set to 1.
-    When this flag is set for the reachable object, the object must be in
-    "unreachable" set.
-    The flag is unset and the object is moved back to "reachable" set.
-
-    move_legacy_finalizers() will remove this flag from "unreachable" set.
-*/
 
 /*** list functions ***/
 
