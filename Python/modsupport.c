@@ -459,8 +459,12 @@ do_mkvalue(const char **p_format, va_list *p_va)
             PyObject *v;
             v = va_arg(*p_va, PyObject *);
             if (v != NULL) {
-                if (*(*p_format - 1) != 'N')
+                if (*(*p_format - 1) != 'N') {
+                    if (PyRegion_AddLocalRef(v)) {
+                        return NULL;
+                    }
                     Py_INCREF(v);
+                }
             }
             else if (!PyErr_Occurred())
                 /* If a NULL was passed

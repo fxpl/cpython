@@ -1983,6 +1983,12 @@ _PyEval_Vector(PyThreadState *tstate, PyFunctionObject *func,
                PyObject* const* args, size_t argcount,
                PyObject *kwnames)
 {
+    // Check that we can create the reference to `locals` early
+    // this makes error handling easy
+    if (PyRegion_AddLocalRef(locals)) {
+        return NULL;
+    }
+
     size_t total_args = argcount;
     if (kwnames) {
         total_args += PyTuple_GET_SIZE(kwnames);

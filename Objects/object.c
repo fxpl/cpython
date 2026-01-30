@@ -1380,6 +1380,7 @@ PyObject_GetOptionalAttr(PyObject *v, PyObject *name, PyObject **result)
         return 0;
     }
     else if (tp->tp_getattro != NULL) {
+        PyRegion_NotifyTypeUse(tp);
         *result = (*tp->tp_getattro)(v, name);
     }
     else if (tp->tp_getattr != NULL) {
@@ -1388,6 +1389,7 @@ PyObject_GetOptionalAttr(PyObject *v, PyObject *name, PyObject **result)
             *result = NULL;
             return -1;
         }
+        PyRegion_NotifyTypeUse(tp);
         *result = (*tp->tp_getattr)(v, (char *)name_str);
     }
     else {
@@ -1419,6 +1421,7 @@ PyObject_GetOptionalAttrString(PyObject *obj, const char *name, PyObject **resul
         return rc;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(obj));
     *result = (*Py_TYPE(obj)->tp_getattr)(obj, (char*)name);
     if (*result != NULL) {
         return 1;
@@ -1435,6 +1438,7 @@ PyObject_HasAttrWithError(PyObject *obj, PyObject *name)
 {
     PyObject *res;
     int rc = PyObject_GetOptionalAttr(obj, name, &res);
+    PyRegion_RemoveLocalRef(res);
     Py_XDECREF(res);
     return rc;
 }
