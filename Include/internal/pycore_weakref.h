@@ -88,12 +88,19 @@ static inline PyObject* _PyWeakref_GET_REF(PyObject *ref_obj)
         return NULL;
     }
 #endif
-    if (_Py_TryIncref(obj)) {
+    if (!_Py_TryIncref(obj)) {
         UNLOCK_WEAKREFS(obj);
-        return obj;
+        return NULL;
     }
+
+    if (PyRegion_AddLocalRef(obj)) {
+        UNLOCK_WEAKREFS(obj);
+        Py_DECREF(obj);
+        return NULL;
+    }
+
     UNLOCK_WEAKREFS(obj);
-    return NULL;
+    return obj;
 }
 
 static inline int _PyWeakref_IS_DEAD(PyObject *ref_obj)

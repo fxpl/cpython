@@ -182,11 +182,15 @@ object_is_not_callable(PyThreadState *tstate, PyObject *callable)
                           "'%.200s' object is not callable. "
                           "Did you mean: '%U.%U(...)'?",
                           Py_TYPE(callable)->tp_name, name, name);
+            PyRegion_RemoveLocalRef(attr);
             Py_DECREF(attr);
+            PyRegion_RemoveLocalRef(name);
             Py_DECREF(name);
             return;
         }
+        PyRegion_RemoveLocalRef(attr);
         Py_XDECREF(attr);
+        PyRegion_RemoveLocalRef(name);
         Py_DECREF(name);
     }
 basic_type_error:
@@ -204,12 +208,10 @@ _PyObject_MakeTpCall(PyThreadState *tstate, PyObject *callable,
     assert(nargs == 0 || args != NULL);
     assert(keywords == NULL || PyTuple_Check(keywords) || PyDict_Check(keywords));
 
-    PyRegion_NotifyTypeUse(Py_TYPE(callable));
     /* Slow path: build a temporary tuple for positional arguments and a
      * temporary dictionary for keyword arguments (if any) */
     ternaryfunc call = Py_TYPE(callable)->tp_call;
     if (call == NULL) {
-        PyRegion_NotifyTypeUse(Py_TYPE(callable));
         object_is_not_callable(tstate, callable);
         return NULL;
     }
@@ -228,8 +230,7 @@ _PyObject_MakeTpCall(PyThreadState *tstate, PyObject *callable,
             assert(args != NULL);
             kwdict = _PyStack_AsDict(args + nargs, keywords);
             if (kwdict == NULL) {
-                // Regions: No write barrier needed since argstuple is local
-                assert(PyRegion_IsLocal(argstuple));
+                PyRegion_RemoveLocalRef(argstuple);
                 Py_DECREF(argstuple);
                 return NULL;
             }
@@ -242,16 +243,16 @@ _PyObject_MakeTpCall(PyThreadState *tstate, PyObject *callable,
     PyObject *result = NULL;
     if (_Py_EnterRecursiveCallTstate(tstate, " while calling a Python object") == 0)
     {
+        PyRegion_NotifyTypeUse(Py_TYPE(callable));
         result = _PyCFunctionWithKeywords_TrampolineCall(
             (PyCFunctionWithKeywords)call, callable, argstuple, kwdict);
         _Py_LeaveRecursiveCallTstate(tstate);
     }
 
-    // Regions: No write barrier needed since argstuple is local
-    assert(PyRegion_IsLocal(argstuple));
+    PyRegion_RemoveLocalRef(argstuple);
     Py_DECREF(argstuple);
     if (kwdict != keywords) {
-        assert(PyRegion_IsLocal(kwdict));
+        PyRegion_RemoveLocalRef(kwdict);
         Py_DECREF(kwdict);
     }
 
