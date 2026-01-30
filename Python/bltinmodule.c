@@ -1461,6 +1461,10 @@ map_vectorcall(PyObject *type, PyObject * const*args,
         PyTuple_SET_ITEM(iters, i-1, it);
     }
 
+    if (PyRegion_AddLocalRef(args[0])) {
+        Py_DECREF(iters);
+        return NULL;
+    }
     mapobject *lz = (mapobject *)tp->tp_alloc(tp, 0);
     if (lz == NULL) {
         Py_DECREF(iters);
@@ -1478,8 +1482,8 @@ map_dealloc(PyObject *self)
 {
     mapobject *lz = _mapobject_CAST(self);
     PyObject_GC_UnTrack(lz);
-    Py_XDECREF(lz->iters);
-    Py_XDECREF(lz->func);
+    PyRegion_CLEAR(lz, lz->iters);
+    PyRegion_CLEAR(lz, lz->func);
     Py_TYPE(lz)->tp_free(lz);
 }
 
@@ -1517,6 +1521,7 @@ map_next(PyObject *self)
     Py_ssize_t nargs = 0;
     for (i=0; i < niters; i++) {
         PyObject *it = PyTuple_GET_ITEM(lz->iters, i);
+        PyRegion_NotifyTypeUse(Py_TYPE(it));
         PyObject *val = Py_TYPE(it)->tp_iternext(it);
         if (val == NULL) {
             if (lz->strict) {
@@ -1532,6 +1537,7 @@ map_next(PyObject *self)
 
 exit:
     for (i=0; i < nargs; i++) {
+        PyRegion_RemoveLocalRef(stack[i]);
         Py_DECREF(stack[i]);
     }
     if (stack != small_stack) {
@@ -1558,6 +1564,7 @@ check:
         PyObject *it = PyTuple_GET_ITEM(lz->iters, i);
         PyObject *val = (*Py_TYPE(it)->tp_iternext)(it);
         if (val) {
+            PyRegion_RemoveLocalRef(val);
             Py_DECREF(val);
             const char* plural = i == 1 ? " " : "s 1-";
             return PyErr_Format(PyExc_ValueError,
@@ -1586,9 +1593,17 @@ map_reduce(PyObject *self, PyObject *Py_UNUSED(ignored))
     Py_ssize_t i;
     if (args == NULL)
         return NULL;
+    if (PyRegion_AddRef(args, lz->func)) {
+        Py_DECREF(args);
+        return NULL;
+    }
     PyTuple_SET_ITEM(args, 0, Py_NewRef(lz->func));
     for (i = 0; i<numargs; i++){
         PyObject *it = PyTuple_GET_ITEM(lz->iters, i);
+        if (PyRegion_AddRef(args, it)) {
+            Py_DECREF(args);
+            return NULL;
+        }
         PyTuple_SET_ITEM(args, i+1, Py_NewRef(it));
     }
 
@@ -1671,7 +1686,8 @@ PyTypeObject PyMap_Type = {
     PyType_GenericAlloc,                /* tp_alloc */
     map_new,                            /* tp_new */
     PyObject_GC_Del,                    /* tp_free */
-    .tp_vectorcall = map_vectorcall
+    .tp_vectorcall = map_vectorcall,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
