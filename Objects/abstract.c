@@ -1908,6 +1908,7 @@ PySequence_GetItem(PyObject *s, Py_ssize_t i)
     if (m && m->sq_item) {
         if (i < 0) {
             if (m->sq_length) {
+                PyRegion_NotifyTypeUse(Py_TYPE(s));
                 Py_ssize_t l = (*m->sq_length)(s);
                 assert(_Py_CheckSlotResult(s, "__len__", l >= 0));
                 if (l < 0) {

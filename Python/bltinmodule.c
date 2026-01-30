@@ -161,6 +161,9 @@ builtin___build_class__(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
             PyObject *base0 = PyTuple_GET_ITEM(bases, 0);
             meta = (PyObject *)Py_TYPE(base0);
         }
+        if (PyRegion_AddLocalRef(meta)) {
+            goto error;
+        }
         Py_INCREF(meta);
         isclass = 1;  /* meta is really a class */
     }
@@ -174,7 +177,9 @@ builtin___build_class__(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
             goto error;
         }
         if (winner != meta) {
-            Py_SETREF(meta, Py_NewRef(winner));
+            if (PyRegion_XSETLOCALNEWREF(meta, winner)) {
+                goto error;
+            }
         }
     }
     /* else: meta is not a class, so we cannot do the metaclass
@@ -188,6 +193,7 @@ builtin___build_class__(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
     else {
         PyObject *pargs[2] = {name, bases};
         ns = PyObject_VectorcallDict(prep, pargs, 2, mkw);
+        PyRegion_RemoveLocalRef(prep);
         Py_DECREF(prep);
     }
     if (ns == NULL) {
@@ -224,23 +230,31 @@ builtin___build_class__(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
                         "__class__ set to %.200R defining %.200R as %.200R";
                     PyErr_Format(PyExc_TypeError, msg, cell_cls, name, cls);
                 }
+                PyRegion_RemoveLocalRef(cell_cls);
                 Py_XDECREF(cell_cls);
-                Py_SETREF(cls, NULL);
+                PyRegion_XSETLOCALREF(cls, NULL);
                 goto error;
             }
             else {
+                PyRegion_RemoveLocalRef(cell_cls);
                 Py_DECREF(cell_cls);
             }
         }
     }
 error:
+    PyRegion_RemoveLocalRef(cell);
     Py_XDECREF(cell);
+    PyRegion_RemoveLocalRef(ns);
     Py_XDECREF(ns);
+    PyRegion_RemoveLocalRef(meta);
     Py_XDECREF(meta);
+    PyRegion_RemoveLocalRef(mkw);
     Py_XDECREF(mkw);
     if (bases != orig_bases) {
+        PyRegion_RemoveLocalRef(orig_bases);
         Py_DECREF(orig_bases);
     }
+    PyRegion_RemoveLocalRef(bases);
     Py_DECREF(bases);
     return cls;
 }
