@@ -552,17 +552,26 @@ PyType_GetDict(PyTypeObject *self)
     return _Py_XNewRef(dict);
 }
 
-static inline void
+static inline int
 set_tp_dict(PyTypeObject *self, PyObject *dict)
 {
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = _PyStaticType_GetState(interp, self);
         assert(state != NULL);
+        if (PyRegion_TakeRef(state, dict)) {
+            Py_DECREF(dict);
+            return -1;
+        }
         state->tp_dict = dict;
-        return;
+        return 0;
+    }
+    if (PyRegion_TakeRef(self, dict)) {
+        Py_DECREF(dict);
+        return -1;
     }
     self->tp_dict = dict;
+    return 0;
 }
 
 static inline void
@@ -572,10 +581,10 @@ clear_tp_dict(PyTypeObject *self)
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = _PyStaticType_GetState(interp, self);
         assert(state != NULL);
-        Py_CLEAR(state->tp_dict);
+        PyRegion_CLEAR(state, state->tp_dict);
         return;
     }
-    Py_CLEAR(self->tp_dict);
+    PyRegion_CLEAR(self, self->tp_dict);
 }
 
 
@@ -1220,9 +1229,13 @@ type_modified_unlocked(PyTypeObject *type)
             }
             type_modified_unlocked(subclass);
             Py_DECREF(subclass);
+            PyRegion_RemoveLocalRef(subclass);
         }
     }
 
+    // FIXME(regions): xFrednet: We probably need to handle type watchers. The
+    // amount of spagetty in this file is honestly amazing. How does anybody keep
+    // all this in their head?
     // Notify registered type watchers, if any
     if (type->tp_watched) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
@@ -2428,11 +2441,12 @@ type_repr(PyObject *self)
         PyErr_Clear();
     }
     else if (!PyUnicode_Check(mod)) {
-        Py_CLEAR(mod);
+        PyRegion_XSETLOCALREF(mod, NULL);
     }
 
     PyObject *name = type_qualname(self, NULL);
     if (name == NULL) {
+        PyRegion_RemoveLocalRef(mod);
         Py_XDECREF(mod);
         return NULL;
     }
@@ -2444,7 +2458,9 @@ type_repr(PyObject *self)
     else {
         result = PyUnicode_FromFormat("<class '%s'>", type->tp_name);
     }
+    PyRegion_RemoveLocalRef(mod);
     Py_XDECREF(mod);
+    PyRegion_RemoveLocalRef(name);
     Py_DECREF(name);
 
     return result;
@@ -2492,6 +2508,7 @@ type_call(PyObject *self, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
+    PyRegion_NotifyTypeUse(type);
     obj = type->tp_new(type, args, kwds);
     obj = _Py_CheckFunctionResult(tstate, (PyObject*)type, obj, NULL);
     if (obj == NULL)
@@ -4923,16 +4940,22 @@ type_new_init(type_new_ctx *ctx)
         goto error;
     }
 
-    set_tp_dict(type, dict);
+    if (set_tp_dict(type, dict)) {
+        dict = NULL;
+        goto error;
+    }
 
     PyHeapTypeObject *et = (PyHeapTypeObject*)type;
+    if (PyRegion_TakeRef(et, ctx->slots)) {
+        goto error;
+    }
     et->ht_slots = ctx->slots;
     ctx->slots = NULL;
 
     return type;
 
 error:
-    Py_CLEAR(ctx->slots);
+    PyRegion_XSETLOCALREF(ctx->slots, NULL);
     Py_XDECREF(dict);
     return NULL;
 }
@@ -6021,6 +6044,7 @@ find_name_in_mro(PyTypeObject *type, PyObject *name, int *error)
     /* Keep a strong reference to mro because type->tp_mro can be replaced
        during dict lookup, e.g. when comparing to non-string keys. */
     Py_INCREF(mro);
+    PyRegion_AddLocalRef(mro);
     Py_ssize_t n = PyTuple_GET_SIZE(mro);
     for (Py_ssize_t i = 0; i < n; i++) {
         PyObject *base = PyTuple_GET_ITEM(mro, i);
@@ -6036,6 +6060,7 @@ find_name_in_mro(PyTypeObject *type, PyObject *name, int *error)
     }
     *error = 0;
 done:
+    PyRegion_RemoveLocalRef(mro);
     Py_DECREF(mro);
     return res;
 }
@@ -6229,6 +6254,7 @@ _PyType_LookupStackRefAndVersion(PyTypeObject *type, PyObject *name, _PyStackRef
         update_cache_gil_disabled(entry, name, assigned_version, res);
 #else
         PyObject *old_value = update_cache(entry, name, assigned_version, res);
+        PyRegion_RemoveLocalRef(old_value);
         Py_DECREF(old_value);
 #endif
     }
@@ -6404,12 +6430,14 @@ _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missin
         meta_get = Py_TYPE(meta_attribute)->tp_descr_get;
 
         if (meta_get != NULL && PyDescr_IsData(meta_attribute)) {
+            PyRegion_NotifyTypeUse(Py_TYPE(meta_attribute));
             /* Data descriptors implement tp_descr_set to intercept
              * writes. Assume the attribute is not overridden in
              * type's tp_dict (and bases): call the descriptor now.
              */
             res = meta_get(meta_attribute, (PyObject *)type,
                            (PyObject *)metatype);
+            PyRegion_RemoveLocalRef(meta_attribute);
             Py_DECREF(meta_attribute);
             return res;
         }
@@ -6422,13 +6450,16 @@ _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missin
         /* Implement descriptor functionality, if any */
         descrgetfunc local_get = Py_TYPE(attribute)->tp_descr_get;
 
+        PyRegion_RemoveLocalRef(meta_attribute);
         Py_XDECREF(meta_attribute);
 
         if (local_get != NULL) {
+            PyRegion_NotifyTypeUse(Py_TYPE(attribute));
             /* NULL 2nd argument indicates the descriptor was
              * found on the target object itself (or a base)  */
             res = local_get(attribute, (PyObject *)NULL,
                             (PyObject *)type);
+            PyRegion_RemoveLocalRef(attribute);
             Py_DECREF(attribute);
             return res;
         }
@@ -6439,9 +6470,11 @@ _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missin
     /* No attribute found in local __dict__ (or bases): use the
      * descriptor from the metatype, if any */
     if (meta_get != NULL) {
+        PyRegion_NotifyTypeUse(Py_TYPE(meta_attribute));
         PyObject *res;
         res = meta_get(meta_attribute, (PyObject *)type,
                        (PyObject *)metatype);
+        PyRegion_RemoveLocalRef(meta_attribute);
         Py_DECREF(meta_attribute);
         return res;
     }
@@ -6556,6 +6589,9 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
     }
 
     if (PyUnicode_CheckExact(name)) {
+        if (PyRegion_AddLocalRef(name)) {
+            return -1;
+        }
         Py_INCREF(name);
     }
     else {
@@ -6569,6 +6605,7 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
         if (!PyUnicode_CHECK_INTERNED(name)) {
             PyErr_SetString(PyExc_MemoryError,
                             "Out of memory interning an attribute name");
+            PyRegion_RemoveLocalRef(name);
             Py_DECREF(name);
             return -1;
         }
@@ -6583,6 +6620,7 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
     if (descr != NULL) {
         descrsetfunc f = Py_TYPE(descr)->tp_descr_set;
         if (f != NULL) {
+            PyRegion_NotifyTypeUse(Py_TYPE(descr));
             res = f(descr, (PyObject *)type, value);
             goto done;
         }
@@ -6596,8 +6634,14 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
         BEGIN_TYPE_LOCK();
         dict = type->tp_dict;
         if (dict == NULL) {
-            // TODO(Immutable): Should we freeze this here, if the same type is frozen?
-            dict = type->tp_dict = PyDict_New();
+            dict = PyDict_New();
+            if (dict && PyRegion_TakeRef(type, dict) == 0) {
+                // TODO(Immutable): Should we freeze this here, if the same type is frozen?
+                type->tp_dict = dict;
+            } else {
+                Py_XDECREF(dict);
+                dict = NULL;
+            }
         }
         END_TYPE_LOCK();
         if (dict == NULL) {
@@ -6618,8 +6662,11 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
     END_TYPE_DICT_LOCK();
 
 done:
+    PyRegion_RemoveLocalRef(name);
     Py_DECREF(name);
+    PyRegion_RemoveLocalRef(descr);
     Py_XDECREF(descr);
+    PyRegion_RemoveLocalRef(old_value);
     Py_XDECREF(old_value);
     return res;
 }
@@ -6769,11 +6816,11 @@ type_dealloc(PyObject *self)
     assert(Py_REFCNT(type) == 0);
     PyObject_ClearWeakRefs((PyObject *)type);
 
-    Py_XDECREF(type->tp_base);
-    Py_XDECREF(type->tp_dict);
-    Py_XDECREF(type->tp_bases);
-    Py_XDECREF(type->tp_mro);
-    Py_XDECREF(type->tp_cache);
+    PyRegion_CLEAR(type, type->tp_base);
+    PyRegion_CLEAR(type, type->tp_dict);
+    PyRegion_CLEAR(type, type->tp_bases);
+    PyRegion_CLEAR(type, type->tp_mro);
+    PyRegion_CLEAR(type, type->tp_cache);
     clear_tp_subclasses(type);
 
     /* A type's tp_doc is heap allocated, unlike the tp_doc slots
@@ -6782,13 +6829,13 @@ type_dealloc(PyObject *self)
     PyMem_Free((char *)type->tp_doc);
 
     PyHeapTypeObject *et = (PyHeapTypeObject *)type;
-    Py_XDECREF(et->ht_name);
-    Py_XDECREF(et->ht_qualname);
-    Py_XDECREF(et->ht_slots);
+    PyRegion_CLEAR(et, et->ht_name);
+    PyRegion_CLEAR(et, et->ht_qualname);
+    PyRegion_CLEAR(et, et->ht_slots);
     if (et->ht_cached_keys) {
         _PyDictKeys_DecRef(et->ht_cached_keys);
     }
-    Py_XDECREF(et->ht_module);
+    PyRegion_CLEAR(et, et->ht_module);
     PyMem_Free(et->_ht_tpname);
 #ifdef Py_GIL_DISABLED
     assert(et->unique_id == _Py_INVALID_UNIQUE_ID);
@@ -7059,9 +7106,8 @@ type_clear(PyObject *self)
 
     PyType_Modified(type);
     clear_tp_dict(type);
-    Py_CLEAR(((PyHeapTypeObject *)type)->ht_module);
-
-    Py_CLEAR(type->tp_mro);
+    PyRegion_CLEAR(type, ((PyHeapTypeObject *)type)->ht_module);
+    PyRegion_CLEAR(type, type->tp_mro);
 
     return 0;
 }
@@ -7124,6 +7170,7 @@ PyTypeObject PyType_Type = {
     type_is_gc,                                 /* tp_is_gc */
     .tp_vectorcall = type_vectorcall,
     .tp_reachable = type_reachable,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
@@ -7733,6 +7780,7 @@ object_getstate_default(PyObject *obj, int required)
 
     slotnames = _PyType_GetSlotNames(Py_TYPE(obj));
     if (slotnames == NULL) {
+        PyRegion_RemoveLocalRef(state);
         Py_DECREF(state);
         return NULL;
     }
@@ -7752,6 +7800,8 @@ object_getstate_default(PyObject *obj, int required)
             basicsize += sizeof(PyObject *) * PyList_GET_SIZE(slotnames);
         }
         if (Py_TYPE(obj)->tp_basicsize > basicsize) {
+            PyRegion_RemoveLocalRef(slotnames);
+            PyRegion_RemoveLocalRef(state);
             Py_DECREF(slotnames);
             Py_DECREF(state);
             PyErr_Format(PyExc_TypeError,
@@ -7767,6 +7817,8 @@ object_getstate_default(PyObject *obj, int required)
 
         slots = PyDict_New();
         if (slots == NULL) {
+            PyRegion_RemoveLocalRef(slotnames);
+            PyRegion_RemoveLocalRef(state);
             Py_DECREF(slotnames);
             Py_DECREF(state);
             return NULL;
@@ -7777,17 +7829,26 @@ object_getstate_default(PyObject *obj, int required)
             PyObject *name, *value;
 
             name = Py_NewRef(PyList_GET_ITEM(slotnames, i));
+            if (PyRegion_AddLocalRef(name)) {
+                PyRegion_AddLocalRef(name);
+                Py_DECREF(name);
+                goto error;
+            }
             if (PyObject_GetOptionalAttr(obj, name, &value) < 0) {
+                PyRegion_AddLocalRef(name);
                 Py_DECREF(name);
                 goto error;
             }
             if (value == NULL) {
+                PyRegion_AddLocalRef(name);
                 Py_DECREF(name);
                 /* It is not an error if the attribute is not present. */
             }
             else {
                 int err = PyDict_SetItem(slots, name, value);
+                PyRegion_AddLocalRef(name);
                 Py_DECREF(name);
+                PyRegion_AddLocalRef(value);
                 Py_DECREF(value);
                 if (err) {
                     goto error;
@@ -7805,6 +7866,9 @@ object_getstate_default(PyObject *obj, int required)
             /* We handle errors within the loop here. */
             if (0) {
               error:
+                PyRegion_RemoveLocalRef(slotnames);
+                PyRegion_RemoveLocalRef(slots);
+                PyRegion_RemoveLocalRef(state);
                 Py_DECREF(slotnames);
                 Py_DECREF(slots);
                 Py_DECREF(state);
@@ -7818,16 +7882,21 @@ object_getstate_default(PyObject *obj, int required)
             PyObject *state2;
 
             state2 = PyTuple_Pack(2, state, slots);
+            PyRegion_RemoveLocalRef(state);
             Py_DECREF(state);
             if (state2 == NULL) {
+                PyRegion_RemoveLocalRef(slotnames);
+                PyRegion_RemoveLocalRef(slots);
                 Py_DECREF(slotnames);
                 Py_DECREF(slots);
                 return NULL;
             }
             state = state2;
         }
+        PyRegion_RemoveLocalRef(slots);
         Py_DECREF(slots);
     }
+    PyRegion_RemoveLocalRef(slotnames);
     Py_DECREF(slotnames);
 
     return state;
@@ -7852,6 +7921,7 @@ object_getstate(PyObject *obj, int required)
     else {
         state = _PyObject_CallNoArgs(getstate);
     }
+    PyRegion_RemoveLocalRef(getstate);
     Py_DECREF(getstate);
     return state;
 }
@@ -7890,6 +7960,7 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
     getnewargs_ex = _PyObject_LookupSpecial(obj, &_Py_ID(__getnewargs_ex__));
     if (getnewargs_ex != NULL) {
         PyObject *newargs = _PyObject_CallNoArgs(getnewargs_ex);
+        PyRegion_RemoveLocalRef(getnewargs_ex);
         Py_DECREF(getnewargs_ex);
         if (newargs == NULL) {
             return -1;
@@ -7898,6 +7969,7 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
             PyErr_Format(PyExc_TypeError,
                          "__getnewargs_ex__ should return a tuple, "
                          "not '%.200s'", Py_TYPE(newargs)->tp_name);
+            PyRegion_RemoveLocalRef(newargs);
             Py_DECREF(newargs);
             return -1;
         }
@@ -7905,6 +7977,7 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
             PyErr_Format(PyExc_ValueError,
                          "__getnewargs_ex__ should return a tuple of "
                          "length 2, not %zd", PyTuple_GET_SIZE(newargs));
+            PyRegion_RemoveLocalRef(newargs);
             Py_DECREF(newargs);
             return -1;
         }
@@ -8918,7 +8991,9 @@ type_ready_set_dict(PyTypeObject *type)
     if (dict == NULL) {
         return -1;
     }
-    set_tp_dict(type, dict);
+    if (set_tp_dict(type, dict)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -12121,19 +12196,23 @@ recurse_down_subclasses(PyTypeObject *type, PyObject *attr_name,
         if (dict != NULL && PyDict_Check(dict)) {
             int r = PyDict_Contains(dict, attr_name);
             if (r < 0) {
+                PyRegion_RemoveLocalRef(subclass);
                 Py_DECREF(subclass);
                 return -1;
             }
             if (r > 0) {
+                PyRegion_RemoveLocalRef(subclass);
                 Py_DECREF(subclass);
                 continue;
             }
         }
 
         if (update_subclasses(subclass, attr_name, callback, data) < 0) {
+            PyRegion_RemoveLocalRef(subclass);
             Py_DECREF(subclass);
             return -1;
         }
+        PyRegion_RemoveLocalRef(subclass);
         Py_DECREF(subclass);
     }
     return 0;
