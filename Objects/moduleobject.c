@@ -655,6 +655,7 @@ PyModule_GetNameObject(PyObject *mod)
         goto error;
     }
     if (!PyUnicode_Check(name)) {
+        PyRegion_RemoveLocalRef(name);
         Py_DECREF(name);
         goto error;
     }

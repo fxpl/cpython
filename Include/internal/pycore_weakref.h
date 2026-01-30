@@ -85,8 +85,12 @@ static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
         // clear_weakref() was called
         return NULL;
     }
-    if (_Py_TryIncref(obj)) {
-        return obj;
+    if (!_Py_TryIncref(obj)) {
+        return NULL;
+    }
+    if (PyRegion_AddLocalRef(obj)) {
+        Py_DECREF(obj);
+        return NULL;
     }
 #else
     if (_Py_IsImmutable(obj)) {
@@ -99,11 +103,15 @@ static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
             return obj;
         }
     }
-    else if (_Py_TryIncref(obj)) {
-        return obj;
+    else if (!_Py_TryIncref(obj)) {
+        return NULL;
+    }
+    if (PyRegion_AddLocalRef(obj)) {
+        Py_DECREF(obj);
+        return NULL;
     }
 #endif
-    return NULL;
+    return obj;
 }
 
 static inline PyObject* _PyWeakref_GET_REF(PyObject *ref_obj)

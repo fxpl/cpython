@@ -1,5 +1,5 @@
 import unittest
-from regions import Region, is_local
+from regions import Region, is_local, get_last_dirty_reason
 
 class TestCleanRegion(unittest.TestCase):
     def mark_region_as_dirty(self, region: Region):
@@ -25,7 +25,7 @@ class TestCleanRegion(unittest.TestCase):
         region.sub.obj = None
 
         # Precondition
-        self.assertFalse(region.sub.is_dirty, "The subregion should be clean")
+        self.assertFalse(region.sub.is_dirty, f"The subregion should be clean: last dirty reason {get_last_dirty_reason()}")
         self.assertTrue(region.sub.owns(detached_object))
 
         # Action - Only dirty regions should be effected by this clean call
@@ -33,7 +33,7 @@ class TestCleanRegion(unittest.TestCase):
 
         # Postcondition
         self.assertEqual(cleaned, 1)
-        self.assertFalse(region.is_dirty, "The parent region should be cleaned")
+        self.assertFalse(region.is_dirty, f"The parent region should be cleaned: last dirty reason {get_last_dirty_reason()}")
         self.assertTrue(region.sub.owns(detached_object), "The subregion should remain uncleaned")
 
     def test_cleaning_also_cleans_dirty_subregion(self):
@@ -68,8 +68,8 @@ class TestCleanRegion(unittest.TestCase):
         self.mark_region_as_dirty(region.sub.sub)
 
         # Precondition
-        self.assertFalse(region.is_dirty, "The region should be clean")
-        self.assertFalse(region.sub.is_dirty, "The subregion should be clean")
+        self.assertFalse(region.is_dirty, f"The region should be clean, last dirty reason {get_last_dirty_reason()}")
+        self.assertFalse(region.sub.is_dirty, f"The subregion should be clean, last dirty reason {get_last_dirty_reason()}")
         self.assertTrue(region.sub.sub.owns(detached_object))
 
         # Action: Clean should find the dirty subsubregion
