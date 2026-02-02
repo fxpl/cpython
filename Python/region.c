@@ -2436,3 +2436,6 @@ void PyRegion_RecycleObject(PyObject *obj) {
 //                           true, since the objects inside the region should be inaccessible
 //                           when the region is closed
 // FIXME(regions): xFrednet: Write barriers in bytecode seems to be working verify this
+// FIXME(regions): xFrednet: Region opt-in/out is currently on a per type basis, for modules we
+//                           might want to use slots to allow opt-in/out on a module level.
+
