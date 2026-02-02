@@ -2993,6 +2993,7 @@ _PyObject_LookupSpecial(PyObject *self, PyObject *attr)
     if (res != NULL) {
         descrgetfunc f;
         if ((f = Py_TYPE(res)->tp_descr_get) != NULL) {
+            PyRegion_NotifyTypeUse(Py_TYPE(res));
             Py_SETREF(res, f(res, self, (PyObject *)(Py_TYPE(self))));
         }
     }
