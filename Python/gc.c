@@ -1247,9 +1247,6 @@ Contracts:
 
     * The "base" has to be a valid list with no mask set.
 
-    * The "unreachable" list must be uninitialized (this function calls
-      gc_list_init over 'unreachable').
-
 IMPORTANT: This function leaves 'unreachable' with the NEXT_MASK_UNREACHABLE
 flag set but it does not clear it to skip unnecessary iteration. Before the
 flag is cleared (for example, by using 'clear_unreachable_mask' function or
@@ -1312,9 +1309,6 @@ deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
    Contracts:
        * After this function 'unreachable' must not be used anymore and 'still_unreachable'
          will contain the objects that did not resurrect.
-
-       * The "still_unreachable" list must be uninitialized (this function calls
-         gc_list_init over 'still_unreachable').
 
 IMPORTANT: After a call to this function, the 'still_unreachable' set will have the
 PREV_MARK_COLLECTING set, but the objects in this set are going to be removed so
