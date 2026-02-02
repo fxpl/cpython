@@ -245,6 +245,7 @@ PyObject_SetItem(PyObject *o, PyObject *key, PyObject *value)
             return -1;
         }
 
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         int res = m->mp_ass_subscript(o, key, value);
         assert(_Py_CheckSlotResult(o, "__setitem__", res >= 0));
         return res;
@@ -289,6 +290,7 @@ PyObject_DelItem(PyObject *o, PyObject *key)
             return -1;
         }
 
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         int res = m->mp_ass_subscript(o, key, (PyObject*)NULL);
         assert(_Py_CheckSlotResult(o, "__delitem__", res >= 0));
         return res;
@@ -1978,6 +1980,7 @@ PySequence_SetItem(PyObject *s, Py_ssize_t i, PyObject *o)
                 i += l;
             }
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         int res = m->sq_ass_item(s, i, o);
         assert(_Py_CheckSlotResult(s, "__setitem__", res >= 0));
         return res;
@@ -2016,6 +2019,7 @@ PySequence_DelItem(PyObject *s, Py_ssize_t i)
                 i += l;
             }
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         int res = m->sq_ass_item(s, i, (PyObject *)NULL);
         assert(_Py_CheckSlotResult(s, "__delitem__", res >= 0));
         return res;
@@ -2959,8 +2963,7 @@ iternext(PyObject *iter, PyObject **item)
     iternextfunc tp_iternext = Py_TYPE(iter)->tp_iternext;
     // Check if the type is Pyrona aware, otherwise, mark all open
     // regions as dirty
-    // FIXME(regions): Enable this check, which currently almost always triggers
-    // PyRegion_NotifyTypeUse(Py_TYPE(iter));
+    PyRegion_NotifyTypeUse(Py_TYPE(iter));
 
     if ((*item = tp_iternext(iter))) {
         return 1;

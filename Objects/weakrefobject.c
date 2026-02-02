@@ -116,7 +116,7 @@ init_weakref(PyWeakReference *self, PyObject *ob, PyObject *callback)
     self->wr_object = ob;
     self->wr_prev = NULL;
     self->wr_next = NULL;
-    self->wr_callback = Py_XNewRef(callback);
+    self->wr_callback = PyRegion_XNewRef(callback);
     if (callback == NULL) {
         self->callback_ipid = -1;
     }
@@ -155,6 +155,10 @@ clear_weakref_lock_held(PyWeakReference *self, PyObject **callback)
     }
     if (callback != NULL) {
         *callback = self->wr_callback;
+        if (PyRegion_AddLocalRef(*callback)) {
+            PyRegion_DirtyObjectRegion(*callback);
+        }
+        PyRegion_RemoveRef(self, *callback);
         self->wr_callback = NULL;
     }
 }
@@ -171,7 +175,7 @@ clear_weakref(PyObject *op)
     LOCK_WEAKREFS_FOR_WR(self);
     clear_weakref_lock_held(self, &callback);
     UNLOCK_WEAKREFS_FOR_WR(self);
-    Py_XDECREF(callback);
+    PyRegion_CLEARLOCAL(callback);
 }
 
 
@@ -220,7 +224,7 @@ gc_clear(PyObject *op)
     // The world is stopped during GC in free-threaded builds. It's safe to
     // call this without holding the lock.
     clear_weakref_lock_held(self, &callback);
-    Py_XDECREF(callback);
+    PyRegion_CLEARLOCAL(callback);
     return 0;
 }
 
@@ -258,7 +262,7 @@ weakref_hash(PyObject *op)
         return -1;
     }
     hash = PyObject_Hash(obj);
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     _Py_atomic_store_ssize_relaxed(&self->hash, hash);
     return hash;
 }
@@ -283,8 +287,8 @@ weakref_repr(PyObject *self)
             "<weakref at %p; to '%T' at %p (%U)>",
             self, obj, obj, name);
     }
-    Py_DECREF(obj);
-    Py_XDECREF(name);
+    PyRegion_CLEARLOCAL(obj);
+    PyRegion_CLEARLOCAL(name);
     return repr;
 }
 
@@ -303,8 +307,8 @@ weakref_richcompare(PyObject* self, PyObject* other, int op)
     PyObject* obj = _PyWeakref_GET_REF(self);
     PyObject* other_obj = _PyWeakref_GET_REF(other);
     if (obj == NULL || other_obj == NULL) {
-        Py_XDECREF(obj);
-        Py_XDECREF(other_obj);
+        PyRegion_CLEARLOCAL(obj);
+        PyRegion_CLEARLOCAL(other_obj);
         int res = (self == other);
         if (op == Py_NE)
             res = !res;
@@ -314,8 +318,8 @@ weakref_richcompare(PyObject* self, PyObject* other, int op)
             Py_RETURN_FALSE;
     }
     PyObject* res = PyObject_RichCompare(obj, other_obj, op);
-    Py_DECREF(obj);
-    Py_DECREF(other_obj);
+    PyRegion_CLEARLOCAL(obj);
+    PyRegion_CLEARLOCAL(other_obj);
     return res;
 }
 
@@ -403,10 +407,15 @@ try_reuse_basic_ref(PyWeakReference *list, PyTypeObject *type,
     PyObject* candobj = _PyObject_CAST(cand);
     int incref_res = _Py_IsImmutable(candobj) ?
         _Py_TryIncref_Immutable(candobj) : _Py_TryIncref(candobj);
-    if (incref_res) {
-        return cand;
+    if (!incref_res) {
+        return NULL;
     }
-    return NULL;
+
+    if (PyRegion_AddLocalRef(cand)) {
+        Py_DECREF(cand);
+        return NULL;
+    }
+    return cand;
 }
 
 static int
@@ -642,6 +651,9 @@ proxy_check_ref(PyObject *obj)
             } \
         } \
         else { \
+            if (PyRegion_AddLocalRef(o)) { \
+                return NULL; \
+            } \
             Py_INCREF(o); \
         }
 
@@ -650,7 +662,7 @@ proxy_check_ref(PyObject *obj)
     method(PyObject *proxy) { \
         UNWRAP(proxy); \
         PyObject* res = generic(proxy); \
-        Py_DECREF(proxy); \
+        PyRegion_CLEARLOCAL(proxy); \
         return res; \
     }
 
@@ -660,8 +672,8 @@ proxy_check_ref(PyObject *obj)
         UNWRAP(x); \
         UNWRAP(y); \
         PyObject* res = generic(x, y); \
-        Py_DECREF(x); \
-        Py_DECREF(y); \
+        PyRegion_CLEARLOCAL(x); \
+        PyRegion_CLEARLOCAL(y); \
         return res; \
     }
 
@@ -677,9 +689,9 @@ proxy_check_ref(PyObject *obj)
             UNWRAP(w); \
         } \
         PyObject* res = generic(proxy, v, w); \
-        Py_DECREF(proxy); \
-        Py_DECREF(v); \
-        Py_XDECREF(w); \
+        PyRegion_CLEARLOCAL(proxy); \
+        PyRegion_CLEARLOCAL(v); \
+        PyRegion_CLEARLOCAL(w); \
         return res; \
     }
 
@@ -688,7 +700,7 @@ proxy_check_ref(PyObject *obj)
     method(PyObject *proxy, PyObject *Py_UNUSED(ignored)) { \
             UNWRAP(proxy); \
             PyObject* res = PyObject_CallMethodNoArgs(proxy, &_Py_ID(SPECIAL)); \
-            Py_DECREF(proxy); \
+            PyRegion_CLEARLOCAL(proxy); \
             return res; \
         }
 
@@ -708,7 +720,7 @@ proxy_repr(PyObject *proxy)
         repr = PyUnicode_FromFormat(
             "<weakproxy at %p; to '%T' at %p>",
             proxy, obj, obj);
-        Py_DECREF(obj);
+        PyRegion_CLEARLOCAL(obj);
     }
     else {
         repr = PyUnicode_FromFormat(
@@ -727,7 +739,7 @@ proxy_setattr(PyObject *proxy, PyObject *name, PyObject *value)
         return -1;
     }
     int res = PyObject_SetAttr(obj, name, value);
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     return res;
 }
 
@@ -737,8 +749,8 @@ proxy_richcompare(PyObject *proxy, PyObject *v, int op)
     UNWRAP(proxy);
     UNWRAP(v);
     PyObject* res = PyObject_RichCompare(proxy, v, op);
-    Py_DECREF(proxy);
-    Py_DECREF(v);
+    PyRegion_CLEARLOCAL(proxy);
+    PyRegion_CLEARLOCAL(v);
     return res;
 }
 
@@ -786,7 +798,7 @@ proxy_bool(PyObject *proxy)
         return -1;
     }
     int res = PyObject_IsTrue(o);
-    Py_DECREF(o);
+    PyRegion_CLEARLOCAL(o);
     return res;
 }
 
@@ -808,7 +820,7 @@ proxy_contains(PyObject *proxy, PyObject *value)
         return -1;
     }
     int res = PySequence_Contains(obj, value);
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     return res;
 }
 
@@ -822,7 +834,7 @@ proxy_length(PyObject *proxy)
         return -1;
     }
     Py_ssize_t res = PyObject_Length(obj);
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     return res;
 }
 
@@ -841,7 +853,7 @@ proxy_setitem(PyObject *proxy, PyObject *key, PyObject *value)
     } else {
         res = PyObject_SetItem(obj, key, value);
     }
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     return res;
 }
 
@@ -855,7 +867,7 @@ proxy_iter(PyObject *proxy)
         return NULL;
     }
     PyObject* res = PyObject_GetIter(obj);
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     return res;
 }
 
@@ -870,11 +882,11 @@ proxy_iternext(PyObject *proxy)
         PyErr_Format(PyExc_TypeError,
             "Weakref proxy referenced a non-iterator '%.200s' object",
             Py_TYPE(obj)->tp_name);
-        Py_DECREF(obj);
+        PyRegion_CLEARLOCAL(obj);
         return NULL;
     }
     PyObject* res = PyIter_Next(obj);
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     return res;
 }
 
@@ -980,6 +992,7 @@ _PyWeakref_ProxyType = {
     proxy_iternext,                     /* tp_iternext */
     proxy_methods,                      /* tp_methods */
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
@@ -1014,6 +1027,7 @@ _PyWeakref_CallableProxyType = {
     proxy_iter,                         /* tp_iter */
     proxy_iternext,                     /* tp_iternext */
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyObject *
@@ -1077,7 +1091,7 @@ PyWeakref_GetObject(PyObject *ref)
     if (obj == NULL) {
         return Py_None;
     }
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
     return obj;  // borrowed reference
 }
 
@@ -1095,7 +1109,7 @@ handle_callback(PyWeakReference *ref, PyObject *callback)
                                "calling weakref callback %R", callback);
     }
     else {
-        Py_DECREF(cbresult);
+        PyRegion_CLEARLOCAL(cbresult);
     }
 }
 
@@ -1173,7 +1187,7 @@ PyObject_ClearWeakRefs(PyObject *object)
         done = (*list == NULL);
         UNLOCK_WEAKREFS(object);
 
-        Py_XDECREF(callback);
+        PyRegion_CLEARLOCAL(callback);
     }
 
     for (Py_ssize_t i = 0; i < num_items; i += 2) {
@@ -1184,7 +1198,7 @@ PyObject_ClearWeakRefs(PyObject *object)
         }
     }
 
-    Py_DECREF(tuple);
+    PyRegion_CLEARLOCAL(tuple);
 
     assert(!PyErr_Occurred());
     PyErr_SetRaisedException(exc);

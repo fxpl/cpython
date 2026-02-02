@@ -1316,6 +1316,7 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
 
     PyObject* result = NULL;
     if (tp->tp_getattro != NULL) {
+        PyRegion_NotifyTypeUse(tp);
         result = (*tp->tp_getattro)(v, name);
     }
     else if (tp->tp_getattr != NULL) {
@@ -1323,6 +1324,7 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
         if (name_str == NULL) {
             return NULL;
         }
+        PyRegion_NotifyTypeUse(tp);
         result = (*tp->tp_getattr)(v, (char *)name_str);
     }
     else {
