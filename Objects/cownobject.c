@@ -618,7 +618,7 @@ int _PyCown_AcquireGC(_PyCownObject *self, Py_region_t *region) {
 
     // The cown was snatched up by something else. This is fine for
     // the GC
-    if (res != COWN_ACQUIRE_FAIL) {
+    if (res == COWN_ACQUIRE_FAIL) {
         return 0;
     }
     assert(res == COWN_ACQUIRE_SUCCESS);
