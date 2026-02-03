@@ -1522,7 +1522,7 @@ type_name(PyObject *tp, void *Py_UNUSED(closure))
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
         PyHeapTypeObject* et = (PyHeapTypeObject*)type;
-        return Py_NewRef(et->ht_name);
+        return PyRegion_NewRef(et->ht_name);
     }
     else {
         return PyUnicode_FromString(_PyType_Name(type));
@@ -1535,7 +1535,7 @@ type_qualname(PyObject *tp, void *Py_UNUSED(closure))
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
         PyHeapTypeObject* et = (PyHeapTypeObject*)type;
-        return Py_NewRef(et->ht_qualname);
+        return PyRegion_NewRef(et->ht_qualname);
     }
     else {
         return PyUnicode_FromString(_PyType_Name(type));
@@ -4067,6 +4067,9 @@ _PyObject_SetDict(PyObject *obj, PyObject *value)
                         "This object has no __dict__");
         return -1;
     }
+    if (PyRegion_AddRef(obj, value)) {
+        return -1;
+    }
     Py_BEGIN_CRITICAL_SECTION(obj);
     // gh-133980: To prevent use-after-free from other threads that reference
     // the __dict__
@@ -4121,7 +4124,7 @@ subtype_getweakref(PyObject *obj, void *context)
         result = Py_None;
     else
         result = *weaklistptr;
-    return Py_NewRef(result);
+    return PyRegion_NewRef(result);
 }
 
 /* getset definitions for common descriptors */
@@ -4952,6 +4955,7 @@ type_new_init(type_new_ctx *ctx)
     }
     et->ht_slots = ctx->slots;
     ctx->slots = NULL;
+    et->ht_type.tp_flags2 = Py_TPFLAGS2_REGION_AWARE;
 
     return type;
 
