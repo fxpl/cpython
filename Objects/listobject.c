@@ -4127,6 +4127,7 @@ PyTypeObject PyList_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = list_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_LIST,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /*********************** List Iterator **************************/
