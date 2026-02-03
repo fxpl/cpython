@@ -1333,7 +1333,7 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
 }
 
 static void
-gc_collect_region(PyThreadState *tstate,
+gc_collect_chunk(PyThreadState *tstate,
                   PyGC_Head *from,
                   PyGC_Head *to,
                   struct gc_collection_stats *stats);
@@ -1391,7 +1391,7 @@ gc_collect_young(PyThreadState *tstate,
     PyGC_Head survivors;
     gc_list_init(&survivors);
     gc_list_set_space(young, gcstate->visited_space);
-    gc_collect_region(tstate, young, &survivors, stats);
+    gc_collect_chunk(tstate, young, &survivors, stats);
     gc_list_merge(&survivors, visited);
     validate_spaces(gcstate);
     gcstate->young.count = 0;
@@ -1436,7 +1436,7 @@ visit_add_to_container(PyObject *op, void *arg)
 }
 
 static intptr_t
-expand_region_transitively_reachable(PyGC_Head *container, PyGC_Head *gc, GCState *gcstate)
+expand_chunk_transitively_reachable(PyGC_Head *container, PyGC_Head *gc, GCState *gcstate)
 {
     struct container_and_flag arg = {
         .container = container,
@@ -1701,14 +1701,14 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
         increment_size++;
         assert(!_Py_IsImmortal(FROM_GC(gc)) && PyRegion_IsLocal(FROM_GC(gc)));
         gc_set_old_space(gc, gcstate->visited_space);
-        increment_size += expand_region_transitively_reachable(&increment, gc, gcstate);
+        increment_size += expand_chunk_transitively_reachable(&increment, gc, gcstate);
     }
     GC_STAT_ADD(1, objects_not_transitively_reachable, increment_size);
     validate_list(&increment, collecting_clear_unreachable_clear);
     gc_list_validate_space(&increment, gcstate->visited_space);
     PyGC_Head survivors;
     gc_list_init(&survivors);
-    gc_collect_region(tstate, &increment, &survivors, stats);
+    gc_collect_chunk(tstate, &increment, &survivors, stats);
     gc_list_merge(&survivors, visited);
     assert(gc_list_is_empty(&increment));
     gcstate->work_to_do += gcstate->heap_size / SCAN_RATE_DIVISOR / scale_factor;
@@ -1740,7 +1740,7 @@ gc_collect_full(PyThreadState *tstate,
     gc_list_merge(pending, visited);
     validate_spaces(gcstate);
 
-    gc_collect_region(tstate, visited, visited,
+    gc_collect_chunk(tstate, visited, visited,
                       stats);
     validate_spaces(gcstate);
     gcstate->young.count = 0;
@@ -1755,7 +1755,7 @@ gc_collect_full(PyThreadState *tstate,
 /* This is the main function. Read this to understand how the
  * collection process works. */
 static void
-gc_collect_region(PyThreadState *tstate,
+gc_collect_chunk(PyThreadState *tstate,
                   PyGC_Head *from,
                   PyGC_Head *to,
                   struct gc_collection_stats *stats)
