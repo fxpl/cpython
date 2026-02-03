@@ -1254,7 +1254,10 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
         return Py_OWNERSHIP_TRAVERSE_SKIP;
     }
 
-    if (PyUnicode_CheckExact(tgt)) {
+    // FIXME(regions): xFrednet: Making these objects immutable is
+    // a hack, because we don't need them to work for the minimum
+    // viable product and correctly implementing them is a pain!
+    if (PyUnicode_CheckExact(tgt) || PyType_Check(tgt)) {
         if (_PyImmutability_Freeze(tgt)) {
             return Py_OWNERSHIP_TRAVERSE_ERR;
         }

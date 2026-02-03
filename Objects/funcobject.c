@@ -656,7 +656,7 @@ func_get_code(PyObject *self, void *Py_UNUSED(ignored))
         return NULL;
     }
 
-    return Py_NewRef(op->func_code);
+    return PyRegion_NewRef(op->func_code);
 }
 
 static int
@@ -704,7 +704,9 @@ func_set_code(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
 
     handle_func_event(PyFunction_EVENT_MODIFY_CODE, op, value);
     _PyFunction_ClearVersion(op);
-    Py_XSETREF(op->func_code, Py_NewRef(value));
+    if (PyRegion_XSETNEWREF(op, op->func_code, value)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -712,7 +714,7 @@ static PyObject *
 func_get_name(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyFunctionObject *op = _PyFunction_CAST(self);
-    return Py_NewRef(op->func_name);
+    return PyRegion_NewRef(op->func_name);
 }
 
 static int
@@ -726,7 +728,9 @@ func_set_name(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
                         "__name__ must be set to a string object");
         return -1;
     }
-    Py_XSETREF(op->func_name, Py_NewRef(value));
+    if (PyRegion_XSETNEWREF(op, op->func_name, value)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -734,7 +738,7 @@ static PyObject *
 func_get_qualname(PyObject *self, void *Py_UNUSED(ignored))
 {
     PyFunctionObject *op = _PyFunction_CAST(self);
-    return Py_NewRef(op->func_qualname);
+    return PyRegion_NewRef(op->func_qualname);
 }
 
 static int
@@ -749,7 +753,9 @@ func_set_qualname(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
         return -1;
     }
     handle_func_event(PyFunction_EVENT_MODIFY_QUALNAME, (PyFunctionObject *) op, value);
-    Py_XSETREF(op->func_qualname, Py_NewRef(value));
+    if (PyRegion_XSETNEWREF(op, op->func_qualname, value)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -763,7 +769,7 @@ func_get_defaults(PyObject *self, void *Py_UNUSED(ignored))
     if (op->func_defaults == NULL) {
         Py_RETURN_NONE;
     }
-    return Py_NewRef(op->func_defaults);
+    return PyRegion_NewRef(op->func_defaults);
 }
 
 static int
@@ -791,7 +797,9 @@ func_set_defaults(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
 
     handle_func_event(PyFunction_EVENT_MODIFY_DEFAULTS, op, value);
     _PyFunction_ClearVersion(op);
-    Py_XSETREF(op->func_defaults, Py_XNewRef(value));
+    if (PyRegion_XSETNEWREF(op, op->func_defaults, value)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -806,7 +814,7 @@ func_get_kwdefaults(PyObject *self, void *Py_UNUSED(ignored))
     if (op->func_kwdefaults == NULL) {
         Py_RETURN_NONE;
     }
-    return Py_NewRef(op->func_kwdefaults);
+    return PyRegion_NewRef(op->func_kwdefaults);
 }
 
 static int
@@ -834,7 +842,9 @@ func_set_kwdefaults(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
 
     handle_func_event(PyFunction_EVENT_MODIFY_KWDEFAULTS, op, value);
     _PyFunction_ClearVersion(op);
-    Py_XSETREF(op->func_kwdefaults, Py_XNewRef(value));
+    if (PyRegion_XSETNEWREF(op, op->func_kwdefaults, value)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -905,9 +915,13 @@ function___annotations___get_impl(PyFunctionObject *self)
         self->func_annotations = PyDict_New();
         if (self->func_annotations == NULL)
             return NULL;
+        if (PyRegion_TakeRef(self, self->func_annotations)) {
+            Py_CLEAR(self->func_annotations);
+            return NULL;
+        }
     }
     d = func_get_annotation_dict(self);
-    return Py_XNewRef(d);
+    return PyRegion_XNewRef(d);
 }
 
 /*[clinic input]
@@ -935,8 +949,10 @@ function___annotations___set_impl(PyFunctionObject *self, PyObject *value)
             "__annotations__ must be set to a dict object");
         return -1;
     }
-    Py_XSETREF(self->func_annotations, Py_XNewRef(value));
-    Py_CLEAR(self->func_annotate);
+    if (PyRegion_XSETNEWREF(self, self->func_annotations, value)) {
+        return -1;
+    }
+    PyRegion_CLEAR(self, self->func_annotate);
     return 0;
 }
 
@@ -957,7 +973,7 @@ function___type_params___get_impl(PyFunctionObject *self)
     }
 
     assert(PyTuple_Check(self->func_typeparams));
-    return Py_NewRef(self->func_typeparams);
+    return PyRegion_NewRef(self->func_typeparams);
 }
 
 /*[clinic input]
@@ -977,7 +993,9 @@ function___type_params___set_impl(PyFunctionObject *self, PyObject *value)
                         "__type_params__ must be set to a tuple");
         return -1;
     }
-    Py_XSETREF(self->func_typeparams, Py_NewRef(value));
+    if (PyRegion_XSETNEWREF(self, self->func_typeparams, value)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -988,8 +1006,11 @@ _Py_set_function_type_params(PyThreadState *Py_UNUSED(ignored), PyObject *func,
     assert(PyFunction_Check(func));
     assert(PyTuple_Check(type_params));
     PyFunctionObject *f = (PyFunctionObject *)func;
-    Py_XSETREF(f->func_typeparams, Py_NewRef(type_params));
-    return Py_NewRef(func);
+    if (PyRegion_XSETNEWREF(f, f->func_typeparams, type_params)) {
+        return NULL;
+    }
+    // Regions: This should never fail, since we have a local reference to `func`
+    return PyRegion_NewRef(func);
 }
 
 static PyGetSetDef func_getsetlist[] = {
@@ -1098,7 +1119,14 @@ func_new_impl(PyTypeObject *type, PyCodeObject *code, PyObject *globals,
         return NULL;
     }
     if (name != Py_None) {
-        Py_SETREF(newfunc->func_name, Py_NewRef(name));
+        if (PyRegion_XSETNEWREF(newfunc, newfunc->func_name, Py_NewRef(name))) {
+            Py_DECREF(newfunc);
+            return NULL;
+        }
+    }
+    if (PyRegion_AddRefs(newfunc, defaults, closure, kwdefaults)) {
+        Py_DECREF(newfunc);
+        return NULL;
     }
     if (defaults != Py_None) {
         newfunc->func_defaults = Py_NewRef(defaults);
@@ -1121,29 +1149,31 @@ func_clear(PyObject *self)
     PyObject *globals = op->func_globals;
     op->func_globals = NULL;
     if (globals != NULL) {
+        PyRegion_RemoveRef(op, globals);
         _Py_DECREF_DICT(globals);
     }
     PyObject *builtins = op->func_builtins;
     op->func_builtins = NULL;
     if (builtins != NULL) {
+        PyRegion_RemoveRef(op, builtins);
         _Py_DECREF_BUILTINS(builtins);
     }
-    Py_CLEAR(op->func_module);
-    Py_CLEAR(op->func_defaults);
-    Py_CLEAR(op->func_kwdefaults);
-    Py_CLEAR(op->func_doc);
-    Py_CLEAR(op->func_dict);
-    Py_CLEAR(op->func_closure);
-    Py_CLEAR(op->func_annotations);
-    Py_CLEAR(op->func_annotate);
-    Py_CLEAR(op->func_typeparams);
+    PyRegion_CLEAR(op, op->func_module);
+    PyRegion_CLEAR(op, op->func_defaults);
+    PyRegion_CLEAR(op, op->func_kwdefaults);
+    PyRegion_CLEAR(op, op->func_doc);
+    PyRegion_CLEAR(op, op->func_dict);
+    PyRegion_CLEAR(op, op->func_closure);
+    PyRegion_CLEAR(op, op->func_annotations);
+    PyRegion_CLEAR(op, op->func_annotate);
+    PyRegion_CLEAR(op, op->func_typeparams);
     // Don't Py_CLEAR(op->func_code), since code is always required
     // to be non-NULL. Similarly, name and qualname shouldn't be NULL.
     // However, name and qualname could be str subclasses, so they
     // could have reference cycles. The solution is to replace them
     // with a genuinely immutable string.
-    Py_SETREF(op->func_name, &_Py_STR(empty));
-    Py_SETREF(op->func_qualname, &_Py_STR(empty));
+    PyRegion_XSETNEWREF(op, op->func_name, &_Py_STR(empty));
+    PyRegion_XSETNEWREF(op, op->func_qualname, &_Py_STR(empty));
     return 0;
 }
 
@@ -1160,9 +1190,10 @@ func_dealloc(PyObject *self)
     FT_CLEAR_WEAKREFS(self, op->func_weakreflist);
     (void)func_clear((PyObject*)op);
     // These aren't cleared by func_clear().
+    PyRegion_RemoveRef(op, op->func_code);
     _Py_DECREF_CODE((PyCodeObject *)op->func_code);
-    Py_DECREF(op->func_name);
-    Py_DECREF(op->func_qualname);
+    PyRegion_CLEAR(op, op->func_name);
+    PyRegion_CLEAR(op, op->func_qualname);
     PyObject_GC_Del(op);
 }
 
@@ -1200,7 +1231,7 @@ static PyObject *
 func_descr_get(PyObject *func, PyObject *obj, PyObject *type)
 {
     if (obj == Py_None || obj == NULL) {
-        return Py_NewRef(func);
+        return PyRegion_NewRef(func);
     }
     return PyMethod_New(func, obj);
 }
@@ -1246,6 +1277,7 @@ PyTypeObject PyFunction_Type = {
     0,                                          /* tp_init */
     0,                                          /* tp_alloc */
     func_new,                                   /* tp_new */
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE
 };
 
 

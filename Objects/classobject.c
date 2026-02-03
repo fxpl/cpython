@@ -121,6 +121,10 @@ PyMethod_New(PyObject *func, PyObject *self)
             return NULL;
         }
     }
+    if (PyRegion_AddRefs(im, func, self)) {
+        Py_DECREF(im);
+        return NULL;
+    }
     im->im_weakreflist = NULL;
     im->im_func = Py_NewRef(func);
     im->im_self = Py_NewRef(self);
