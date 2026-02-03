@@ -4128,6 +4128,7 @@ PyTypeObject PyList_Type = {
     .tp_vectorcall = list_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_LIST,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /*********************** List Iterator **************************/
