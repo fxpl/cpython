@@ -4,6 +4,7 @@
 
 #include "Python.h"
 #include "pycore_ceval.h"         // _Py_set_eval_breaker_bit()
+#include "pycore_cown.h"          // _PyCown_Type
 #include "pycore_dict.h"          // _PyInlineValuesSize()
 #include "pycore_initconfig.h"    // _PyStatus_OK()
 #include "pycore_interp.h"        // PyInterpreterState.gc
@@ -2150,6 +2151,27 @@ _PyGC_CollectNoFail(PyThreadState *tstate)
        See http://bugs.python.org/issue8713#msg195178 for an example.
        */
     _PyGC_Collect(_PyThreadState_GET(), 2, _Py_GC_REASON_SHUTDOWN);
+}
+
+Py_ssize_t
+_PyGC_CollectRegion(PyThreadState *tstate, PyObject *cown, _PyGC_Reason reason)
+{
+    if (!Py_IS_TYPE(cown, &_PyCown_Type)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "the region to collect must be passed as a Cown");
+        return 0;
+    }
+    Py_region_t region;
+    int acquire_res = _PyCown_AcquireGC(_PyCownObject_CAST(cown), &region);
+    assert (acquire_res >= 0);
+    if (acquire_res <= 0) {
+        // could not acquire the cown, perhaps someone else has it
+        return 0;
+    }
+    // TODO: implement region-based collection
+    Py_ssize_t result = 42;
+    _PyCown_ReleaseGC(_PyCownObject_CAST(cown));
+    return result;
 }
 
 void

@@ -338,6 +338,7 @@ extern void _PyGC_InitState(struct _gc_runtime_state *);
 
 extern Py_ssize_t _PyGC_Collect(PyThreadState *tstate, int generation, _PyGC_Reason reason);
 extern void _PyGC_CollectNoFail(PyThreadState *tstate);
+extern Py_ssize_t _PyGC_CollectRegion(PyThreadState *tstate, PyObject *cown, _PyGC_Reason reason);
 
 /* Freeze objects tracked by the GC and ignore them in future collections. */
 extern void _PyGC_Freeze(PyInterpreterState *interp);

@@ -77,7 +77,7 @@ PyDoc_STRVAR(gc_collect__doc__,
 "collect($module, /, generation=2)\n"
 "--\n"
 "\n"
-"Run the garbage collector.\n"
+"Run the garbage collector on the local region.\n"
 "\n"
 "With no arguments, run a full collection.  The optional argument\n"
 "may be an integer specifying which generation to collect.  A ValueError\n"
@@ -141,6 +141,73 @@ gc_collect(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *
     }
 skip_optional_pos:
     _return_value = gc_collect_impl(module, generation);
+    if ((_return_value == -1) && PyErr_Occurred()) {
+        goto exit;
+    }
+    return_value = PyLong_FromSsize_t(_return_value);
+
+exit:
+    return return_value;
+}
+
+PyDoc_STRVAR(gc_collect_region__doc__,
+"collect_region($module, /, cown)\n"
+"--\n"
+"\n"
+"Run the garbage collector on a specific region.\n"
+"\n"
+"The argument should be a released Cown object holding the region to collect.\n"
+"\n"
+"The number of unreachable objects is returned.");
+
+#define GC_COLLECT_REGION_METHODDEF    \
+    {"collect_region", _PyCFunction_CAST(gc_collect_region), METH_FASTCALL|METH_KEYWORDS, gc_collect_region__doc__},
+
+static Py_ssize_t
+gc_collect_region_impl(PyObject *module, PyObject *cown);
+
+static PyObject *
+gc_collect_region(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
+{
+    PyObject *return_value = NULL;
+    #if defined(Py_BUILD_CORE) && !defined(Py_BUILD_CORE_MODULE)
+
+    #define NUM_KEYWORDS 1
+    static struct {
+        PyGC_Head _this_is_not_used;
+        PyObject_VAR_HEAD
+        Py_hash_t ob_hash;
+        PyObject *ob_item[NUM_KEYWORDS];
+    } _kwtuple = {
+        .ob_base = PyVarObject_HEAD_INIT(&PyTuple_Type, NUM_KEYWORDS)
+        .ob_hash = -1,
+        .ob_item = { &_Py_ID(cown), },
+    };
+    #undef NUM_KEYWORDS
+    #define KWTUPLE (&_kwtuple.ob_base.ob_base)
+
+    #else  // !Py_BUILD_CORE
+    #  define KWTUPLE NULL
+    #endif  // !Py_BUILD_CORE
+
+    static const char * const _keywords[] = {"cown", NULL};
+    static _PyArg_Parser _parser = {
+        .keywords = _keywords,
+        .fname = "collect_region",
+        .kwtuple = KWTUPLE,
+    };
+    #undef KWTUPLE
+    PyObject *argsbuf[1];
+    PyObject *cown;
+    Py_ssize_t _return_value;
+
+    args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser,
+            /*minpos*/ 1, /*maxpos*/ 1, /*minkw*/ 0, /*varpos*/ 0, argsbuf);
+    if (!args) {
+        goto exit;
+    }
+    cown = args[0];
+    _return_value = gc_collect_region_impl(module, cown);
     if ((_return_value == -1) && PyErr_Occurred()) {
         goto exit;
     }
@@ -583,4 +650,4 @@ gc_get_freeze_count(PyObject *module, PyObject *Py_UNUSED(ignored))
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=19738854607938db input=a9049054013a1b77]*/
+/*[clinic end generated code: output=bd7ec0973b947c02 input=a9049054013a1b77]*/
