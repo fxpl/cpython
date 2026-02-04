@@ -420,6 +420,13 @@ class TestRegionDictUnicodeKeys(BaseTestRegionDictKeys):
         self.check_setdefault_new_key("setdefault-key", lrc_for_key=0)
         self.check_setdefault_present_key("Meow", lrc_for_key=0)
 
+    def test_unicode_key_clear_regression(self):
+        r = Region()
+        r.a = {"key": 21}
+        r.a.clear()
+        self.assertFalse(r.is_dirty)
+
+
 class TestRegionDictObjectKeys(BaseTestRegionDictKeys):
     class Key:
         pass

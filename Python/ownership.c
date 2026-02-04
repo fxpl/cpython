@@ -11,6 +11,7 @@
 #include "pycore_runtime.h"     // _Py_ID
 #include "pycore_region.h"      // _PyRegion_Get(), Py_Region
 #include "pycore_unicodeobject.h"
+#include "pycore_dict.h" // _PyDict_Reachable
 #include "pyerrors.h"
 #include "refcount.h"
 
@@ -502,11 +503,11 @@ int _PyOwnership_traverse_obj(PyObject *obj, visitproc visit, void *data) {
         // We need to freeze the tuple object, even though the types
         // within will have been frozen already.
         SUCCEEDS(visit(type->tp_bases, data));
-    }
-    else
-    {
+    } else if (PyDict_CheckExact(obj)) {
+        SUCCEEDS(_PyDict_Reachable(obj, visit, data));
+    } else {
         traverseproc traverse = Py_TYPE(obj)->tp_traverse;
-        if(traverse != NULL){
+        if (traverse != NULL) {
             SUCCEEDS(traverse(obj, visit, data));
         }
     }

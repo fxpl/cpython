@@ -2241,8 +2241,8 @@ void _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
         // The reference came from `src` to `tgt` while the target region
         // already had a parent. This is not allowed but can happen in
         // unaware code. The two regions therefore have to be marked as dirty
-        assert(regiondata_is_dirty(src_region));
-        assert(regiondata_is_dirty(tgt_region));
+        assert(!HAS_DATA(src_region) || regiondata_is_dirty(src_region));
+        assert(!HAS_DATA(tgt_region) || regiondata_is_dirty(tgt_region));
 
         // The two regions are marked as dirty. This is an additional safety net
         // for builds without asserts.

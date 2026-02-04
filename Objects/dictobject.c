@@ -1058,8 +1058,12 @@ compare_unicode_generic(PyDictObject *mp, PyDictKeysObject *dk,
 
     if (unicode_get_hash(ep->me_key) == hash) {
         PyObject *startkey = ep->me_key;
+        if (PyRegion_AddLocalRef(startkey)) {
+            return DKIX_ERROR;
+        }
         Py_INCREF(startkey);
         int cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+        PyRegion_RemoveLocalRef(startkey);
         Py_DECREF(startkey);
         if (cmp < 0) {
             return DKIX_ERROR;
@@ -1114,8 +1118,12 @@ compare_generic(PyDictObject *mp, PyDictKeysObject *dk,
     }
     if (ep->me_hash == hash) {
         PyObject *startkey = ep->me_key;
+        if (PyRegion_AddLocalRef(startkey)) {
+            return DKIX_ERROR;
+        }
         Py_INCREF(startkey);
         int cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+        PyRegion_RemoveLocalRef(startkey);
         Py_DECREF(startkey);
         if (cmp < 0) {
             return DKIX_ERROR;
@@ -1822,7 +1830,7 @@ insert_combined_dict(PyInterpreterState *interp, PyDictObject *mp,
 }
 
 static Py_ssize_t
-insert_split_key(PyDictKeysObject *keys, PyObject *key, Py_hash_t hash)
+insert_split_key(PyObject* ref_src, PyDictKeysObject *keys, PyObject *key, Py_hash_t hash)
 {
     assert(PyUnicode_CheckExact(key));
     Py_ssize_t ix;
@@ -1841,14 +1849,18 @@ insert_split_key(PyDictKeysObject *keys, PyObject *key, Py_hash_t hash)
     LOCK_KEYS(keys);
     ix = unicodekeys_lookup_unicode(keys, key, hash);
     if (ix == DKIX_EMPTY && keys->dk_usable > 0) {
-        // Insert into new slot
-        FT_ATOMIC_STORE_UINT32_RELAXED(keys->dk_version, 0);
-        Py_ssize_t hashpos = find_empty_slot(keys, hash);
-        ix = keys->dk_nentries;
-        dictkeys_set_index(keys, hashpos, ix);
-        PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(keys)[ix];
-        STORE_SHARED_KEY(ep->me_key, Py_NewRef(key));
-        split_keys_entry_added(keys);
+        if (PyRegion_AddRef(ref_src, key)) {
+            ix = DKIX_ERROR;
+        } else {
+            // Insert into new slot
+            FT_ATOMIC_STORE_UINT32_RELAXED(keys->dk_version, 0);
+            Py_ssize_t hashpos = find_empty_slot(keys, hash);
+            ix = keys->dk_nentries;
+            dictkeys_set_index(keys, hashpos, ix);
+            PyDictUnicodeEntry *ep = &DK_UNICODE_ENTRIES(keys)[ix];
+            STORE_SHARED_KEY(ep->me_key, Py_NewRef(key));
+            split_keys_entry_added(keys);
+        }
     }
     assert (ix < SHARED_KEYS_MAX_SIZE);
     UNLOCK_KEYS(keys);
@@ -1908,7 +1920,10 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     if (_PyDict_HasSplitTable(mp)) {
-        Py_ssize_t ix = insert_split_key(mp->ma_keys, key, hash);
+        Py_ssize_t ix = insert_split_key(_PyObject_CAST(mp), mp->ma_keys, key, hash);
+        if (ix == DKIX_ERROR) {
+            goto Fail;
+        }
         if (ix != DKIX_EMPTY) {
             if (insert_split_value(interp, mp, key, value, ix)) {
                 goto Fail;
@@ -4671,7 +4686,10 @@ dict_setdefault_ref_lock_held(PyObject *d, PyObject *key, PyObject *default_valu
     }
 
     if (_PyDict_HasSplitTable(mp)) {
-        Py_ssize_t ix = insert_split_key(mp->ma_keys, key, hash);
+        Py_ssize_t ix = insert_split_key(_PyObject_CAST(mp), mp->ma_keys, key, hash);
+        if (ix == DKIX_ERROR) {
+            goto error;
+        }
         if (ix != DKIX_EMPTY) {
             PyObject *value = mp->ma_values->values[ix];
             int already_present = value != NULL;
@@ -4955,7 +4973,7 @@ dict_popitem_impl(PyDictObject *self)
 }
 
 static int
-dict_traverse(PyObject *op, visitproc visit, void *arg)
+dict_visit(PyObject *op, visitproc visit, void *arg, bool visit_unicode_keys)
 {
     PyDictObject *mp = (PyDictObject *)op;
     PyDictKeysObject *keys = mp->ma_keys;
@@ -4965,6 +4983,9 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
         if (_PyDict_HasSplitTable(mp)) {
             if (!mp->ma_values->embedded) {
                 for (i = 0; i < n; i++) {
+                    if (visit_unicode_keys) {
+                        Py_VISIT(DK_UNICODE_ENTRIES(mp->ma_keys)[i].me_key);
+                    }
                     Py_VISIT(mp->ma_values->values[i]);
                 }
             }
@@ -4972,6 +4993,9 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
         else {
             PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
             for (i = 0; i < n; i++) {
+                if (visit_unicode_keys) {
+                    Py_VISIT(entries[i].me_key);
+                }
                 Py_VISIT(entries[i].me_value);
             }
         }
@@ -4986,6 +5010,18 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
         }
     }
     return 0;
+}
+
+static int
+dict_traverse(PyObject *op, visitproc visit, void *arg)
+{
+    return dict_visit(op, visit, arg, false);
+}
+
+int
+_PyDict_Reachable(PyObject *op, visitproc visit, void *arg)
+{
+    return dict_visit(op, visit, arg, true);
 }
 
 static int
@@ -7129,7 +7165,11 @@ _PyDict_NewKeysForClass(PyHeapTypeObject *cls)
                 PyObject *key = PyTuple_GET_ITEM(attrs, i);
                 Py_hash_t hash;
                 if (PyUnicode_CheckExact(key) && (hash = unicode_get_hash(key)) != -1) {
-                    if (insert_split_key(keys, key, hash) == DKIX_EMPTY) {
+                    Py_ssize_t ix = insert_split_key(_PyObject_CAST(cls), keys, key, hash);
+                    if (ix == DKIX_ERROR) {
+                        return NULL;
+                    }
+                    if (ix == DKIX_EMPTY) {
                         break;
                     }
                 }
@@ -7295,7 +7335,11 @@ store_instance_attr_lock_held(PyObject *obj, PyDictValues *values,
             assert(hash != -1);
         }
 
-        ix = insert_split_key(keys, name, hash);
+        ix = insert_split_key(obj, keys, name, hash);
+
+        if (ix == DKIX_ERROR) {
+            return -1;
+        }
 
 #ifdef Py_STATS
         if (ix == DKIX_EMPTY) {
