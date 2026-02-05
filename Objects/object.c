@@ -2357,6 +2357,7 @@ PyTypeObject _PyNone_Type = {
     0,                  /*tp_alloc */
     none_new,           /*tp_new */
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyObject _Py_NoneStruct = _PyObject_HEAD_INIT(&_PyNone_Type);
@@ -2457,6 +2458,7 @@ PyTypeObject _PyNotImplemented_Type = {
     0,                  /*tp_init */
     0,                  /*tp_alloc */
     notimplemented_new, /*tp_new */
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyObject _Py_NotImplementedStruct = _PyObject_HEAD_INIT(&_PyNotImplemented_Type);
