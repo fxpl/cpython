@@ -157,6 +157,7 @@ clear_weakref_lock_held(PyWeakReference *self, PyObject **callback)
         *callback = self->wr_callback;
         if (PyRegion_AddLocalRef(*callback)) {
             PyRegion_DirtyObjectRegion(*callback);
+            PyErr_Clear();
         }
         PyRegion_RemoveRef(self, *callback);
         self->wr_callback = NULL;

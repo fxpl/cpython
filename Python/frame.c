@@ -25,6 +25,7 @@ _PyFrame_MakeAndSetFrameObject(_PyInterpreterFrame *frame)
 
     PyFrameObject *f = _PyFrame_New_NoTrack(_PyFrame_GetCode(frame));
     if (f == NULL) {
+        PyRegion_RemoveLocalRef(exc);
         Py_XDECREF(exc);
         return NULL;
     }
@@ -79,6 +80,10 @@ take_ownership(PyFrameObject *f, _PyInterpreterFrame *frame)
             PyErr_Clear();
         }
         else {
+            // Frame objects always have to be local and can't be moved into regions
+            // This means we can skip the write barrier here, this is also important
+            // since this code can't throw exceptions? (See comment above)
+            assert(PyRegion_IsLocal(back) && "No write barrier, since frames are always local");
             f->f_back = (PyFrameObject *)Py_NewRef(back);
         }
         PyErr_SetRaisedException(exc);
@@ -100,6 +105,7 @@ _PyFrame_ClearLocals(_PyInterpreterFrame *frame)
         sp--;
         PyStackRef_XCLOSE(*sp);
     }
+    PyRegion_RemoveLocalRef(frame->f_locals);
     Py_CLEAR(frame->f_locals);
 }
 
@@ -118,9 +124,11 @@ _PyFrame_ClearExceptCode(_PyInterpreterFrame *frame)
         frame->frame_obj = NULL;
         if (!_PyObject_IsUniquelyReferenced((PyObject *)f)) {
             take_ownership(f, frame);
+            assert(PyRegion_IsLocal(f) && "No write barrier, since frames are always local");
             Py_DECREF(f);
             return;
         }
+        assert(PyRegion_IsLocal(f) && "No write barrier, since frames are always local");
         Py_DECREF(f);
     }
     _PyFrame_ClearLocals(frame);

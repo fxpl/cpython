@@ -1291,6 +1291,13 @@ int _add_to_region_check_obj(PyObject *obj, void *state_void) {
     assert(_PyRegion_Get(obj) == ((AddRegionState*)state_void)->merge_region);
     assert(_PyRegion_GetFollowPending(obj) == ((AddRegionState*)state_void)->subject_region);
 
+    if (PyFrame_Check(obj)) {
+        throw_region_error(
+            "Frame objects are not movable and have to remain local",
+             NULL, NULL, obj);
+        return Py_OWNERSHIP_TRAVERSE_ERR;
+    }
+
     // `_add_to_region_visit` already does the filtering and ensures that only
     // new objects are traversed. This is therefore a no-op indicateing that
     // the object should be traversed.
