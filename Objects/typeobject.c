@@ -8519,9 +8519,11 @@ type_add_members(PyTypeObject *type)
             return -1;
 
         if (PyDict_SetDefaultRef(dict, PyDescr_NAME(descr), descr, NULL) < 0) {
+            PyRegion_RemoveLocalRef(descr);
             Py_DECREF(descr);
             return -1;
         }
+        PyRegion_RemoveLocalRef(descr);
         Py_DECREF(descr);
     }
     return 0;

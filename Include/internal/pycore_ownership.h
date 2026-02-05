@@ -96,7 +96,7 @@ PyAPI_FUNC(Py_ssize_t) _PyOwnership_get_open_region_tick(void);
 * It can fail, if the ownership state is currently unavailable
 */
 PyAPI_FUNC(int) _PyOwnership_notify_untrusted_code(const char* reason);
-PyAPI_FUNC(PyObject*) _PyOwnership_get_last_dirty_region(void);
+PyAPI_FUNC(PyObject*) _PyOwnership_get_last_dirty_reason(void);
 
 PyAPI_FUNC(int) _PyOwnership_is_c_wrapper(PyObject *obj);
 

@@ -2182,6 +2182,7 @@ PySequence_List(PyObject *v)
 
     rv = _PyList_Extend((PyListObject *)result, v);
     if (rv == NULL) {
+        assert(PyRegion_IsLocal(result));
         Py_DECREF(result);
         return NULL;
     }
@@ -2199,7 +2200,7 @@ PySequence_Fast(PyObject *v, const char *m)
     }
 
     if (PyList_CheckExact(v) || PyTuple_CheckExact(v)) {
-        return Py_NewRef(v);
+        return PyRegion_NewRef(v);
     }
 
     it = PyObject_GetIter(v);
@@ -2212,7 +2213,7 @@ PySequence_Fast(PyObject *v, const char *m)
     }
 
     v = PySequence_List(it);
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
 
     return v;
 }
@@ -2262,6 +2263,7 @@ _PySequence_IterSearch(PyObject *seq, PyObject *obj, int operation)
         }
 
         cmp = PyObject_RichCompareBool(item, obj, Py_EQ);
+        PyRegion_RemoveLocalRef(item);
         Py_DECREF(item);
         if (cmp < 0)
             goto Fail;
@@ -2310,7 +2312,7 @@ Fail:
     n = -1;
     /* fall through */
 Done:
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return n;
 
 }
@@ -2406,6 +2408,7 @@ PyMapping_GetItemString(PyObject *o, const char *key)
     if (okey == NULL)
         return NULL;
     r = PyObject_GetItem(o, okey);
+    assert(PyRegion_IsLocal(okey));
     Py_DECREF(okey);
     return r;
 }
@@ -2424,6 +2427,7 @@ PyMapping_GetOptionalItemString(PyObject *obj, const char *key, PyObject **resul
         return -1;
     }
     int rc = PyMapping_GetOptionalItem(obj, okey, result);
+    assert(PyRegion_IsLocal(okey));
     Py_DECREF(okey);
     return rc;
 }
@@ -2443,6 +2447,7 @@ PyMapping_SetItemString(PyObject *o, const char *key, PyObject *value)
     if (okey == NULL)
         return -1;
     r = PyObject_SetItem(o, okey, value);
+    assert(PyRegion_IsLocal(okey));
     Py_DECREF(okey);
     return r;
 }
@@ -2452,7 +2457,7 @@ PyMapping_HasKeyStringWithError(PyObject *obj, const char *key)
 {
     PyObject *res;
     int rc = PyMapping_GetOptionalItemString(obj, key, &res);
-    Py_XDECREF(res);
+    PyRegion_CLEARLOCAL(res);
     return rc;
 }
 
@@ -2461,7 +2466,7 @@ PyMapping_HasKeyWithError(PyObject *obj, PyObject *key)
 {
     PyObject *res;
     int rc = PyMapping_GetOptionalItem(obj, key, &res);
-    Py_XDECREF(res);
+    PyRegion_CLEARLOCAL(res);
     return rc;
 }
 
@@ -2486,7 +2491,7 @@ PyMapping_HasKeyString(PyObject *obj, const char *key)
             "PyMapping_GetOptionalItemString() or PyMapping_GetItemString()");
         return 0;
     }
-    Py_XDECREF(value);
+    PyRegion_CLEARLOCAL(value);
     return rc;
 }
 
@@ -2511,7 +2516,7 @@ PyMapping_HasKey(PyObject *obj, PyObject *key)
             "PyMapping_GetOptionalItem() or PyObject_GetItem()");
         return 0;
     }
-    Py_XDECREF(value);
+    PyRegion_CLEARLOCAL(value);
     return rc;
 }
 
@@ -2536,12 +2541,12 @@ method_output_as_list(PyObject *o, PyObject *meth)
                           "%T.%U() must return an iterable, not %T",
                           o, meth, meth_output);
         }
-        Py_DECREF(meth_output);
+        PyRegion_CLEARLOCAL(meth_output);
         return NULL;
     }
-    Py_DECREF(meth_output);
+    PyRegion_CLEARLOCAL(meth_output);
     result = PySequence_List(it);
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return result;
 }
 

@@ -25,7 +25,7 @@ _PyErr_SetRaisedException(PyThreadState *tstate, PyObject *exc)
 {
     PyObject *old_exc = tstate->current_exception;
     tstate->current_exception = exc;
-    Py_XDECREF(old_exc);
+    PyRegion_CLEARLOCAL(old_exc);
 }
 
 static PyObject*
@@ -48,7 +48,7 @@ _PyErr_CreateException(PyObject *exception_type, PyObject *value)
                      "calling %R should have returned an instance of "
                      "BaseException, not %s",
                      exception_type, Py_TYPE(exc)->tp_name);
-        Py_CLEAR(exc);
+        PyRegion_CLEARLOCAL(exc);
     }
 
     return exc;

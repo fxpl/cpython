@@ -1160,8 +1160,12 @@ Py_hash_t
 PyObject_Hash(PyObject *v)
 {
     PyTypeObject *tp = Py_TYPE(v);
-    if (tp->tp_hash != NULL)
+    if (tp->tp_hash != NULL) {
+        if (tp->tp_hash != PyObject_GenericHash) {
+            PyRegion_NotifyTypeUse(tp);
+        }
         return (*tp->tp_hash)(v);
+    }
     /* To keep to the general practice that inheriting
      * solely from object in C code should work without
      * an explicit call to PyType_Ready, we implicitly call
@@ -1170,8 +1174,12 @@ PyObject_Hash(PyObject *v)
     if (!_PyType_IsReady(tp)) {
         if (PyType_Ready(tp) < 0)
             return -1;
-        if (tp->tp_hash != NULL)
+        if (tp->tp_hash != NULL) {
+            if (tp->tp_hash != PyObject_GenericHash) {
+                PyRegion_NotifyTypeUse(tp);
+            }
             return (*tp->tp_hash)(v);
+        }
     }
     /* Otherwise, the object can't be hashed */
     return PyObject_HashNotImplemented(v);

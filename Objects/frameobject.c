@@ -70,6 +70,7 @@ framelocalsproxy_getval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)
         value = PyCell_GetRef((PyCellObject *)cell);
     }
     else {
+        PyRegion_AddLocalRef(value);
         Py_XINCREF(value);
     }
 
@@ -87,6 +88,7 @@ framelocalsproxy_hasval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)
     if (value == NULL) {
         return false;
     }
+    PyRegion_RemoveLocalRef(value);
     Py_DECREF(value);
     return true;
 }
@@ -130,6 +132,7 @@ framelocalsproxy_getkeyindex(PyFrameObject *frame, PyObject *key, bool read, PyO
                         *value_ptr = value;
                     }
                     else {
+                        PyRegion_RemoveLocalRef(value);
                         Py_DECREF(value);
                     }
                     return i;
@@ -168,6 +171,7 @@ framelocalsproxy_getkeyindex(PyFrameObject *frame, PyObject *key, bool read, PyO
                         *value_ptr = value;
                     }
                     else {
+                        PyRegion_RemoveLocalRef(value);
                         Py_DECREF(value);
                     }
                     return i;
@@ -229,16 +233,30 @@ add_overwritten_fast_local(PyFrameObject *frame, PyObject *obj)
         }
         new_size = size + 1;
     }
+    // Call this write barrier early, since it can be undone and we safe
+    // work if we fail early.
+    if (PyRegion_AddLocalRef(obj)) {
+        return -1;
+    }
     PyObject *new_tuple = PyTuple_New(new_size);
     if (new_tuple == NULL) {
+        PyRegion_RemoveLocalRef(obj);
         return -1;
     }
     for (Py_ssize_t i = 0; i < new_size - 1; i++) {
         PyObject *o = PyTuple_GET_ITEM(frame->f_overwritten_fast_locals, i);
+        // Regions: This should never fail, since the frame currently has a
+        // local reference to the object.
+        if (PyRegion_AddLocalRef(o)) {
+            PyRegion_RemoveLocalRef(obj);
+            Py_DECREF(new_tuple);
+            return -1;
+        }
         PyTuple_SET_ITEM(new_tuple, i, Py_NewRef(o));
     }
+    // Regions: This write barrier is called early, so none is needed here
     PyTuple_SET_ITEM(new_tuple, new_size - 1, Py_NewRef(obj));
-    Py_XSETREF(frame->f_overwritten_fast_locals, new_tuple);
+    PyRegion_XSETLOCALREF(frame->f_overwritten_fast_locals, new_tuple);
     return 0;
 }
 
@@ -277,6 +295,9 @@ framelocalsproxy_setitem(PyObject *self, PyObject *key, PyObject *value)
             }
         }
         if (cell != NULL) {
+            if (PyRegion_AddLocalRef(value)) {
+                return -1;
+            }
             Py_XINCREF(value);
             PyCell_SetTakeRef((PyCellObject *)cell, value);
         } else if (value != PyStackRef_AsPyObjectBorrow(oldvalue)) {
@@ -305,6 +326,7 @@ framelocalsproxy_setitem(PyObject *self, PyObject *key, PyObject *value)
         if (extra == NULL) {
             return -1;
         }
+        assert(PyRegion_IsLocal(frame) && "No write barrier, since frames are always local");
         frame->f_extra_locals = extra;
     }
 
@@ -330,7 +352,7 @@ framelocalsproxy_merge(PyObject* self, PyObject* other)
     }
 
     PyObject *iter = PyObject_GetIter(keys);
-    Py_DECREF(keys);
+    PyRegion_CLEARLOCAL(keys);
     if (iter == NULL) {
         return -1;
     }
@@ -341,23 +363,23 @@ framelocalsproxy_merge(PyObject* self, PyObject* other)
     while ((key = PyIter_Next(iter)) != NULL) {
         value = PyObject_GetItem(other, key);
         if (value == NULL) {
-            Py_DECREF(key);
-            Py_DECREF(iter);
+            PyRegion_CLEARLOCAL(key);
+            PyRegion_CLEARLOCAL(iter);
             return -1;
         }
 
         if (framelocalsproxy_setitem(self, key, value) < 0) {
-            Py_DECREF(key);
-            Py_DECREF(value);
-            Py_DECREF(iter);
+            PyRegion_CLEARLOCAL(key);
+            PyRegion_CLEARLOCAL(value);
+            PyRegion_CLEARLOCAL(iter);
             return -1;
         }
 
-        Py_DECREF(key);
-        Py_DECREF(value);
+        PyRegion_CLEARLOCAL(key);
+        PyRegion_CLEARLOCAL(value);
     }
 
-    Py_DECREF(iter);
+    PyRegion_CLEARLOCAL(iter);
 
     if (PyErr_Occurred()) {
         return -1;
@@ -380,6 +402,7 @@ framelocalsproxy_keys(PyObject *self, PyObject *Py_UNUSED(ignored))
         if (framelocalsproxy_hasval(frame->f_frame, co, i)) {
             PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);
             if (PyList_Append(names, name) < 0) {
+                assert(PyRegion_IsLocal(names));
                 Py_DECREF(names);
                 return NULL;
             }
@@ -396,6 +419,7 @@ framelocalsproxy_keys(PyObject *self, PyObject *Py_UNUSED(ignored))
 
         while (PyDict_Next(frame->f_extra_locals, &i, &key, &value)) {
             if (PyList_Append(names, key) < 0) {
+                assert(PyRegion_IsLocal(names));
                 Py_DECREF(names);
                 return NULL;
             }
@@ -410,6 +434,7 @@ framelocalsproxy_dealloc(PyObject *self)
 {
     PyFrameLocalsProxyObject *proxy = PyFrameLocalsProxyObject_CAST(self);
     PyObject_GC_UnTrack(self);
+    assert(PyRegion_IsLocal(proxy) && PyRegion_IsLocal(proxy->frame));
     Py_CLEAR(proxy->frame);
     Py_TYPE(self)->tp_free(self);
 }
@@ -451,6 +476,7 @@ static int
 framelocalsproxy_tp_clear(PyObject *self)
 {
     PyFrameLocalsProxyObject *proxy = PyFrameLocalsProxyObject_CAST(self);
+    assert(PyRegion_IsLocal(proxy) && PyRegion_IsLocal(proxy->frame));
     Py_CLEAR(proxy->frame);
     return 0;
 }
@@ -472,7 +498,7 @@ framelocalsproxy_iter(PyObject *self)
     }
 
     PyObject* iter = PyObject_GetIter(keys);
-    Py_XDECREF(keys);
+    PyRegion_CLEARLOCAL(keys);
 
     return iter;
 }
@@ -496,12 +522,13 @@ framelocalsproxy_richcompare(PyObject *lhs, PyObject *rhs, int op)
         }
 
         if (PyDict_Update(dct, lhs) < 0) {
+            assert(PyRegion_IsLocal(dct));
             Py_DECREF(dct);
             return NULL;
         }
 
         PyObject *result = PyObject_RichCompare(dct, rhs, op);
-        Py_DECREF(dct);
+        PyRegion_CLEARLOCAL(dct);
         return result;
     }
 
@@ -523,13 +550,13 @@ framelocalsproxy_repr(PyObject *self)
     }
 
     if (PyDict_Update(dct, self) < 0) {
-        Py_DECREF(dct);
+        PyRegion_CLEARLOCAL(dct);
         Py_ReprLeave(self);
         return NULL;
     }
 
     PyObject *repr = PyObject_Repr(dct);
-    Py_DECREF(dct);
+    PyRegion_CLEARLOCAL(dct);
 
     Py_ReprLeave(self);
 
@@ -549,12 +576,12 @@ framelocalsproxy_or(PyObject *self, PyObject *other)
     }
 
     if (PyDict_Update(result, self) < 0) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         return NULL;
     }
 
     if (PyDict_Update(result, other) < 0) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         return NULL;
     }
 
@@ -572,7 +599,7 @@ framelocalsproxy_inplace_or(PyObject *self, PyObject *other)
         Py_RETURN_NOTIMPLEMENTED;
     }
 
-    return Py_NewRef(self);
+    return PyRegion_NewRef(self);
 }
 
 static PyObject *
@@ -589,11 +616,12 @@ framelocalsproxy_values(PyObject *self, PyObject *Py_UNUSED(ignored))
         PyObject *value = framelocalsproxy_getval(frame->f_frame, co, i);
         if (value) {
             if (PyList_Append(values, value) < 0) {
+                assert(PyRegion_IsLocal(values));
                 Py_DECREF(values);
-                Py_DECREF(value);
+                PyRegion_CLEARLOCAL(value);
                 return NULL;
             }
-            Py_DECREF(value);
+            PyRegion_CLEARLOCAL(value);
         }
     }
 
@@ -604,6 +632,7 @@ framelocalsproxy_values(PyObject *self, PyObject *Py_UNUSED(ignored))
         PyObject *value = NULL;
         while (PyDict_Next(frame->f_extra_locals, &j, &key, &value)) {
             if (PyList_Append(values, value) < 0) {
+                assert(PyRegion_IsLocal(values));
                 Py_DECREF(values);
                 return NULL;
             }
@@ -630,20 +659,20 @@ framelocalsproxy_items(PyObject *self, PyObject *Py_UNUSED(ignored))
         if (value) {
             PyObject *pair = PyTuple_Pack(2, name, value);
             if (pair == NULL) {
-                Py_DECREF(items);
-                Py_DECREF(value);
+                PyRegion_CLEARLOCAL(items);
+                PyRegion_CLEARLOCAL(value);
                 return NULL;
             }
 
             if (PyList_Append(items, pair) < 0) {
-                Py_DECREF(items);
-                Py_DECREF(pair);
-                Py_DECREF(value);
+                PyRegion_CLEARLOCAL(items);
+                PyRegion_CLEARLOCAL(pair);
+                PyRegion_CLEARLOCAL(value);
                 return NULL;
             }
 
-            Py_DECREF(pair);
-            Py_DECREF(value);
+            PyRegion_CLEARLOCAL(pair);
+            PyRegion_CLEARLOCAL(value);
         }
     }
 
@@ -655,17 +684,17 @@ framelocalsproxy_items(PyObject *self, PyObject *Py_UNUSED(ignored))
         while (PyDict_Next(frame->f_extra_locals, &j, &key, &value)) {
             PyObject *pair = PyTuple_Pack(2, key, value);
             if (pair == NULL) {
-                Py_DECREF(items);
+                PyRegion_CLEARLOCAL(items);
                 return NULL;
             }
 
             if (PyList_Append(items, pair) < 0) {
-                Py_DECREF(items);
-                Py_DECREF(pair);
+                PyRegion_CLEARLOCAL(items);
+                PyRegion_CLEARLOCAL(pair);
                 return NULL;
             }
 
-            Py_DECREF(pair);
+            PyRegion_CLEARLOCAL(pair);
         }
     }
 
@@ -753,7 +782,7 @@ framelocalsproxy_get(PyObject* self, PyObject *const *args, Py_ssize_t nargs)
     if (result == NULL) {
         if (PyErr_ExceptionMatches(PyExc_KeyError)) {
             PyErr_Clear();
-            return Py_XNewRef(default_value);
+            return PyRegion_XNewRef(default_value);
         }
         return NULL;
     }
@@ -784,7 +813,7 @@ framelocalsproxy_setdefault(PyObject* self, PyObject *const *args, Py_ssize_t na
             if (framelocalsproxy_setitem(self, key, default_value) < 0) {
                 return NULL;
             }
-            return Py_XNewRef(default_value);
+            return PyRegion_XNewRef(default_value);
         }
         return NULL;
     }
@@ -822,7 +851,7 @@ framelocalsproxy_pop(PyObject* self, PyObject *const *args, Py_ssize_t nargs)
 
     if (frame->f_extra_locals == NULL) {
         if (default_value != NULL) {
-            return Py_XNewRef(default_value);
+            return PyRegion_XNewRef(default_value);
         } else {
             _PyErr_SetKeyError(key);
             return NULL;
@@ -835,7 +864,7 @@ framelocalsproxy_pop(PyObject* self, PyObject *const *args, Py_ssize_t nargs)
 
     if (result == NULL) {
         if (default_value != NULL) {
-            return Py_XNewRef(default_value);
+            return PyRegion_XNewRef(default_value);
         } else {
             _PyErr_SetKeyError(key);
             return NULL;
@@ -855,7 +884,7 @@ framelocalsproxy_copy(PyObject *self, PyObject *Py_UNUSED(ignored))
     }
 
     if (PyDict_Update(result, self) < 0) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         return NULL;
     }
 
@@ -872,7 +901,7 @@ framelocalsproxy_reversed(PyObject *self, PyObject *Py_UNUSED(ignored))
     }
 
     if (PyList_Reverse(result) < 0) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         return NULL;
     }
     return result;
@@ -943,6 +972,7 @@ PyTypeObject PyFrameLocalsProxy_Type = {
     .tp_new = framelocalsproxy_new,
     .tp_free = PyObject_GC_Del,
     .tp_doc = framelocalsproxy_doc,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyObject *
@@ -954,7 +984,7 @@ _PyFrameLocalsProxy_New(PyFrameObject *frame)
     }
 
     PyObject* proxy = framelocalsproxy_new(&PyFrameLocalsProxy_Type, args, NULL);
-    Py_DECREF(args);
+    PyRegion_CLEARLOCAL(args);
     return proxy;
 }
 
@@ -989,7 +1019,7 @@ frame_locals_get_impl(PyFrameObject *self)
                 return NULL;
             }
         }
-        return Py_NewRef(self->f_frame->f_locals);
+        return PyRegion_NewRef(self->f_frame->f_locals);
     }
 
     return _PyFrameLocalsProxy_New(self);
@@ -1069,7 +1099,7 @@ frame_globals_get_impl(PyFrameObject *self)
     if (globals == NULL) {
         globals = Py_None;
     }
-    return Py_NewRef(globals);
+    return PyRegion_NewRef(globals);
 }
 
 /*[clinic input]
@@ -1088,7 +1118,7 @@ frame_builtins_get_impl(PyFrameObject *self)
     if (builtins == NULL) {
         builtins = Py_None;
     }
-    return Py_NewRef(builtins);
+    return PyRegion_NewRef(builtins);
 }
 
 /*[clinic input]
@@ -1325,7 +1355,7 @@ mark_stacks(PyCodeObject *code_obj, int len)
 
     if (stacks == NULL) {
         PyErr_NoMemory();
-        Py_DECREF(co_code);
+        PyRegion_CLEARLOCAL(co_code);
         return NULL;
     }
     for (int i = 1; i <= len; i++) {
@@ -1528,7 +1558,7 @@ mark_stacks(PyCodeObject *code_obj, int len)
             }
         }
     }
-    Py_DECREF(co_code);
+    PyRegion_CLEARLOCAL(co_code);
     return stacks;
 }
 
@@ -1865,7 +1895,7 @@ frame_trace_get_impl(PyFrameObject *self)
     if (trace == NULL) {
         trace = Py_None;
     }
-    return Py_NewRef(trace);
+    return PyRegion_NewRef(trace);
 }
 
 /*[clinic input]
@@ -1883,6 +1913,9 @@ frame_trace_set_impl(PyFrameObject *self, PyObject *value)
         value = NULL;
     }
     if (value != self->f_trace) {
+        if (PyRegion_AddLocalRef(value)) {
+            return -1;
+        }
         Py_XSETREF(self->f_trace, Py_XNewRef(value));
         if (value != NULL && self->f_trace_opcodes) {
             return _PyEval_SetOpcodeTrace(self, true);
@@ -1905,7 +1938,7 @@ frame_generator_get_impl(PyFrameObject *self)
 {
     if (self->f_frame->owner == FRAME_OWNED_BY_GENERATOR) {
         PyObject *gen = (PyObject *)_PyGen_GetGeneratorFromFrame(self->f_frame);
-        return Py_NewRef(gen);
+        return PyRegion_NewRef(gen);
     }
     Py_RETURN_NONE;
 }
@@ -1940,12 +1973,13 @@ frame_dealloc(PyObject *op)
      * deallocation until after f->f_frame is freed. Avoid dereferencing
      * f->f_frame unless we know it still points to valid memory. */
     _PyInterpreterFrame *frame = (_PyInterpreterFrame *)f->_f_frame_data;
+    assert(PyRegion_IsLocal(op));
 
     /* Kill all local variables including specials, if we own them */
     if (f->f_frame == frame && frame->owner == FRAME_OWNED_BY_FRAME_OBJECT) {
         PyStackRef_CLEAR(frame->f_executable);
         PyStackRef_CLEAR(frame->f_funcobj);
-        Py_CLEAR(frame->f_locals);
+        PyRegion_CLEARLOCAL(frame->f_locals);
         _PyStackRef *locals = _PyFrame_GetLocalsArray(frame);
         _PyStackRef *sp = frame->stackpointer;
         while (sp > locals) {
@@ -1953,11 +1987,11 @@ frame_dealloc(PyObject *op)
             PyStackRef_CLEAR(*sp);
         }
     }
-    Py_CLEAR(f->f_back);
-    Py_CLEAR(f->f_trace);
-    Py_CLEAR(f->f_extra_locals);
-    Py_CLEAR(f->f_locals_cache);
-    Py_CLEAR(f->f_overwritten_fast_locals);
+    PyRegion_CLEARLOCAL(f->f_back);
+    PyRegion_CLEARLOCAL(f->f_trace);
+    PyRegion_CLEARLOCAL(f->f_extra_locals);
+    PyRegion_CLEARLOCAL(f->f_locals_cache);
+    PyRegion_CLEARLOCAL(f->f_overwritten_fast_locals);
     PyObject_GC_Del(f);
 }
 
@@ -1980,11 +2014,12 @@ frame_traverse(PyObject *op, visitproc visit, void *arg)
 static int
 frame_tp_clear(PyObject *op)
 {
+    assert(PyRegion_IsLocal(op));
     PyFrameObject *f = PyFrameObject_CAST(op);
-    Py_CLEAR(f->f_trace);
-    Py_CLEAR(f->f_extra_locals);
-    Py_CLEAR(f->f_locals_cache);
-    Py_CLEAR(f->f_overwritten_fast_locals);
+    PyRegion_CLEARLOCAL(f->f_trace);
+    PyRegion_CLEARLOCAL(f->f_extra_locals);
+    PyRegion_CLEARLOCAL(f->f_locals_cache);
+    PyRegion_CLEARLOCAL(f->f_overwritten_fast_locals);
 
     /* locals and stack */
     _PyStackRef *locals = _PyFrame_GetLocalsArray(f->f_frame);
@@ -1995,7 +2030,7 @@ frame_tp_clear(PyObject *op)
         PyStackRef_CLEAR(*sp);
     }
     f->f_frame->stackpointer = locals;
-    Py_CLEAR(f->f_frame->f_locals);
+    PyRegion_CLEARLOCAL(f->f_frame->f_locals);
     return 0;
 }
 
@@ -2107,6 +2142,7 @@ PyTypeObject PyFrame_Type = {
     frame_getsetlist,                           /* tp_getset */
     0,                                          /* tp_base */
     0,                                          /* tp_dict */
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static void
@@ -2114,6 +2150,10 @@ init_frame(PyThreadState *tstate, _PyInterpreterFrame *frame,
            PyFunctionObject *func, PyObject *locals)
 {
     PyCodeObject *code = (PyCodeObject *)func->func_code;
+    if (PyRegion_AddLocalRef(locals)) {
+        PyRegion_DirtyObjectRegion(locals);
+        PyErr_Clear();
+    }
     _PyFrame_Initialize(tstate, frame, PyStackRef_FromPyObjectNew(func),
                         Py_XNewRef(locals), code, 0, NULL);
 }
@@ -2158,13 +2198,14 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code,
         .fc_closure = NULL
     };
     PyFunctionObject *func = _PyFunction_FromConstructor(&desc);
+    PyRegion_RemoveLocalRef(builtins);
     _Py_DECREF_BUILTINS(builtins);
     if (func == NULL) {
         return NULL;
     }
     PyFrameObject *f = _PyFrame_New_NoTrack(code);
     if (f == NULL) {
-        Py_DECREF(func);
+        PyRegion_CLEARLOCAL(func);
         return NULL;
     }
     init_frame(tstate, (_PyInterpreterFrame *)f->_f_frame_data, func, locals);
@@ -2173,7 +2214,7 @@ PyFrame_New(PyThreadState *tstate, PyCodeObject *code,
     // This frame needs to be "complete", so pretend that the first RESUME ran:
     f->f_frame->instr_ptr = _PyCode_CODE(code) + code->_co_firsttraceable + 1;
     assert(!_PyFrame_IsIncomplete(f->f_frame));
-    Py_DECREF(func);
+    PyRegion_CLEARLOCAL(func);
     _PyObject_GC_TRACK(f);
     return f;
 }
@@ -2240,6 +2281,10 @@ frame_get_var(_PyInterpreterFrame *frame, PyCodeObject *co, int i,
                     value = PyCell_GetRef((PyCellObject *)value);
                 }
                 else {
+                    if (PyRegion_AddLocalRef(value)) {
+                        value = NULL;
+                        return -1;
+                    }
                     // (likely) Otherwise it is an arg (kind & CO_FAST_LOCAL),
                     // with the initial value set when the frame was created...
                     // (unlikely) ...or it was set via the f_locals proxy.
@@ -2248,6 +2293,10 @@ frame_get_var(_PyInterpreterFrame *frame, PyCodeObject *co, int i,
             }
         }
         else {
+            if (PyRegion_AddLocalRef(value)) {
+                value = NULL;
+                return -1;
+            }
             Py_XINCREF(value);
         }
     }
@@ -2296,7 +2345,7 @@ _PyFrame_GetLocals(_PyInterpreterFrame *frame)
                 return NULL;
             }
         }
-        return Py_NewRef(frame->f_locals);
+        return PyRegion_NewRef(frame->f_locals);
     }
 
     PyFrameObject* f = _PyFrame_GetFrameObject(frame);
@@ -2347,7 +2396,7 @@ PyFrame_GetVarString(PyFrameObject *frame, const char *name)
         return NULL;
     }
     PyObject *value = PyFrame_GetVar(frame, name_obj);
-    Py_DECREF(name_obj);
+    PyRegion_CLEARLOCAL(name_obj);
     return value;
 }
 
@@ -2392,7 +2441,7 @@ PyFrame_GetCode(PyFrameObject *frame)
     PyObject *code;
     Py_BEGIN_CRITICAL_SECTION(frame);
     assert(!_PyFrame_IsIncomplete(frame->f_frame));
-    code = Py_NewRef(_PyFrame_GetCode(frame->f_frame));
+    code = PyRegion_NewRef(_PyFrame_GetCode(frame->f_frame));
     Py_END_CRITICAL_SECTION();
     return (PyCodeObject *)code;
 }
@@ -2411,6 +2460,7 @@ PyFrame_GetBack(PyFrameObject *frame)
             back = _PyFrame_GetFrameObject(prev);
         }
     }
+    assert(back == NULL || PyRegion_IsLocal(back));
     return (PyFrameObject*)Py_XNewRef(back);
 }
 
