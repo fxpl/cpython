@@ -241,6 +241,12 @@ Region_clear(PyObject *op)
     return 0;
 }
 
+static int
+Region_tp_clear(PyObject *op)
+{
+    assert(false && "You should never call `tp_clear` on a region");
+}
+
 static void
 Region_dealloc(PyObject *self)
 {
@@ -280,7 +286,7 @@ PyTypeObject _PyRegion_Type = {
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE, /* tp_flags */
     Region_doc,                              /* tp_doc */
     (traverseproc)Region_traverse,           /* tp_traverse */
-    (inquiry)Region_clear,                   /* tp_clear */
+    (inquiry)Region_tp_clear,                /* tp_clear */
     0,                                       /* tp_richcompare */
     0,                                       /* tp_weaklistoffset */
     0,                                       /* tp_iter */
