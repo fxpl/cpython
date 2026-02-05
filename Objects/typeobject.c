@@ -1676,7 +1676,7 @@ _PyType_GetFullyQualifiedName(PyTypeObject *type, char sep)
 
     PyObject *module = type_module(type);
     if (module == NULL) {
-        Py_DECREF(qualname);
+        PyRegion_CLEARLOCAL(qualname);
         return NULL;
     }
 
@@ -1688,10 +1688,10 @@ _PyType_GetFullyQualifiedName(PyTypeObject *type, char sep)
         result = PyUnicode_FromFormat("%U%c%U", module, sep, qualname);
     }
     else {
-        result = Py_NewRef(qualname);
+        result = PyRegion_NewRef(qualname);
     }
-    Py_DECREF(module);
-    Py_DECREF(qualname);
+    PyRegion_CLEARLOCAL(module);
+    PyRegion_CLEARLOCAL(qualname);
     return result;
 }
 
