@@ -11,6 +11,8 @@
 #include "pycore_interpframe.h"   // _PyFrame_GetLocalsArray()
 #include "pycore_object_alloc.h"  // _PyObject_MallocWithType()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_region.h"        // _Py_region_data
+#include "pycore_regionobject.h"  // _PyRegion_Type
 #include "pycore_tuple.h"         // _PyTuple_MaybeUntrack()
 #include "pycore_weakref.h"       // _PyWeakref_ClearRef()
 
@@ -1847,6 +1849,117 @@ gc_collect_chunk(PyThreadState *tstate,
     validate_list(to, collecting_clear_unreachable_clear);
 }
 
+static void
+region_list_split(PyGC_Head *list, PyGC_Head *contained)
+{
+    // Child regions are at the start of the list
+    PyGC_Head *node = GC_NEXT(list);
+    while (node != list) {
+        // Stop looping if this is not a bridge
+        PyObject *obj = _Py_FROM_GC(node);
+        if (Py_TYPE(obj) != &_PyRegion_Type) {
+            break;
+        }
+        node = GC_NEXT(node);
+    }
+    if (node == list) {
+        // No contained objects
+        return;
+    }
+    // Splice the contained objects out of the list
+    PyGC_Head *first_contained = node;
+    PyGC_Head *last_contained = GC_PREV(list);
+    _PyGCHead_SET_NEXT(GC_PREV(first_contained), list);
+    _PyGCHead_SET_PREV(list, GC_PREV(first_contained));
+    _PyGCHead_SET_NEXT(contained, first_contained);
+    _PyGCHead_SET_PREV(first_contained, contained);
+    _PyGCHead_SET_NEXT(last_contained, contained);
+    _PyGCHead_SET_PREV(contained, last_contained);
+    validate_list(list, collecting_clear_unreachable_clear);
+    validate_list(contained, collecting_clear_unreachable_clear);
+}
+
+static void
+gc_collect_region(PyThreadState *tstate,
+                  Py_region_t region,
+                  struct gc_collection_stats *stats)
+{
+    if (region == _Py_LOCAL_REGION
+        || region == _Py_IMMUTABLE_REGION
+        || region == _Py_COWN_REGION) {
+        return;
+    }
+    _Py_region_data *data = (_Py_region_data*)region;
+
+    PyGC_Head *gc; /* initialize to prevent a compiler warning */
+    GCState *gcstate = &tstate->interp->gc;
+    assert(!_PyErr_Occurred(tstate));
+
+    /* Separate child regions from contained objects.
+     * Finalizers need them to be in the GC list, at the start of the list.
+     */
+    PyGC_Head contained;
+    gc_list_init(&contained);
+    region_list_split(&data->gc_list, &contained);
+
+    PyGC_Head unreachable; /* non-problematic unreachable trash */
+    gc_list_init(&unreachable);
+    deduce_unreachable(&contained, &unreachable);
+    untrack_tuples(&contained);
+
+    /* Clear NEXT_MASK_UNREACHABLE manually. */
+    clear_unreachable_mask(&unreachable);
+
+    /* Print debugging information. */
+    if (gcstate->debug & _PyGC_DEBUG_COLLECTABLE) {
+        for (gc = GC_NEXT(&unreachable); gc != &unreachable; gc = GC_NEXT(gc)) {
+            debug_cycle("collectable", FROM_GC(gc));
+        }
+    }
+
+    /* Invoke weakref callbacks as necessary. */
+    stats->collected += handle_weakref_callbacks(&unreachable, &contained);
+    validate_list(&contained, collecting_clear_unreachable_clear);
+    validate_list(&unreachable, collecting_set_unreachable_clear);
+
+    /* Call tp_finalize on objects which have one. */
+    finalize_garbage(tstate, &unreachable);
+    /* Handle any objects that may have resurrected after the call
+     * to 'finalize_garbage' and continue the collection with the
+     * objects that are still unreachable */
+    PyGC_Head final_unreachable;
+    gc_list_init(&final_unreachable);
+    handle_resurrected_objects(&unreachable, &final_unreachable, &contained);
+
+    /* Clear weakrefs to objects in the unreachable set.  See the comments
+     * above handle_weakref_callbacks() for details.
+     */
+    clear_weakrefs(&final_unreachable);
+
+    /* Call tp_clear on objects in the final_unreachable set.  This will cause
+    * the reference cycles to be broken.  It may also cause some objects
+    * in finalizers to be freed.
+    */
+    stats->collected += gc_list_size(&final_unreachable);
+    delete_garbage(tstate, gcstate, &final_unreachable, &contained);
+
+    /* Restore the GC list. Make sure child regions come first. */
+    gc_list_merge(&contained, &data->gc_list);
+
+    /* Collect child regions. */
+    gc = GC_NEXT(&data->gc_list);
+    while (gc != &data->gc_list) {
+        // Stop looping if this is not a bridge
+        PyObject *obj = _Py_FROM_GC(gc);
+        if (Py_TYPE(obj) != &_PyRegion_Type) {
+            break;
+        }
+        Py_region_t child = _PyRegion_Get(obj);
+        gc_collect_region(tstate, child, stats);
+        gc = GC_NEXT(gc);
+    }
+}
+
 /* Invoke progress callbacks to notify clients that garbage collection
  * is starting or stopping
  */
@@ -2153,6 +2266,19 @@ _PyGC_CollectNoFail(PyThreadState *tstate)
     _PyGC_Collect(_PyThreadState_GET(), 2, _Py_GC_REASON_SHUTDOWN);
 }
 
+static const char *
+get_region_name(_PyRegionObject* bridge) {
+    PyObject *name = bridge->name;
+    if (name == NULL || !PyUnicode_Check(name)) {
+        return NULL;
+    }
+    const char *name_str = PyUnicode_AsUTF8(name);
+    if (name_str == NULL) {
+        return NULL;
+    }
+    return name_str;
+}
+
 Py_ssize_t
 _PyGC_CollectRegion(PyThreadState *tstate, PyObject *cown, _PyGC_Reason reason)
 {
@@ -2168,10 +2294,25 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *cown, _PyGC_Reason reason)
         // could not acquire the cown, perhaps someone else has it
         return 0;
     }
-    // TODO: implement region-based collection
-    Py_ssize_t result = 42;
+
+    // TODO(regions-gc): gc callback
+    GCState *gcstate = &tstate->interp->gc;
+    struct gc_collection_stats stats = { 0 };
+    if (gcstate->debug & _PyGC_DEBUG_STATS) {
+        _PyRegionObject* bridge = ((_Py_region_data*)region)->bridge;
+        const char *name = get_region_name(bridge);
+        if (name == NULL) {
+            PySys_WriteStderr("gc: collecting region at %p\n", bridge);
+        }
+        else {
+            PySys_WriteStderr("gc: collecting region '%s' at %p\n", name, bridge);
+        }
+    }
+    PyObject *exc = _PyErr_GetRaisedException(tstate);
+    gc_collect_region(tstate, region, &stats);
+    _PyErr_SetRaisedException(tstate, exc);
     _PyCown_ReleaseGC(_PyCownObject_CAST(cown));
-    return result;
+    return stats.collected;
 }
 
 void
