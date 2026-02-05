@@ -2215,6 +2215,7 @@ void _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
     // This can sadly happen with some old dictionary APIs which don't
     // include the dict object
     if (src == NULL) {
+        assert(HAS_DATA(tgt) && "this should not happen");
         regiondata_mark_as_dirty(_PyRegion_Get(tgt));
         return;
     }

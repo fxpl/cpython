@@ -7393,7 +7393,7 @@ store_instance_attr_lock_held(PyObject *obj, PyDictValues *values,
         return -1;
     }
 
-    if (PyRegion_AddRefs(obj, name, value)) {
+    if (PyRegion_AddRefs(dict ? dict : obj, name, value)) {
         return -1;
     }
 
@@ -7422,7 +7422,7 @@ store_instance_attr_lock_held(PyObject *obj, PyDictValues *values,
                 STORE_USED(dict, dict->ma_used - 1);
             }
         }
-        PyRegion_RemoveRef(dict, old_value);
+        PyRegion_RemoveRef(dict ? dict : obj, old_value);
         Py_DECREF(old_value);
     }
     return 0;
