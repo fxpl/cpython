@@ -429,7 +429,7 @@ complex_dealloc(PyObject *op)
 {
     assert(PyComplex_Check(op));
     if (PyComplex_CheckExact(op)) {
-        _Py_FREELIST_FREE(complexes, op, PyObject_Free);
+        _Py_FREELIST_FREE_OBJ(complexes, op, PyObject_Free);
     }
     else {
         Py_TYPE(op)->tp_free(op);

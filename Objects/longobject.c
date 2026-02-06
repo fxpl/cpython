@@ -3642,7 +3642,7 @@ _PyLong_ExactDealloc(PyObject *self)
         return;
     }
     if (_PyLong_IsCompact((PyLongObject *)self)) {
-        _Py_FREELIST_FREE(ints, self, PyObject_Free);
+        _Py_FREELIST_FREE_OBJ(ints, self, PyObject_Free);
         return;
     }
     PyObject_Free(self);
@@ -3662,7 +3662,7 @@ long_dealloc(PyObject *self)
         return;
     }
     if (PyLong_CheckExact(self) && _PyLong_IsCompact((PyLongObject *)self)) {
-        _Py_FREELIST_FREE(ints, self, PyObject_Free);
+        _Py_FREELIST_FREE_OBJ(ints, self, PyObject_Free);
         return;
     }
     Py_TYPE(self)->tp_free(self);

@@ -1057,7 +1057,7 @@ tupleiter_dealloc(PyObject *self)
     PyRegion_RemoveRef(it, it->it_seq);
     Py_XDECREF(it->it_seq);
     assert(Py_IS_TYPE(self, &PyTupleIter_Type));
-    _Py_FREELIST_FREE(tuple_iters, it, PyObject_GC_Del);
+    _Py_FREELIST_FREE_OBJ(tuple_iters, it, PyObject_GC_Del);
 }
 
 static int

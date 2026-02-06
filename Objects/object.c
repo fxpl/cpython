@@ -3143,7 +3143,6 @@ _PyTrash_thread_destroy_chain(PyThreadState *tstate)
          * up distorting allocation statistics.
          */
         _PyObject_ASSERT(op, Py_REFCNT(op) == 0);
-        _PyRegion_SignalDealloc(op);
         (*dealloc)(op);
     }
 }
@@ -3236,7 +3235,6 @@ _Py_Dealloc(PyObject *op)
     _Py_ForgetReference(op);
 #endif
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
-    _PyRegion_SignalDealloc(op);
     (*dealloc)(op);
 
 #ifdef Py_DEBUG

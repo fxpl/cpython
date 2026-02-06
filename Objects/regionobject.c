@@ -252,7 +252,7 @@ Region_dealloc(PyObject *self)
 {
     // The region in the `ob_region` field should be cleared before calling
     // dealloc.
-    assert(self->ob_region == NULL_REGION);
+    assert(self->ob_region == _PyRegionObject_CAST(self)->region);
 
     PyObject_GC_UnTrack(self);
 

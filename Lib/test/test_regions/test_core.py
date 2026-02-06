@@ -273,10 +273,23 @@ class TestInterRegionRelations(unittest.TestCase):
         self.assertTrue(is_local(obj))
     
     def test_regression_instance_attribute_wb(self):
-        freeze(self.A)
-
         r = Region()
         r.a = self.A()
         r.a.child = Region()
         r.a.child = None
 
+    def test_regression_dealloc_needs_the_region_1(self):
+        r = Region()
+        r.a = self.A()
+        r.a.child = Region()
+        r.a = None
+        r = None
+
+    def test_regression_dealloc_needs_the_region_2(self):
+        r = Region()
+        r.a = self.A()
+        r.a.child = Region()
+        r.a.child.b = self.A()
+        r.a.child.b.c = self.A()
+        r.a.child.b.c.b = r.a.child.b
+        r.a = None

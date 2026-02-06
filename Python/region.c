@@ -454,10 +454,10 @@ static int regiondata_union_merge(
         // Validate, that we either merge in the pending target or
         // into the local region on failure.
         //
-        // FIXME(regions): xFrednet: I bleive this assert may be false,
+        // FIXME(regions): xFrednet: I believe this assert may be false,
         // if the source region was meant to be merged into a staged
         // region. And the staged region has been merged first. I have
-        // to see if I can construct a counter exampel
+        // to see if I can construct a counter example
         assert(pending_target == target || IS_LOCAL_REGION(target));
         regiondata_dec_rc(pending_target);
         source_data->owner = NULL_REGION;
@@ -499,8 +499,8 @@ static int regiondata_union_merge(
 
     // `source` can't be merged if it has any other parent than `target`
     // as the link from `source_parent` to the bridge of `source` would
-    // break isolation after the merge. However, a merge of source into
-    // target is always allowed.
+    // break isolation after the merge. The exception is a merge into
+    // the immutable region as contained objects can reference immutable ones.
     if (source_parent != NULL_REGION && !IS_IMMUTABLE_REGION(target)) {
         // FIXME(regions): xFrednet: Better error message with explanation
         // and conditional based on if X is static
@@ -1976,23 +1976,6 @@ int _PyRegion_SignalImmutable(PyObject *obj) {
     return 0;
 }
 
-/* This clears the region from a given object. This should only be done
- * when the object is being deallocated.
- */
-void _PyRegion_SignalDealloc(PyObject *obj) {
-    Py_region_t region = _PyRegion_Get(obj);
-
-    // Objects from static regions don't have to be changed. It might
-    // also be unsafe if the object is shared across threads.
-    if (!HAS_DATA(region)) {
-        return;
-    }
-
-    // Moving the object into a static region, allows the original
-    // region to be deallocated once te RC hits 0
-    _PyRegion_Set(obj, _Py_LOCAL_REGION);
-}
-
 
 /* Checks if a reference from `src` to `tgt` is allowed and updates the
  * internal region state accordingly.
@@ -2398,6 +2381,22 @@ void PyRegion_NotifyTypeUse(PyTypeObject* tp) {
     _PyOwnership_notify_untrusted_code(tp->tp_name);
 }
 
+/* This clears the region from a given object. This should only be done
+ * when the object is being deallocated.
+ */
+void PyRegion_RecycleObject(PyObject *obj) {
+    Py_region_t region = _PyRegion_Get(obj);
+
+    // Objects from static regions don't have to be changed. It might
+    // also be unsafe if the object is shared across threads.
+    if (!HAS_DATA(region)) {
+        return;
+    }
+
+    // Moving the object into a static region, allows the original
+    // region to be deallocated once te RC hits 0
+    _PyRegion_Set(obj, _Py_LOCAL_REGION);
+}
 
 // TODO(regions): xFrednet: Cleanup
 //      - Move region error into core and emit it instead of runtime errors

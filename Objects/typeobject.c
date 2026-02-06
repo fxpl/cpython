@@ -2785,7 +2785,6 @@ subtype_dealloc(PyObject *self)
 
         /* Call the base tp_dealloc() */
         assert(basedealloc);
-        _PyRegion_SignalDealloc(self);
         basedealloc(self);
 
         /* Can't reference self beyond this point. It's possible tp_del switched
@@ -2895,7 +2894,6 @@ subtype_dealloc(PyObject *self)
                              && !(base->tp_flags & Py_TPFLAGS_HEAPTYPE));
 
     assert(basedealloc);
-    _PyRegion_SignalDealloc(self);
     basedealloc(self);
 
     /* Can't reference self beyond this point. It's possible tp_del switched

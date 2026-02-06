@@ -122,6 +122,7 @@ static inline void _PyRegion_Clear(PyObject *src, PyObject **field) {
 #define PyRegion_CLEAR(src, dst) _PyRegion_Clear(_PyObject_CAST(src), (PyObject **)&(dst))
 
 PyAPI_FUNC(void) PyRegion_NotifyTypeUse(PyTypeObject* type);
+PyAPI_FUNC(void) PyRegion_RecycleObject(PyObject *obj);
 
 #ifdef __cplusplus
 }

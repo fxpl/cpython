@@ -3526,7 +3526,7 @@ dict_dealloc(PyObject *self)
         dictkeys_decref(_PyObject_CAST(mp), keys, false);
     }
     if (Py_IS_TYPE(mp, &PyDict_Type)) {
-        _Py_FREELIST_FREE(dicts, mp, Py_TYPE(mp)->tp_free);
+        _Py_FREELIST_FREE_OBJ(dicts, mp, Py_TYPE(mp)->tp_free);
     }
     else {
         Py_TYPE(mp)->tp_free((PyObject *)mp);
