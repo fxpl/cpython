@@ -490,7 +490,7 @@ formatlong(PyObject *v, int flags, int prec, int type)
         if (iobj != NULL) {
             assert(PyLong_Check(iobj));
             result = _PyUnicode_FormatLong(iobj, flags & F_ALT, prec, type);
-            Py_DECREF(iobj);
+            PyRegion_CLEARLOCAL(iobj);
             return result;
         }
         if (!PyErr_ExceptionMatches(PyExc_TypeError))
@@ -560,25 +560,26 @@ format_obj(PyObject *v, const char **pbuf, Py_ssize_t *plen)
     if (PyBytes_Check(v)) {
         *pbuf = PyBytes_AS_STRING(v);
         *plen = PyBytes_GET_SIZE(v);
-        return Py_NewRef(v);
+        return PyRegion_NewRef(v);
     }
     if (PyByteArray_Check(v)) {
         *pbuf = PyByteArray_AS_STRING(v);
         *plen = PyByteArray_GET_SIZE(v);
-        return Py_NewRef(v);
+        return PyRegion_NewRef(v);
     }
+    // FIXME(regions): xFrednet: Should this notify type usage? I feel like it doesn't need to.
     /* does it support __bytes__? */
     func = _PyObject_LookupSpecial(v, &_Py_ID(__bytes__));
     if (func != NULL) {
         result = _PyObject_CallNoArgs(func);
-        Py_DECREF(func);
+        PyRegion_CLEARLOCAL(func);
         if (result == NULL)
             return NULL;
         if (!PyBytes_Check(result)) {
             PyErr_Format(PyExc_TypeError,
                          "%T.__bytes__() must return a bytes, not %T",
                          v, result);
-            Py_DECREF(result);
+            PyRegion_CLEARLOCAL(result);
             return NULL;
         }
         *pbuf = PyBytes_AS_STRING(result);
@@ -719,11 +720,11 @@ _PyBytes_FormatEx(const char *format, Py_ssize_t format_len,
                 if (key == NULL)
                     goto error;
                 if (args_owned) {
-                    Py_DECREF(args);
+                    PyRegion_CLEARLOCAL(args);
                     args_owned = 0;
                 }
                 args = PyObject_GetItem(dict, key);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 if (args == NULL) {
                     goto error;
                 }
@@ -1049,10 +1050,10 @@ _PyBytes_FormatEx(const char *format, Py_ssize_t format_len,
             if (dict && (argidx < arglen)) {
                 PyErr_SetString(PyExc_TypeError,
                            "not all arguments converted during bytes formatting");
-                Py_XDECREF(temp);
+                PyRegion_CLEARLOCAL(temp);
                 goto error;
             }
-            Py_XDECREF(temp);
+            PyRegion_CLEARLOCAL(temp);
 
 #ifndef NDEBUG
             /* check that we computed the exact size for this write */
@@ -1072,14 +1073,14 @@ _PyBytes_FormatEx(const char *format, Py_ssize_t format_len,
     }
 
     if (args_owned) {
-        Py_DECREF(args);
+        PyRegion_CLEARLOCAL(args);
     }
     return PyBytesWriter_FinishWithPointer(writer, res);
 
  error:
     PyBytesWriter_Discard(writer);
     if (args_owned) {
-        Py_DECREF(args);
+        PyRegion_CLEARLOCAL(args);
     }
     return NULL;
 }
@@ -1219,7 +1220,7 @@ PyObject *PyBytes_DecodeEscape(const char *s,
                                  "Such sequences will not work in the future. ",
                                  first_invalid_escape_char) < 0)
             {
-                Py_DECREF(result);
+                PyRegion_CLEARLOCAL(result);
                 return NULL;
             }
         }
@@ -1229,7 +1230,7 @@ PyObject *PyBytes_DecodeEscape(const char *s,
                                  "Such sequences will not work in the future. ",
                                  first_invalid_escape_char) < 0)
             {
-                Py_DECREF(result);
+                PyRegion_CLEARLOCAL(result);
                 return NULL;
             }
         }
@@ -1467,11 +1468,11 @@ bytes_concat(PyObject *a, PyObject *b)
 
     /* Optimize end cases */
     if (va.len == 0 && PyBytes_CheckExact(b)) {
-        result = Py_NewRef(b);
+        result = PyRegion_NewRef(b);
         goto done;
     }
     if (vb.len == 0 && PyBytes_CheckExact(a)) {
-        result = Py_NewRef(a);
+        result = PyRegion_NewRef(a);
         goto done;
     }
 
@@ -1510,7 +1511,7 @@ bytes_repeat(PyObject *self, Py_ssize_t n)
     }
     Py_ssize_t size = Py_SIZE(a) * n;
     if (size == Py_SIZE(a) && PyBytes_CheckExact(a)) {
-        return Py_NewRef(a);
+        return PyRegion_NewRef(a);
     }
     size_t nbytes = (size_t)size;
     if (nbytes + PyBytesObject_SIZE <= nbytes) {
@@ -1677,7 +1678,7 @@ bytes_subscript(PyObject *op, PyObject* item)
         else if (start == 0 && step == 1 &&
                  slicelength == PyBytes_GET_SIZE(self) &&
                  PyBytes_CheckExact(self)) {
-            return Py_NewRef(self);
+            return PyRegion_NewRef(self);
         }
         else if (step == 1) {
             return PyBytes_FromStringAndSize(
@@ -1748,7 +1749,7 @@ bytes___bytes___impl(PyBytesObject *self)
 /*[clinic end generated code: output=63a306a9bc0caac5 input=34ec5ddba98bd6bb]*/
 {
     if (PyBytes_CheckExact(self)) {
-        return Py_NewRef(self);
+        return PyRegion_NewRef(self);
     }
     else {
         return PyBytes_FromStringAndSize(self->ob_sval, Py_SIZE(self));
@@ -2038,7 +2039,7 @@ do_xstrip(PyBytesObject *self, int striptype, PyObject *sepobj)
     PyBuffer_Release(&vsep);
 
     if (i == 0 && j == len && PyBytes_CheckExact(self)) {
-        return Py_NewRef(self);
+        return PyRegion_NewRef(self);
     }
     else
         return PyBytes_FromStringAndSize(s+i, j-i);
@@ -2067,7 +2068,7 @@ do_strip(PyBytesObject *self, int striptype)
     }
 
     if (i == 0 && j == len && PyBytes_CheckExact(self)) {
-        return Py_NewRef(self);
+        return PyRegion_NewRef(self);
     }
     else
         return PyBytes_FromStringAndSize(s+i, j-i);
@@ -2246,7 +2247,9 @@ bytes_translate_impl(PyBytesObject *self, PyObject *table,
                 changed = 1;
         }
         if (!changed && PyBytes_CheckExact(input_obj)) {
-            Py_SETREF(result, Py_NewRef(input_obj));
+            if (PyRegion_XSETLOCALNEWREF(result, input_obj)) {
+                PyRegion_CLEAR(result);
+            }
         }
         PyBuffer_Release(&del_table_view);
         PyBuffer_Release(&table_view);
@@ -2274,8 +2277,8 @@ bytes_translate_impl(PyBytesObject *self, PyObject *table,
         changed = 1;
     }
     if (!changed && PyBytes_CheckExact(input_obj)) {
-        Py_DECREF(result);
-        return Py_NewRef(input_obj);
+        PyRegion_CLEARLOCAL(result);
+        return PyRegion_NewRef(input_obj);
     }
     /* Fix the size of the resulting byte string */
     if (inlen > 0)
@@ -2370,7 +2373,7 @@ bytes_removeprefix_impl(PyBytesObject *self, Py_buffer *prefix)
     }
 
     if (PyBytes_CheckExact(self)) {
-        return Py_NewRef(self);
+        return PyRegion_NewRef(self);
     }
 
     return PyBytes_FromStringAndSize(self_start, self_len);
@@ -2408,7 +2411,7 @@ bytes_removesuffix_impl(PyBytesObject *self, Py_buffer *suffix)
     }
 
     if (PyBytes_CheckExact(self)) {
-        return Py_NewRef(self);
+        return PyRegion_NewRef(self);
     }
 
     return PyBytes_FromStringAndSize(self_start, self_len);
@@ -2530,7 +2533,10 @@ bytes_fromhex_impl(PyTypeObject *type, PyObject *string)
 {
     PyObject *result = _PyBytes_FromHex(string, 0);
     if (type != &PyBytes_Type && result != NULL) {
-        Py_SETREF(result, PyObject_CallOneArg((PyObject *)type, result));
+        PyObject* val = PyObject_CallOneArg((PyObject *)type, result);
+        if (PyRegion_XSETLOCALREF(result, val)) {
+            return NULL;
+        }
     }
     return result;
 }
@@ -2817,14 +2823,14 @@ bytes_new_impl(PyTypeObject *type, PyObject *x, const char *encoding,
        PyObject_Bytes doesn't do. */
     else if ((func = _PyObject_LookupSpecial(x, &_Py_ID(__bytes__))) != NULL) {
         bytes = _PyObject_CallNoArgs(func);
-        Py_DECREF(func);
+        PyRegion_CLEARLOCAL(func);
         if (bytes == NULL)
             return NULL;
         if (!PyBytes_Check(bytes)) {
             PyErr_Format(PyExc_TypeError,
                          "%T.__bytes__() must return a bytes, not %T",
                          x, bytes);
-            Py_DECREF(bytes);
+            PyRegion_CLEARLOCAL(bytes);
             return NULL;
         }
     }
@@ -2857,6 +2863,7 @@ bytes_new_impl(PyTypeObject *type, PyObject *x, const char *encoding,
     }
 
     if (bytes != NULL && type != &PyBytes_Type) {
+        // Regions: Should always be safe since the object is new
         Py_SETREF(bytes, bytes_subtype_new(type, bytes));
     }
 
@@ -2902,9 +2909,12 @@ _PyBytes_FromList(PyObject *x)
 
     for (Py_ssize_t i = 0; i < PyList_GET_SIZE(x); i++) {
         PyObject *item = PyList_GET_ITEM(x, i);
+        if (PyRegion_AddLocalRef(item)) {
+            goto error;
+        }
         Py_INCREF(item);
         Py_ssize_t value = PyNumber_AsSsize_t(item, NULL);
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         if (value == -1 && PyErr_Occurred())
             goto error;
 
@@ -2995,7 +3005,7 @@ _PyBytes_FromIterator(PyObject *it, PyObject *x)
 
         /* Interpret it as an int (__index__) */
         value = PyNumber_AsSsize_t(item, NULL);
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         if (value == -1 && PyErr_Occurred())
             goto error;
 
@@ -3034,7 +3044,7 @@ PyBytes_FromObject(PyObject *x)
     }
 
     if (PyBytes_CheckExact(x)) {
-        return Py_NewRef(x);
+        return PyRegion_NewRef(x);
     }
 
     /* Use the modern buffer interface */
@@ -3051,7 +3061,7 @@ PyBytes_FromObject(PyObject *x)
         it = PyObject_GetIter(x);
         if (it != NULL) {
             result = _PyBytes_FromIterator(it, x);
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             return result;
         }
         if (!PyErr_ExceptionMatches(PyExc_TypeError)) {
@@ -3159,6 +3169,7 @@ PyTypeObject PyBytes_Type = {
     PyObject_Free,                              /* tp_free */
     .tp_reachable = _PyObject_ReachableVisitType,
     .tp_version_tag = _Py_TYPE_VERSION_BYTES,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 void
@@ -3206,7 +3217,7 @@ PyBytes_Concat(PyObject **pv, PyObject *w)
         /* Multiple references, need to create new object */
         PyObject *v;
         v = bytes_concat(*pv, w);
-        Py_SETREF(*pv, v);
+        PyRegion_XSETLOCALREF(*pv, v);
     }
 }
 
@@ -3214,7 +3225,7 @@ void
 PyBytes_ConcatAndDel(PyObject **pv, PyObject *w)
 {
     PyBytes_Concat(pv, w);
-    Py_XDECREF(w);
+    PyRegion_CLEARLOCAL(w);
 }
 
 
@@ -3238,7 +3249,7 @@ _PyBytes_Resize(PyObject **pv, Py_ssize_t newsize)
     v = *pv;
     if (!PyBytes_Check(v) || newsize < 0) {
         *pv = 0;
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         PyErr_BadInternalCall();
         return -1;
     }
@@ -3249,12 +3260,12 @@ _PyBytes_Resize(PyObject **pv, Py_ssize_t newsize)
     }
     if (oldsize == 0) {
         *pv = _PyBytes_FromSize(newsize, 0);
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         return (*pv == NULL) ? -1 : 0;
     }
     if (newsize == 0) {
         *pv = bytes_get_empty();
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         return 0;
     }
     if (Py_REFCNT(v) != 1) {
@@ -3267,7 +3278,7 @@ _PyBytes_Resize(PyObject **pv, Py_ssize_t newsize)
         else {
             *pv = PyBytes_FromStringAndSize(PyBytes_AS_STRING(v), newsize);
         }
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         return (*pv == NULL) ? -1 : 0;
     }
 
@@ -3309,7 +3320,7 @@ striter_dealloc(PyObject *op)
 {
     striterobject *it = _striterobject_CAST(op);
     _PyObject_GC_UNTRACK(it);
-    Py_XDECREF(it->it_seq);
+    PyRegion_CLEAR(it, it->it_seq);
     PyObject_GC_Del(it);
 }
 
@@ -3339,7 +3350,7 @@ striter_next(PyObject *op)
     }
 
     it->it_seq = NULL;
-    Py_DECREF(seq);
+    PyRegion_CLEARLOCAL(seq);
     return NULL;
 }
 
@@ -3432,6 +3443,7 @@ PyTypeObject PyBytesIter_Type = {
     striter_methods,                            /* tp_methods */
     0,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyObject *
@@ -3446,6 +3458,10 @@ bytes_iter(PyObject *seq)
     it = PyObject_GC_New(striterobject, &PyBytesIter_Type);
     if (it == NULL)
         return NULL;
+    if (PyRegion_AddLocalRef(seq)) {
+        Py_DECREF(it);
+        return NULL;
+    }
     it->it_index = 0;
     it->it_seq = (PyBytesObject *)Py_NewRef(seq);
     _PyObject_GC_TRACK(it);
@@ -3629,7 +3645,7 @@ PyBytesWriter_Discard(PyBytesWriter *writer)
         return;
     }
 
-    Py_XDECREF(writer->obj);
+    PyRegion_CLEARLOCAL(writer->obj);
     _Py_FREELIST_FREE(bytes_writers, writer, PyMem_Free);
 }
 
