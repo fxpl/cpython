@@ -1261,10 +1261,17 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
         return Py_OWNERSHIP_TRAVERSE_SKIP;
     }
 
-    // FIXME(regions): xFrednet: Making these objects immutable is
-    // a hack, because we don't need them to work for the minimum
-    // viable product and correctly implementing them is a pain!
-    if (PyUnicode_CheckExact(tgt) || PyType_Check(tgt)) {
+    if (
+        // FIXME(regions): xFrednet: This currently manually freezes stuff which
+        // should be frozen implicitly by checking for immutability.
+        // Either way, we probably want a movability which freezes the object
+        // instead of moving it into the region.
+        PyUnicode_CheckExact(tgt) || PyLong_CheckExact(tgt)
+        // FIXME(regions): xFrednet: This is a hack, freezing these things just makes
+        // life a lot easier. It shouldn't impair the minimum viable product. The full
+        // implementation will need to handle these.
+        || PyType_Check(tgt)
+    ) {
         if (_PyImmutability_Freeze(tgt)) {
             return Py_OWNERSHIP_TRAVERSE_ERR;
         }
