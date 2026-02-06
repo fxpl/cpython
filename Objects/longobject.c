@@ -358,7 +358,7 @@ _PyLong_Negate(PyLongObject **x_p)
     }
 
     *x_p = _PyLong_FromSTwoDigits(-medium_value(x));
-    Py_DECREF(x);
+    PyRegion_CLEARLOCAL(x);
 }
 
 #define PYLONG_FROM_INT(UINT_TYPE, INT_TYPE, ival)                                  \
@@ -655,7 +655,7 @@ PyLong_AsLongAndOverflow(PyObject *vv, int *overflow)
     }
   exit:
     if (do_decref) {
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
     }
     return res;
 }
@@ -888,7 +888,7 @@ PyLong_AsUnsignedLongMask(PyObject *op)
         return (unsigned long)-1;
 
     val = _PyLong_AsUnsignedLongMask((PyObject *)lo);
-    Py_DECREF(lo);
+    PyRegion_CLEARLOCAL(lo);
     return val;
 }
 
@@ -1311,7 +1311,7 @@ PyLong_AsNativeBytes(PyObject* vv, void* buffer, Py_ssize_t n, int flags)
         && _PyLong_IsNegative(v)) {
         PyErr_SetString(PyExc_ValueError, "Cannot convert negative int");
         if (do_decref) {
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
         }
         return -1;
     }
@@ -1449,7 +1449,7 @@ PyLong_AsNativeBytes(PyObject* vv, void* buffer, Py_ssize_t n, int flags)
     }
 
     if (do_decref) {
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
     }
 
     return res;
@@ -1604,7 +1604,7 @@ PyLong_AsLongLong(PyObject *vv)
                                   SIZEOF_LONG_LONG, PY_LITTLE_ENDIAN, 1, 1);
     }
     if (do_decref) {
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
     }
 
     /* Plan 9 can't handle long long in ? : expressions */
@@ -1712,7 +1712,7 @@ PyLong_AsUnsignedLongLongMask(PyObject *op)
         return (unsigned long long)-1;
 
     val = _PyLong_AsUnsignedLongLongMask((PyObject *)lo);
-    Py_DECREF(lo);
+    PyRegion_CLEARLOCAL(lo);
     return val;
 }
 
@@ -1797,7 +1797,7 @@ PyLong_AsLongLongAndOverflow(PyObject *vv, int *overflow)
     }
   exit:
     if (do_decref) {
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
     }
     return res;
 }
@@ -2065,18 +2065,21 @@ pylong_int_to_decimal_string(PyObject *aa,
         goto success;
     }
     else {
+        if (PyRegion_AddLocalRef(s)) {
+            goto error;
+        }
         *p_output = Py_NewRef(s);
         goto success;
     }
 
 error:
-        Py_DECREF(mod);
-        Py_XDECREF(s);
+        PyRegion_CLEARLOCAL(mod);
+        PyRegion_CLEARLOCAL(s);
         return -1;
 
 success:
-        Py_DECREF(mod);
-        Py_DECREF(s);
+        PyRegion_CLEARLOCAL(mod);
+        PyRegion_CLEARLOCAL(s);
         return 0;
 }
 #endif /* WITH_PYLONG_MODULE */
@@ -2180,7 +2183,7 @@ long_to_decimal_string_internal(PyObject *aa,
         }
         /* check for keyboard interrupt */
         SIGCHECK({
-                Py_DECREF(scratch);
+                PyRegion_CLEARLOCAL(scratch);
                 return -1;
             });
     }
@@ -2202,7 +2205,7 @@ long_to_decimal_string_internal(PyObject *aa,
         int max_str_digits = interp->long_state.max_str_digits;
         Py_ssize_t strlen_nosign = strlen - negative;
         if ((max_str_digits > 0) && (strlen_nosign > max_str_digits)) {
-            Py_DECREF(scratch);
+            PyRegion_CLEARLOCAL(scratch);
             PyErr_Format(PyExc_ValueError, _MAX_STR_DIGITS_ERROR_FMT_TO_STR,
                          max_str_digits);
             return -1;
@@ -2210,7 +2213,7 @@ long_to_decimal_string_internal(PyObject *aa,
     }
     if (writer) {
         if (_PyUnicodeWriter_Prepare(writer, strlen, '9') == -1) {
-            Py_DECREF(scratch);
+            PyRegion_CLEARLOCAL(scratch);
             return -1;
         }
     }
@@ -2218,14 +2221,14 @@ long_to_decimal_string_internal(PyObject *aa,
         *bytes_str = PyBytesWriter_GrowAndUpdatePointer(bytes_writer, strlen,
                                                         *bytes_str);
         if (*bytes_str == NULL) {
-            Py_DECREF(scratch);
+            PyRegion_CLEARLOCAL(scratch);
             return -1;
         }
     }
     else {
         str = PyUnicode_New(strlen, '9');
         if (str == NULL) {
-            Py_DECREF(scratch);
+            PyRegion_CLEARLOCAL(scratch);
             return -1;
         }
     }
@@ -2652,17 +2655,17 @@ pylong_int_from_string(const char *start, const char *end, PyLongObject **res)
     }
     PyObject *s = PyUnicode_FromStringAndSize(start, end-start);
     if (s == NULL) {
-        Py_DECREF(mod);
+        PyRegion_CLEARLOCAL(mod);
         goto error;
     }
     PyObject *result = PyObject_CallMethod(mod, "int_from_string", "O", s);
-    Py_DECREF(s);
-    Py_DECREF(mod);
+    PyRegion_CLEARLOCAL(s);
+    PyRegion_CLEARLOCAL(mod);
     if (result == NULL) {
         goto error;
     }
     if (!PyLong_Check(result)) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         PyErr_SetString(PyExc_TypeError,
                         "_pylong.int_from_string did not return an int");
         goto error;
@@ -2911,7 +2914,7 @@ long_from_non_binary_base(const char *start, const char *end, Py_ssize_t digits,
                 assert(_PyLong_DigitCount(z) == size_z);
                 tmp = long_alloc(size_z + 1);
                 if (tmp == NULL) {
-                    Py_DECREF(z);
+                    PyRegion_CLEARLOCAL(z);
                     *res = NULL;
                     return 0;
                 }
@@ -3133,7 +3136,7 @@ PyLong_FromString(const char *str, char **pend, int base)
     if (pend != NULL) {
         *pend = (char *)str;
     }
-    Py_XDECREF(z);
+    PyRegion_CLEARLOCAL(z);
     slen = strlen(orig_str) < 200 ? strlen(orig_str) : 200;
     strobj = PyUnicode_FromStringAndSize(orig_str, slen);
     if (strobj == NULL) {
@@ -3142,7 +3145,7 @@ PyLong_FromString(const char *str, char **pend, int base)
     PyErr_Format(PyExc_ValueError,
                  "invalid literal for int() with base %d: %.200R",
                  base, strobj);
-    Py_DECREF(strobj);
+    PyRegion_CLEARLOCAL(strobj);
     return NULL;
 }
 
@@ -3160,13 +3163,13 @@ _PyLong_FromBytes(const char *s, Py_ssize_t len, int base)
     result = PyLong_FromString(s, &end, base);
     if (end == NULL || (result != NULL && end == s + len))
         return result;
-    Py_XDECREF(result);
+    PyRegion_CLEARLOCAL(result);
     strobj = PyBytes_FromStringAndSize(s, Py_MIN(len, 200));
     if (strobj != NULL) {
         PyErr_Format(PyExc_ValueError,
                      "invalid literal for int() with base %d: %.200R",
                      base, strobj);
-        Py_DECREF(strobj);
+        PyRegion_CLEARLOCAL(strobj);
     }
     return NULL;
 }
@@ -3189,11 +3192,11 @@ PyLong_FromUnicodeObject(PyObject *u, int base)
 
     result = PyLong_FromString(buffer, &end, base);
     if (end == NULL || (result != NULL && end == buffer + buflen)) {
-        Py_DECREF(asciidig);
+        PyRegion_CLEARLOCAL(asciidig);
         return result;
     }
-    Py_DECREF(asciidig);
-    Py_XDECREF(result);
+    PyRegion_CLEARLOCAL(asciidig);
+    PyRegion_CLEARLOCAL(result);
     PyErr_Format(PyExc_ValueError,
                  "invalid literal for int() with base %d: %.200R",
                  base, u);
@@ -3231,7 +3234,7 @@ long_divrem(PyLongObject *a, PyLongObject *b,
             return -1;
         *prem = (PyLongObject *) PyLong_FromLong((long)rem);
         if (*prem == NULL) {
-            Py_DECREF(z);
+            PyRegion_CLEARLOCAL(z);
             return -1;
         }
     }
@@ -3248,15 +3251,15 @@ long_divrem(PyLongObject *a, PyLongObject *b,
     if ((_PyLong_IsNegative(a)) != (_PyLong_IsNegative(b))) {
         _PyLong_Negate(&z);
         if (z == NULL) {
-            Py_CLEAR(*prem);
+            PyRegion_CLEARLOCAL(*prem);
             return -1;
         }
     }
     if (_PyLong_IsNegative(a) && !_PyLong_IsZero(*prem)) {
         _PyLong_Negate(prem);
         if (*prem == NULL) {
-            Py_DECREF(z);
-            Py_CLEAR(*prem);
+            PyRegion_CLEARLOCAL(z);
+            PyRegion_CLEARLOCAL(*prem);
             return -1;
         }
     }
@@ -3290,7 +3293,7 @@ long_rem(PyLongObject *a, PyLongObject *b, PyLongObject **prem)
     }
     else {
         /* Slow path using divrem. */
-        Py_XDECREF(x_divrem(a, b, prem));
+        Py_DECREF(x_divrem(a, b, prem));
         *prem = maybe_small_long(*prem);
         if (*prem == NULL)
             return -1;
@@ -3299,7 +3302,7 @@ long_rem(PyLongObject *a, PyLongObject *b, PyLongObject **prem)
     if (_PyLong_IsNegative(a) && !_PyLong_IsZero(*prem)) {
         _PyLong_Negate(prem);
         if (*prem == NULL) {
-            Py_CLEAR(*prem);
+            PyRegion_CLEARLOCAL(*prem);
             return -1;
         }
     }
@@ -3337,7 +3340,7 @@ x_divrem(PyLongObject *v1, PyLongObject *w1, PyLongObject **prem)
     }
     w = long_alloc(size_w);
     if (w == NULL) {
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         *prem = NULL;
         return NULL;
     }
@@ -3359,8 +3362,8 @@ x_divrem(PyLongObject *v1, PyLongObject *w1, PyLongObject **prem)
     assert(k >= 0);
     a = long_alloc(k);
     if (a == NULL) {
-        Py_DECREF(w);
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(w);
+        PyRegion_CLEARLOCAL(v);
         *prem = NULL;
         return NULL;
     }
@@ -3373,9 +3376,9 @@ x_divrem(PyLongObject *v1, PyLongObject *w1, PyLongObject **prem)
            single-digit quotient q, remainder in vk[0:size_w]. */
 
         SIGCHECK({
-                Py_DECREF(a);
-                Py_DECREF(w);
-                Py_DECREF(v);
+                PyRegion_CLEARLOCAL(a);
+                PyRegion_CLEARLOCAL(w);
+                PyRegion_CLEARLOCAL(v);
                 *prem = NULL;
                 return NULL;
             });
@@ -3434,7 +3437,7 @@ x_divrem(PyLongObject *v1, PyLongObject *w1, PyLongObject **prem)
     /* unshift remainder; we reuse w to store the result */
     carry = v_rshift(w0, v0, size_w, d);
     assert(carry==0);
-    Py_DECREF(v);
+    PyRegion_CLEARLOCAL(v);
 
     *prem = long_normalize(w);
     return long_normalize(a);
@@ -3956,7 +3959,7 @@ x_mul(PyLongObject *a, PyLongObject *b)
             digit *pa = a->long_value.ob_digit + i + 1;
 
             SIGCHECK({
-                    Py_DECREF(z);
+                    PyRegion_CLEARLOCAL(z);
                     return NULL;
                 });
 
@@ -4008,7 +4011,7 @@ x_mul(PyLongObject *a, PyLongObject *b)
             digit *pbend = b->long_value.ob_digit + size_b;
 
             SIGCHECK({
-                    Py_DECREF(z);
+                    PyRegion_CLEARLOCAL(z);
                     return NULL;
                 });
 
@@ -4049,7 +4052,7 @@ kmul_split(PyLongObject *n,
     if ((hi = long_alloc(size_hi)) == NULL)
         return -1;
     if ((lo = long_alloc(size_lo)) == NULL) {
-        Py_DECREF(hi);
+        PyRegion_CLEARLOCAL(hi);
         return -1;
     }
 
@@ -4126,6 +4129,7 @@ k_mul(PyLongObject *a, PyLongObject *b)
     assert(_PyLong_IsPositive(ah));        /* the split isn't degenerate */
 
     if (a == b) {
+        // Regions: No write barrier needed since `Long`s can't be in a region
         bh = (PyLongObject*)Py_NewRef(ah);
         bl = (PyLongObject*)Py_NewRef(al);
     }
@@ -4170,7 +4174,7 @@ k_mul(PyLongObject *a, PyLongObject *b)
 
     /* 3. t2 <- al*bl, and copy into the low digits. */
     if ((t2 = k_mul(al, bl)) == NULL) {
-        Py_DECREF(t1);
+        PyRegion_CLEARLOCAL(t1);
         goto fail;
     }
     assert(!_PyLong_IsNegative(t2));
@@ -4202,7 +4206,7 @@ k_mul(PyLongObject *a, PyLongObject *b)
         t2 = (PyLongObject*)Py_NewRef(t1);
     }
     else if ((t2 = x_add(bh, bl)) == NULL) {
-        Py_DECREF(t1);
+        PyRegion_CLEARLOCAL(t1);
         goto fail;
     }
     _Py_DECREF_INT(bh);
@@ -4224,11 +4228,11 @@ k_mul(PyLongObject *a, PyLongObject *b)
     return long_normalize(ret);
 
   fail:
-    Py_XDECREF(ret);
-    Py_XDECREF(ah);
-    Py_XDECREF(al);
-    Py_XDECREF(bh);
-    Py_XDECREF(bl);
+    PyRegion_CLEARLOCAL(ret);
+    PyRegion_CLEARLOCAL(ah);
+    PyRegion_CLEARLOCAL(al);
+    PyRegion_CLEARLOCAL(bh);
+    PyRegion_CLEARLOCAL(bl);
     return NULL;
 }
 
@@ -4335,8 +4339,8 @@ k_lopsided_mul(PyLongObject *a, PyLongObject *b)
     return long_normalize(ret);
 
   fail:
-    Py_DECREF(ret);
-    Py_XDECREF(bslice);
+    PyRegion_CLEARLOCAL(ret);
+    PyRegion_CLEARLOCAL(bslice);
     return NULL;
 }
 
@@ -4430,12 +4434,12 @@ pylong_int_divmod(PyLongObject *v, PyLongObject *w,
         return -1;
     }
     PyObject *result = PyObject_CallMethod(mod, "int_divmod", "OO", v, w);
-    Py_DECREF(mod);
+    PyRegion_CLEARLOCAL(mod);
     if (result == NULL) {
         return -1;
     }
     if (!PyTuple_Check(result)) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         PyErr_SetString(PyExc_ValueError,
                         "tuple is required from int_divmod()");
         return -1;
@@ -4443,7 +4447,7 @@ pylong_int_divmod(PyLongObject *v, PyLongObject *w,
     PyObject *q = PyTuple_GET_ITEM(result, 0);
     PyObject *r = PyTuple_GET_ITEM(result, 1);
     if (!PyLong_Check(q) || !PyLong_Check(r)) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         PyErr_SetString(PyExc_ValueError,
                         "tuple of int is required from int_divmod()");
         return -1;
@@ -4454,7 +4458,7 @@ pylong_int_divmod(PyLongObject *v, PyLongObject *w,
     if (pmod != NULL) {
         *pmod = (PyLongObject *)Py_NewRef(r);
     }
-    Py_DECREF(result);
+    PyRegion_CLEARLOCAL(result);
     return 0;
 }
 #endif /* WITH_PYLONG_MODULE */
@@ -4498,7 +4502,7 @@ l_divmod(PyLongObject *v, PyLongObject *w,
         if (pmod != NULL) {
             mod = (PyLongObject *)fast_mod(v, w);
             if (mod == NULL) {
-                Py_XDECREF(div);
+                PyRegion_CLEARLOCAL(div);
                 return -1;
             }
             *pmod = mod;
@@ -4530,13 +4534,13 @@ l_divmod(PyLongObject *v, PyLongObject *w,
         temp = long_add(mod, w);
         Py_SETREF(mod, temp);
         if (mod == NULL) {
-            Py_DECREF(div);
+            PyRegion_CLEARLOCAL(div);
             return -1;
         }
         temp = long_sub(div, (PyLongObject *)_PyLong_GetOne());
         if (temp == NULL) {
-            Py_DECREF(mod);
-            Py_DECREF(div);
+            PyRegion_CLEARLOCAL(mod);
+            PyRegion_CLEARLOCAL(div);
             return -1;
         }
         Py_SETREF(div, temp);
@@ -4544,12 +4548,12 @@ l_divmod(PyLongObject *v, PyLongObject *w,
     if (pdiv != NULL)
         *pdiv = div;
     else
-        Py_DECREF(div);
+        PyRegion_CLEARLOCAL(div);
 
     if (pmod != NULL)
         *pmod = mod;
     else
-        Py_DECREF(mod);
+        PyRegion_CLEARLOCAL(mod);
 
     return 0;
 }
@@ -4820,7 +4824,7 @@ long_true_divide(PyObject *v, PyObject *w)
             goto error;
         if (!_PyLong_IsZero(rem))
             inexact = 1;
-        Py_DECREF(rem);
+        PyRegion_CLEARLOCAL(rem);
     }
     x_size = _PyLong_DigitCount(x);
     assert(x_size > 0); /* result of division is never zero */
@@ -4841,7 +4845,7 @@ long_true_divide(PyObject *v, PyObject *w)
     dx = x->long_value.ob_digit[--x_size];
     while (x_size > 0)
         dx = dx * PyLong_BASE + x->long_value.ob_digit[--x_size];
-    Py_DECREF(x);
+    PyRegion_CLEARLOCAL(x);
 
     /* Check whether ldexp result will overflow a double. */
     if (shift + x_bits >= DBL_MAX_EXP &&
@@ -4891,8 +4895,8 @@ long_divmod(PyObject *a, PyObject *b)
         PyTuple_SET_ITEM(z, 1, (PyObject *) mod);
     }
     else {
-        Py_DECREF(div);
-        Py_DECREF(mod);
+        PyRegion_CLEARLOCAL(div);
+        PyRegion_CLEARLOCAL(mod);
     }
     return z;
 }
@@ -4939,12 +4943,12 @@ long_invmod(PyLongObject *a, PyLongObject *n)
         Py_SETREF(a, n);
         n = r;
         t = (PyLongObject *)long_mul(q, c);
-        Py_DECREF(q);
+        PyRegion_CLEARLOCAL(q);
         if (t == NULL) {
             goto Error;
         }
         s = long_sub(b, t);
-        Py_DECREF(t);
+        PyRegion_CLEARLOCAL(t);
         if (s == NULL) {
             goto Error;
         }
@@ -4953,27 +4957,27 @@ long_invmod(PyLongObject *a, PyLongObject *n)
     }
     /* references now owned: a, b, c, n */
 
-    Py_DECREF(c);
-    Py_DECREF(n);
+    PyRegion_CLEARLOCAL(c);
+    PyRegion_CLEARLOCAL(n);
     if (long_compare(a, (PyLongObject *)_PyLong_GetOne())) {
         /* a != 1; we don't have an inverse. */
-        Py_DECREF(a);
-        Py_DECREF(b);
+        PyRegion_CLEARLOCAL(a);
+        PyRegion_CLEARLOCAL(b);
         PyErr_SetString(PyExc_ValueError,
                         "base is not invertible for the given modulus");
         return NULL;
     }
     else {
         /* a == 1; b gives an inverse modulo n */
-        Py_DECREF(a);
+        PyRegion_CLEARLOCAL(a);
         return b;
     }
 
   Error:
-    Py_DECREF(a);
-    Py_DECREF(b);
-    Py_DECREF(c);
-    Py_DECREF(n);
+    PyRegion_CLEARLOCAL(a);
+    PyRegion_CLEARLOCAL(b);
+    PyRegion_CLEARLOCAL(c);
+    PyRegion_CLEARLOCAL(n);
     return NULL;
 }
 
@@ -5011,8 +5015,8 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
     else if (x == Py_None)
         c = NULL;
     else {
-        Py_DECREF(a);
-        Py_DECREF(b);
+        PyRegion_CLEARLOCAL(a);
+        PyRegion_CLEARLOCAL(b);
         Py_RETURN_NOTIMPLEMENTED;
     }
 
@@ -5021,8 +5025,8 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
                return a float.  This works because we know
                that this calls float_pow() which converts its
                arguments to double. */
-        Py_DECREF(a);
-        Py_DECREF(b);
+        PyRegion_CLEARLOCAL(a);
+        PyRegion_CLEARLOCAL(b);
         return PyFloat_Type.tp_as_number->nb_power(v, w, x);
     }
 
@@ -5108,7 +5112,7 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
         if (c != NULL) {                                \
             if (l_mod(X, c, &temp) < 0)                 \
                 goto Error;                             \
-            Py_XDECREF(X);                              \
+            PyRegion_CLEARLOCAL(X);                     \
             X = temp;                                   \
             temp = NULL;                                \
         }                                               \
@@ -5121,7 +5125,7 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
         temp = (PyLongObject *)long_mul(X, Y);  \
         if (temp == NULL)                       \
             goto Error;                         \
-        Py_XDECREF(result);                     \
+        PyRegion_CLEARLOCAL(result);            \
         result = temp;                          \
         temp = NULL;                            \
         REDUCE(result);                         \
@@ -5191,7 +5195,7 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
             MULT(table[i-1], a2, table[i]);
             ++num_table_entries; /* incremented iff MULT succeeded */
         }
-        Py_CLEAR(a2);
+        PyRegion_CLEARLOCAL(a2);
 
         /* Repeatedly extract the next (no more than) EXP_WINDOW_SIZE bits
          * into `pending`, starting with the next 1 bit.  The current bit
@@ -5247,16 +5251,16 @@ long_pow(PyObject *v, PyObject *w, PyObject *x)
     goto Done;
 
   Error:
-    Py_CLEAR(z);
+    PyRegion_CLEARLOCAL(z);
     /* fall through */
   Done:
     for (i = 0; i < num_table_entries; ++i)
-        Py_DECREF(table[i]);
-    Py_DECREF(a);
-    Py_DECREF(b);
-    Py_XDECREF(c);
-    Py_XDECREF(a2);
-    Py_XDECREF(temp);
+        PyRegion_CLEARLOCAL(table[i]);
+    PyRegion_CLEARLOCAL(a);
+    PyRegion_CLEARLOCAL(b);
+    PyRegion_CLEARLOCAL(c);
+    PyRegion_CLEARLOCAL(a2);
+    PyRegion_CLEARLOCAL(temp);
     return (PyObject *)z;
 }
 
@@ -5614,7 +5618,7 @@ long_bitwise(PyLongObject *a,
     if (negb) {
         z = long_alloc(size_b);
         if (z == NULL) {
-            Py_DECREF(a);
+            PyRegion_CLEARLOCAL(a);
             return NULL;
         }
         v_complement(z->long_value.ob_digit, b->long_value.ob_digit, size_b);
@@ -5658,8 +5662,8 @@ long_bitwise(PyLongObject *a,
        the final two's complement of z doesn't overflow. */
     z = long_alloc(size_z + negz);
     if (z == NULL) {
-        Py_DECREF(a);
-        Py_DECREF(b);
+        PyRegion_CLEARLOCAL(a);
+        PyRegion_CLEARLOCAL(b);
         return NULL;
     }
 
@@ -5696,8 +5700,8 @@ long_bitwise(PyLongObject *a,
         v_complement(z->long_value.ob_digit, z->long_value.ob_digit, size_z+1);
     }
 
-    Py_DECREF(a);
-    Py_DECREF(b);
+    PyRegion_CLEARLOCAL(a);
+    PyRegion_CLEARLOCAL(b);
     return (PyObject *)maybe_small_long(long_normalize(z));
 }
 
@@ -5771,7 +5775,7 @@ _PyLong_GCD(PyObject *aarg, PyObject *barg)
         return NULL;
     b = long_abs(b);
     if (b == NULL) {
-        Py_DECREF(a);
+        PyRegion_CLEARLOCAL(a);
         return NULL;
     }
     if (long_compare(a, b) < 0) {
@@ -5794,13 +5798,13 @@ _PyLong_GCD(PyObject *aarg, PyObject *barg)
         if (size_b == 0) {
             if (size_a < alloc_a) {
                 r = (PyLongObject *)_PyLong_Copy(a);
-                Py_DECREF(a);
+                PyRegion_CLEARLOCAL(a);
             }
             else
                 r = a;
-            Py_DECREF(b);
-            Py_XDECREF(c);
-            Py_XDECREF(d);
+            PyRegion_CLEARLOCAL(b);
+            PyRegion_CLEARLOCAL(c);
+            PyRegion_CLEARLOCAL(d);
             return (PyObject *)r;
         }
         x = (((twodigits)a->long_value.ob_digit[size_a-1] << (2*PyLong_SHIFT-nbits)) |
@@ -5905,13 +5909,13 @@ _PyLong_GCD(PyObject *aarg, PyObject *barg)
 
         Py_INCREF(c);
         Py_INCREF(d);
-        Py_DECREF(a);
-        Py_DECREF(b);
+        PyRegion_CLEARLOCAL(a);
+        PyRegion_CLEARLOCAL(b);
         a = long_normalize(c);
         b = long_normalize(d);
     }
-    Py_XDECREF(c);
-    Py_XDECREF(d);
+    PyRegion_CLEARLOCAL(c);
+    PyRegion_CLEARLOCAL(d);
 
 simple:
     assert(Py_REFCNT(a) > 0);
@@ -5930,8 +5934,8 @@ simple:
 #endif
     x = Py_ABS(x);
     y = Py_ABS(y);
-    Py_DECREF(a);
-    Py_DECREF(b);
+    PyRegion_CLEARLOCAL(a);
+    PyRegion_CLEARLOCAL(b);
 
     /* usual Euclidean algorithm for longs */
     while (y != 0) {
@@ -5948,10 +5952,10 @@ simple:
 #endif
 
 error:
-    Py_DECREF(a);
-    Py_DECREF(b);
-    Py_XDECREF(c);
-    Py_XDECREF(d);
+    PyRegion_CLEARLOCAL(a);
+    PyRegion_CLEARLOCAL(b);
+    PyRegion_CLEARLOCAL(c);
+    PyRegion_CLEARLOCAL(d);
     return NULL;
 }
 
@@ -6046,7 +6050,7 @@ long_subtype_new(PyTypeObject *type, PyObject *x, PyObject *obase)
     }
     newobj = (PyLongObject *)type->tp_alloc(type, n);
     if (newobj == NULL) {
-        Py_DECREF(tmp);
+        PyRegion_CLEARLOCAL(tmp);
         return NULL;
     }
     assert(PyLong_Check(newobj));
@@ -6054,7 +6058,7 @@ long_subtype_new(PyTypeObject *type, PyObject *x, PyObject *obase)
     for (i = 0; i < n; i++) {
         newobj->long_value.ob_digit[i] = tmp->long_value.ob_digit[i];
     }
-    Py_DECREF(tmp);
+    PyRegion_CLEARLOCAL(tmp);
     return (PyObject *)newobj;
 }
 
@@ -6161,7 +6165,7 @@ _PyLong_DivmodNear(PyObject *a, PyObject *b)
             goto error;
     }
     cmp = long_compare((PyLongObject *)twice_rem, (PyLongObject *)b);
-    Py_DECREF(twice_rem);
+    PyRegion_CLEARLOCAL(twice_rem);
 
     quo_is_odd = (quo->long_value.ob_digit[0] & 1) != 0;
     if ((_PyLong_IsNegative((PyLongObject *)b) ? cmp < 0 : cmp > 0) || (cmp == 0 && quo_is_odd)) {
@@ -6194,8 +6198,8 @@ _PyLong_DivmodNear(PyObject *a, PyObject *b)
     return result;
 
   error:
-    Py_XDECREF(quo);
-    Py_XDECREF(rem);
+    PyRegion_CLEARLOCAL(quo);
+    PyRegion_CLEARLOCAL(rem);
     return NULL;
 }
 
@@ -6237,7 +6241,7 @@ int___round___impl(PyObject *self, PyObject *o_ndigits)
 
     /* if ndigits >= 0 then no rounding is necessary; return self unchanged */
     if (!_PyLong_IsNegative((PyLongObject *)ndigits)) {
-        Py_DECREF(ndigits);
+        PyRegion_CLEARLOCAL(ndigits);
         return long_long(self);
     }
 
@@ -6249,12 +6253,12 @@ int___round___impl(PyObject *self, PyObject *o_ndigits)
 
     PyObject *result = PyLong_FromLong(10);
     if (result == NULL) {
-        Py_DECREF(ndigits);
+        PyRegion_CLEARLOCAL(ndigits);
         return NULL;
     }
 
     temp = long_pow(result, ndigits, Py_None);
-    Py_DECREF(ndigits);
+    PyRegion_CLEARLOCAL(ndigits);
     Py_SETREF(result, temp);
     if (result == NULL)
         return NULL;
@@ -6374,7 +6378,7 @@ int_as_integer_ratio_impl(PyObject *self)
         return NULL;
     }
     ratio_tuple = PyTuple_Pack(2, numerator, _PyLong_GetOne());
-    Py_DECREF(numerator);
+    PyRegion_CLEARLOCAL(numerator);
     return ratio_tuple;
 }
 
@@ -6482,7 +6486,7 @@ int_from_bytes_impl(PyTypeObject *type, PyObject *bytes_obj,
     long_obj = _PyLong_FromByteArray(
         (unsigned char *)PyBytes_AS_STRING(bytes), Py_SIZE(bytes),
         little_endian, is_signed);
-    Py_DECREF(bytes);
+    PyRegion_CLEARLOCAL(bytes);
 
     if (long_obj != NULL && type != &PyLong_Type) {
         Py_SETREF(long_obj, PyObject_CallOneArg((PyObject *)type, long_obj));
@@ -6679,6 +6683,7 @@ PyTypeObject PyLong_Type = {
     .tp_vectorcall = long_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_INT,
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyTypeObject Int_InfoType;
@@ -6728,7 +6733,7 @@ PyLong_GetInfo(void)
     PyStructSequence_SET_ITEM(int_info, field++,
                               PyLong_FromLong(_PY_LONG_MAX_STR_DIGITS_THRESHOLD));
     if (PyErr_Occurred()) {
-        Py_CLEAR(int_info);
+        PyRegion_CLEARLOCAL(int_info);
         return NULL;
     }
     return int_info;
@@ -6911,7 +6916,7 @@ PyLong_FreeExport(PyLongExport *export_long)
     PyObject *obj = (PyObject*)export_long->_reserved;
     if (obj) {
         export_long->_reserved = 0;
-        Py_DECREF(obj);
+        PyRegion_CLEARLOCAL(obj);
     }
 }
 
@@ -6953,7 +6958,7 @@ PyLongWriter_Discard(PyLongWriter *writer)
 
     PyLongObject *obj = (PyLongObject *)writer;
     assert(Py_REFCNT(obj) == 1);
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
 }
 
 
