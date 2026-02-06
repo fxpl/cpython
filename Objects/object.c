@@ -1864,6 +1864,9 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
             return NULL;
     }
 
+    if (PyRegion_AddLocalRef(name)) {
+        return NULL;
+    }
     Py_INCREF(name);
 
     PyThreadState *tstate = _PyThreadState_GET();
@@ -1877,6 +1880,7 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
     if (descr != NULL) {
         f = Py_TYPE(descr)->tp_descr_get;
         if (f != NULL && PyDescr_IsData(descr)) {
+            PyRegion_NotifyTypeUse(Py_TYPE(descr));
             res = f(descr, obj, (PyObject *)Py_TYPE(obj));
             if (res == NULL && suppress &&
                     PyErr_ExceptionMatches(PyExc_AttributeError)) {
@@ -1916,9 +1920,13 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
         }
     }
     if (dict != NULL) {
+        if (PyRegion_AddLocalRef(dict)) {
+            res = NULL;
+            goto done;
+        }
         Py_INCREF(dict);
         int rc = PyDict_GetItemRef(dict, name, &res);
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         if (res != NULL) {
             goto done;
         }
@@ -1956,7 +1964,7 @@ _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
     }
   done:
     _PyThreadState_PopCStackRef(tstate, &cref);
-    Py_DECREF(name);
+    PyRegion_CLEARLOCAL(name);
     return res;
 }
 
@@ -1992,6 +2000,9 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
         return -1;
     }
 
+    if (PyRegion_AddLocalRefs(name, tp)) {
+        return -1;
+    }
     Py_INCREF(name);
     Py_INCREF(tp);
 
@@ -2005,6 +2016,7 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
     if (descr != NULL) {
         f = Py_TYPE(descr)->tp_descr_set;
         if (f != NULL) {
+            PyRegion_NotifyTypeUse(Py_TYPE(descr));
             res = f(descr, obj, value);
             goto done;
         }
@@ -2053,6 +2065,7 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
     }
     else {
         if (PyRegion_AddLocalRef(dict)) {
+            res = -1;
             goto done;
         }
         Py_INCREF(dict);
@@ -2060,8 +2073,7 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
             res = PyDict_DelItem(dict, name);
         else
             res = PyDict_SetItem(dict, name, value);
-        PyRegion_RemoveLocalRef(dict);
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
     }
   error_check:
     if (res < 0 && PyErr_ExceptionMatches(PyExc_KeyError)) {
@@ -2072,8 +2084,8 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
     }
   done:
     _PyThreadState_PopCStackRef(tstate, &cref);
-    Py_DECREF(tp);
-    Py_DECREF(name);
+    PyRegion_CLEARLOCAL(tp);
+    PyRegion_CLEARLOCAL(name);
     return res;
 }
 

@@ -7295,11 +7295,11 @@ object_repr(PyObject *self)
     if (mod == NULL)
         PyErr_Clear();
     else if (!PyUnicode_Check(mod)) {
-        Py_SETREF(mod, NULL);
+        PyRegion_CLEARLOCAL(mod);
     }
     name = type_qualname((PyObject *)type, NULL);
     if (name == NULL) {
-        Py_XDECREF(mod);
+        PyRegion_CLEARLOCAL(mod);
         return NULL;
     }
     if (mod != NULL && !_PyUnicode_Equal(mod, &_Py_ID(builtins)))
@@ -7307,8 +7307,8 @@ object_repr(PyObject *self)
     else
         rtn = PyUnicode_FromFormat("<%s object at %p>",
                                   type->tp_name, self);
-    Py_XDECREF(mod);
-    Py_DECREF(name);
+    PyRegion_CLEARLOCAL(mod);
+    PyRegion_CLEARLOCAL(name);
     return rtn;
 }
 
@@ -7318,8 +7318,11 @@ object_str(PyObject *self)
     unaryfunc f;
 
     f = Py_TYPE(self)->tp_repr;
-    if (f == NULL)
+    if (f != NULL) {
+        PyRegion_NotifyTypeUse(Py_TYPE(self));
+    } else {
         f = object_repr;
+    }
     return f(self);
 }
 
@@ -7344,10 +7347,11 @@ object_richcompare(PyObject *self, PyObject *other, int op)
             res = Py_NewRef(Py_NotImplemented);
             break;
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(self));
         res = (*Py_TYPE(self)->tp_richcompare)(self, other, Py_EQ);
         if (res != NULL && res != Py_NotImplemented) {
             int ok = PyObject_IsTrue(res);
-            Py_DECREF(res);
+            PyRegion_CLEARLOCAL(res);
             if (ok < 0)
                 res = NULL;
             else {
@@ -8405,6 +8409,9 @@ PyTypeObject PyBaseObject_Type = {
     0,                                          /* tp_weaklistoffset */
     0,                                          /* tp_iter */
     0,                                          /* tp_iternext */
+
+    // TODO: Migrate rest of these functions to support Regions
+
     object_methods,                             /* tp_methods */
     0,                                          /* tp_members */
     object_getsets,                             /* tp_getset */
