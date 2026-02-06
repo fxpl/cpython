@@ -2248,7 +2248,7 @@ bytes_translate_impl(PyBytesObject *self, PyObject *table,
         }
         if (!changed && PyBytes_CheckExact(input_obj)) {
             if (PyRegion_XSETLOCALNEWREF(result, input_obj)) {
-                PyRegion_CLEAR(result);
+                PyRegion_CLEARLOCAL(result);
             }
         }
         PyBuffer_Release(&del_table_view);

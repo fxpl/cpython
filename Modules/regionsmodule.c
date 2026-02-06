@@ -180,8 +180,17 @@ regions_exec(PyObject *module) {
         return -1;
     }
 
-    // Freeze the `None` struct
+    // Freeze Builtin values
     if (_PyImmutability_Freeze(_PyObject_CAST(Py_None)) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_Freeze(_PyObject_CAST(Py_NotImplemented)) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_Freeze(_PyObject_CAST(Py_True)) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_Freeze(_PyObject_CAST(Py_False)) != 0) {
         return -1;
     }
 
