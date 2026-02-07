@@ -604,7 +604,7 @@ list_dealloc(PyObject *self)
         op->ob_item = NULL;
     }
     if (PyList_CheckExact(op)) {
-        _Py_FREELIST_FREE(lists, op, PyObject_GC_Del);
+        _Py_FREELIST_FREE_OBJ(lists, op, PyObject_GC_Del);
     }
     else {
         PyObject_GC_Del(op);
@@ -4218,7 +4218,7 @@ listiter_dealloc(PyObject *self)
     PyRegion_RemoveRef(it, it->it_seq);
     Py_XDECREF(it->it_seq);
     assert(Py_IS_TYPE(self, &PyListIter_Type));
-    _Py_FREELIST_FREE(list_iters, it, PyObject_GC_Del);
+    _Py_FREELIST_FREE_OBJ(list_iters, it, PyObject_GC_Del);
 }
 
 static int

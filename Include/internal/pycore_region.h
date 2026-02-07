@@ -151,7 +151,6 @@ PyAPI_FUNC(PyObject*) _PyRegion_GetBridge(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_RemoveBridge(Py_region_t region);
 
 PyAPI_FUNC(int) _PyRegion_SignalImmutable(PyObject *obj);
-PyAPI_FUNC(void) _PyRegion_SignalDealloc(PyObject *obj);
 
 PyAPI_FUNC(int) _PyRegion_SetCownRegion(_PyCownObject *cown);
 PyAPI_FUNC(int) _PyRegion_HasOwner(Py_region_t region);

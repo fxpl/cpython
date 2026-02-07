@@ -236,7 +236,7 @@ void
 _PyFloat_ExactDealloc(PyObject *obj)
 {
     assert(PyFloat_CheckExact(obj));
-    _Py_FREELIST_FREE(floats, obj, PyObject_Free);
+    _Py_FREELIST_FREE_OBJ(floats, obj, PyObject_Free);
 }
 
 static void

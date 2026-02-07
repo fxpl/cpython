@@ -423,6 +423,7 @@ validate_list(PyGC_Head *head, enum flagstates flags)
         //
         // assert((gc->_gc_prev & PREV_MASK_COLLECTING) == prev_value);
         // assert((gc->_gc_next & NEXT_MASK_UNREACHABLE) == next_value);
+        assert((prev_value + next_value) || true);
         prev = gc;
         gc = truenext;
     }
@@ -1419,7 +1420,7 @@ visit_add_to_container(PyObject *op, void *arg)
     struct container_and_flag *cf = (struct container_and_flag *)arg;
     int visited = cf->visited_space;
     assert(visited == get_gc_state()->visited_space);
-    if (!_Py_IsImmortal(op) && !(_Py_IsImmutable(op)) && _PyObject_IS_GC(op)) {
+    if (!_Py_IsImmortal(op) && PyRegion_IsLocal(op) && _PyObject_IS_GC(op)) {
         PyGC_Head *gc = AS_GC(op);
         if (_PyObject_GC_IS_TRACKED(op) &&
             gc_old_space(gc) != visited) {
@@ -1486,7 +1487,7 @@ completed_scavenge(GCState *gcstate)
         gc_list_set_space(&gcstate->old[not_visited].head, not_visited);
     }
     // FIXME(regions): xFrednet: Regions add their objects back into the GC
-    // list then they get deallocated. This can result in the old heap not
+    // list when they get deallocated. This can result in the old heap not
     // beeing empty after collection. Maybe, this should add the objects to
     // the other list? Or do something smart if a collection is ongoing?
     // For now I'll disable the assert.
@@ -1498,7 +1499,7 @@ completed_scavenge(GCState *gcstate)
 static intptr_t
 move_to_reachable(PyObject *op, PyGC_Head *reachable, int visited_space)
 {
-    if (op != NULL && !_Py_IsImmortal(op) && !_Py_IsImmutable(op) && _PyObject_IS_GC(op)) {
+    if (op != NULL && !_Py_IsImmortal(op) && PyRegion_IsLocal(op) && _PyObject_IS_GC(op)) {
         PyGC_Head *gc = AS_GC(op);
         if (_PyObject_GC_IS_TRACKED(op) &&
             gc_old_space(gc) != visited_space) {
@@ -1562,7 +1563,7 @@ mark_stacks(PyInterpreterState *interp, PyGC_Head *visited, int visited_space, b
                     continue;
                 }
                 PyObject *op = PyStackRef_AsPyObjectBorrow(*sp);
-                if (_Py_IsImmortal(op) || _Py_IsImmutable(op)) {
+                if (_Py_IsImmortal(op) || !PyRegion_IsLocal(op)) {
                     continue;
                 }
                 if (_PyObject_IS_GC(op)) {
@@ -1695,7 +1696,7 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
         PyGC_Head *gc = _PyGCHead_NEXT(not_visited);
         gc_list_move(gc, &increment);
         increment_size++;
-        assert(!_Py_IsImmortal(FROM_GC(gc)) && !_Py_IsImmutable(FROM_GC(gc)));
+        assert(!_Py_IsImmortal(FROM_GC(gc)) && PyRegion_IsLocal(FROM_GC(gc)));
         gc_set_old_space(gc, gcstate->visited_space);
         increment_size += expand_region_transitively_reachable(&increment, gc, gcstate);
     }

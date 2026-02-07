@@ -1781,7 +1781,7 @@ async_gen_asend_dealloc(PyObject *self)
 
     _PyGC_CLEAR_FINALIZED(self);
 
-    _Py_FREELIST_FREE(async_gen_asends, self, PyObject_GC_Del);
+    _Py_FREELIST_FREE_OBJ(async_gen_asends, self, PyObject_GC_Del);
 }
 
 static int
@@ -1999,7 +1999,7 @@ async_gen_wrapped_val_dealloc(PyObject *self)
     _PyAsyncGenWrappedValue *agw = _PyAsyncGenWrappedValue_CAST(self);
     _PyObject_GC_UNTRACK(self);
     Py_CLEAR(agw->agw_val);
-    _Py_FREELIST_FREE(async_gens, self, PyObject_GC_Del);
+    _Py_FREELIST_FREE_OBJ(async_gens, self, PyObject_GC_Del);
 }
 
 

@@ -43,6 +43,7 @@ typedef struct {
 static inline void
 _PyTuple_Recycle(PyObject *op)
 {
+    PyRegion_RecycleObject(op);
     _PyTuple_RESET_HASH_CACHE(op);
     if (!_PyObject_GC_IS_TRACKED(op)) {
         _PyObject_GC_TRACK(op);
