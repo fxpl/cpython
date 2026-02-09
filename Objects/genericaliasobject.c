@@ -1044,7 +1044,7 @@ Py_GenericAlias(PyObject *origin, PyObject *args)
         return NULL;
     }
     if (!setup_ga(alias, origin, args)) {
-        Py_DECREF(alias);
+        PyRegion_CLEARLOCAL(alias);
         return NULL;
     }
     return (PyObject *)alias;
