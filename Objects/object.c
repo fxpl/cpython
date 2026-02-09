@@ -1489,6 +1489,9 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
                      Py_TYPE(name)->tp_name);
         return -1;
     }
+    if (PyRegion_AddLocalRef(name)) {
+        return -1;
+    }
     Py_INCREF(name);
 
     _PyUnicode_InternMortal(tstate->interp, &name);
@@ -1496,7 +1499,7 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
         // Check for immutability
         if (!Py_CHECKWRITE(v)) {
             PyErr_WriteToImmutable(v);
-            Py_DECREF(name);
+            PyRegion_CLEARLOCAL(name);
             return -1;
         }
 
@@ -1509,27 +1512,28 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
         // Call the setattro function of the type
         err = (*tp->tp_setattro)(v, name, value);
 
-        Py_DECREF(name);
+        PyRegion_CLEARLOCAL(name);
         return err;
     }
     if (tp->tp_setattr != NULL) {
         const char *name_str = PyUnicode_AsUTF8(name);
         if (name_str == NULL) {
-            Py_DECREF(name);
+            PyRegion_CLEARLOCAL(name);
             return -1;
         }
 
-        if(Py_CHECKWRITE(v)){
-            err = (*tp->tp_setattr)(v, (char *)name_str, value);
-        }else{
+        if (!Py_CHECKWRITE(v)){
             PyErr_WriteToImmutable(v);
-            err = -1;
+            PyRegion_CLEARLOCAL(name);
+            return -1;
         }
 
-        Py_DECREF(name);
+        PyRegion_NotifyTypeUse(tp);
+        err = (*tp->tp_setattr)(v, (char *)name_str, value);
+
+        PyRegion_CLEARLOCAL(name);
         return err;
     }
-    Py_DECREF(name);
     _PyObject_ASSERT(name, Py_REFCNT(name) >= 1);
     if (tp->tp_getattr == NULL && tp->tp_getattro == NULL)
         PyErr_Format(PyExc_TypeError,
@@ -1545,6 +1549,7 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
                      tp->tp_name,
                      value==NULL ? "del" : "assign to",
                      name);
+    PyRegion_CLEARLOCAL(name);
     return -1;
 }
 

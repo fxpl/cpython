@@ -1458,7 +1458,7 @@ functools_copy_attr(PyObject *wrapper, PyObject *wrapped, PyObject *name)
     int res = PyObject_GetOptionalAttr(wrapped, name, &value);
     if (value != NULL) {
         res = PyObject_SetAttr(wrapper, name, value);
-        Py_DECREF(value);
+        PyRegion_CLEARLOCAL(value);
     }
     return res;
 }
@@ -1821,8 +1821,8 @@ sm_dealloc(PyObject *self)
 {
     staticmethod *sm = _PyStaticMethod_CAST(self);
     _PyObject_GC_UNTRACK((PyObject *)sm);
-    Py_XDECREF(sm->sm_callable);
-    Py_XDECREF(sm->sm_dict);
+    PyRegion_CLEAR(sm, sm->sm_callable);
+    PyRegion_CLEAR(sm, sm->sm_dict);
     Py_TYPE(sm)->tp_free((PyObject *)sm);
 }
 
@@ -1839,8 +1839,8 @@ static int
 sm_clear(PyObject *self)
 {
     staticmethod *sm = _PyStaticMethod_CAST(self);
-    Py_CLEAR(sm->sm_callable);
-    Py_CLEAR(sm->sm_dict);
+    PyRegion_CLEAR(sm, sm->sm_callable);
+    PyRegion_CLEAR(sm, sm->sm_dict);
     return 0;
 }
 
@@ -1854,7 +1854,7 @@ sm_descr_get(PyObject *self, PyObject *obj, PyObject *type)
                         "uninitialized staticmethod object");
         return NULL;
     }
-    return Py_NewRef(sm->sm_callable);
+    return PyRegion_NewRef(sm->sm_callable);
 }
 
 static int
@@ -1867,7 +1867,8 @@ sm_init(PyObject *self, PyObject *args, PyObject *kwds)
         return -1;
     if (!PyArg_UnpackTuple(args, "staticmethod", 1, 1, &callable))
         return -1;
-    Py_XSETREF(sm->sm_callable, Py_NewRef(callable));
+    if (PyRegion_XSETNEWREF(sm, sm->sm_callable, callable))
+        return -1;
 
     if (functools_wraps((PyObject *)sm, sm->sm_callable) < 0) {
         return -1;
@@ -2010,6 +2011,7 @@ PyTypeObject PyStaticMethod_Type = {
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyObject *
