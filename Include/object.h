@@ -410,6 +410,7 @@ typedef struct{
     int itemsize;
     unsigned int flags;
     PyType_Slot *slots; /* terminated by slot==0. */
+    unsigned int flags2;
 } PyType_Spec;
 
 PyAPI_FUNC(PyObject*) PyType_FromSpec(PyType_Spec*);

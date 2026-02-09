@@ -5555,7 +5555,11 @@ PyType_FromMetaclass(
     type = &res->ht_type;
     /* The flags must be initialized early, before the GC traverses us */
     type_set_flags(type, spec->flags | Py_TPFLAGS_HEAPTYPE);
+    type->tp_flags2 = spec->flags2;
 
+    if (PyRegion_AddRefs(res, module, base, ht_name)) {
+        goto finally;
+    }
     res->ht_module = Py_XNewRef(module);
 
     /* Initialize essential fields */
@@ -5677,7 +5681,7 @@ PyType_FromMetaclass(
             goto finally;
         }
         r = PyDict_SetItem(dict, &_Py_ID(__doc__), __doc__);
-        Py_DECREF(__doc__);
+        PyRegion_CLEARLOCAL(__doc__);
         if (r < 0) {
             goto finally;
         }
@@ -5708,7 +5712,7 @@ PyType_FromMetaclass(
                 goto finally;
             }
             r = PyDict_SetItem(dict, &_Py_ID(__module__), modname);
-            Py_DECREF(modname);
+            PyRegion_CLEARLOCAL(modname);
             if (r != 0) {
                 goto finally;
             }
@@ -5729,11 +5733,11 @@ PyType_FromMetaclass(
 
  finally:
     if (PyErr_Occurred()) {
-        Py_CLEAR(res);
+        PyRegion_CLEARLOCAL(res);
     }
-    Py_XDECREF(bases);
+    PyRegion_CLEARLOCAL(bases);
     PyMem_Free(tp_doc);
-    Py_XDECREF(ht_name);
+    PyRegion_CLEARLOCAL(ht_name);
     PyMem_Free(_ht_tpname);
     return (PyObject*)res;
 }

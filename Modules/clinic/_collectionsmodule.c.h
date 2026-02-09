@@ -619,7 +619,7 @@ tuplegetter_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         PyObject *iobj = _PyNumber_Index(PyTuple_GET_ITEM(args, 0));
         if (iobj != NULL) {
             ival = PyLong_AsSsize_t(iobj);
-            Py_DECREF(iobj);
+            PyRegion_CLEARLOCAL(iobj);
         }
         if (ival == -1 && PyErr_Occurred()) {
             goto exit;
