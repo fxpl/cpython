@@ -234,9 +234,12 @@ import_get_module(PyThreadState *tstate, PyObject *name)
     }
 
     PyObject *m;
+    if (PyRegion_AddLocalRef(modules)) {
+        return NULL;
+    }
     Py_INCREF(modules);
     (void)PyMapping_GetOptionalItem(modules, name, &m);
-    Py_DECREF(modules);
+    PyRegion_CLEARLOCAL(modules);
     return m;
 }
 
@@ -296,7 +299,7 @@ PyImport_GetModule(PyObject *name)
     mod = import_get_module(tstate, name);
     if (mod != NULL && mod != Py_None) {
         if (import_ensure_initialized(tstate->interp, mod, name) < 0) {
-            Py_DECREF(mod);
+            PyRegion_CLEARLOCAL(mod);
             remove_importlib_frames(tstate);
             return NULL;
         }
@@ -3499,13 +3502,16 @@ remove_importlib_frames(PyThreadState *tstate)
         if (in_importlib &&
             (always_trim ||
              _PyUnicode_EqualToASCIIString(code->co_name, remove_frames))) {
+            // Regions: Frames are always local it is therefore fine to skip
+            // the write barrier here. This function also can't fail, which
+            // would make it hard to handle the write barrier correctly.
             Py_XSETREF(*outer_link, Py_XNewRef(next));
             prev_link = outer_link;
         }
         else {
             prev_link = (PyObject **) &traceback->tb_next;
         }
-        Py_DECREF(code);
+        PyRegion_CLEARLOCAL(code);
         tb = next;
     }
     if (base_tb == NULL) {
@@ -3514,7 +3520,7 @@ remove_importlib_frames(PyThreadState *tstate)
     }
     PyException_SetTraceback(exc, base_tb);
 done:
-    Py_XDECREF(base_tb);
+    PyRegion_CLEARLOCAL(base_tb);
     _PyErr_SetRaisedException(tstate, exc);
 }
 
@@ -3935,6 +3941,9 @@ PyImport_Import(PyObject *module_name)
     /* Get the builtins from current globals */
     globals = PyEval_GetGlobals();  // borrowed
     if (globals != NULL) {
+        if (PyRegion_AddLocalRef(globals)) {
+            goto err;
+        }
         Py_INCREF(globals);
         // XXX Use _PyEval_EnsureBuiltins()?
         builtins = PyObject_GetItem(globals, &_Py_ID(__builtins__));
@@ -3976,7 +3985,7 @@ PyImport_Import(PyObject *module_name)
                               globals, from_list, 0, NULL);
     if (r == NULL)
         goto err;
-    Py_DECREF(r);
+    PyRegion_CLEARLOCAL(r);
 
     r = import_get_module(tstate, module_name);
     if (r == NULL && !_PyErr_Occurred(tstate)) {
@@ -3984,10 +3993,10 @@ PyImport_Import(PyObject *module_name)
     }
 
   err:
-    Py_XDECREF(globals);
-    Py_XDECREF(builtins);
-    Py_XDECREF(import);
-    Py_XDECREF(from_list);
+    PyRegion_CLEARLOCAL(globals);
+    PyRegion_CLEARLOCAL(builtins);
+    PyRegion_CLEARLOCAL(import);
+    PyRegion_CLEARLOCAL(from_list);
 
     return r;
 }
