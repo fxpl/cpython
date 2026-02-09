@@ -94,6 +94,10 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
                 return NULL;
             }
         }
+        if (PyRegion_AddRef(om, cls)) {
+            Py_DECREF(om);
+            return NULL;
+        }
         om->mm_class = (PyTypeObject*)Py_NewRef(cls);
         op = (PyCFunctionObject *)om;
     } else {
@@ -112,6 +116,10 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
         }
     }
 
+    if (PyRegion_AddRefs(op, self, module)) {
+        Py_DECREF(op);
+        return NULL;
+    }
     op->m_weakreflist = NULL;
     op->m_ml = ml;
     op->m_self = Py_XNewRef(self);

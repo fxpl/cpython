@@ -278,7 +278,10 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
         eventArgs = Py_VaBuildValue(argFormat, vargs);
         if (eventArgs && !PyTuple_Check(eventArgs)) {
             PyObject *argTuple = PyTuple_Pack(1, eventArgs);
-            Py_SETREF(eventArgs, argTuple);
+            if (PyRegion_XSETLOCALREF(eventArgs, argTuple)) {
+                Py_DECREF(argTuple);
+                goto exit;
+            }
         }
     }
     else {
@@ -294,6 +297,7 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
      * since that would not leave is in an inconsistent state. */
     _Py_AuditHookEntry *e = is->runtime->audit_hooks.head;
     for (; e; e = e->next) {
+        PyRegion_DirtyAllRegions("Calling unknown `_Py_AuditHookEntry`");
         if (e->hookCFunction(event, eventArgs, e->userData) < 0) {
             goto exit;
         }
@@ -323,7 +327,7 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
             int canTrace = PyObject_GetOptionalAttr(hook, &_Py_ID(__cantrace__), &o);
             if (o) {
                 canTrace = PyObject_IsTrue(o);
-                Py_DECREF(o);
+                PyRegion_CLEARLOCAL(o);
             }
             if (canTrace < 0) {
                 break;
@@ -339,8 +343,8 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
             if (!o) {
                 break;
             }
-            Py_DECREF(o);
-            Py_CLEAR(hook);
+            PyRegion_CLEARLOCAL(o);
+            PyRegion_CLEARLOCAL(hook);
         }
         PyThreadState_LeaveTracing(ts);
         if (_PyErr_Occurred(ts)) {
@@ -351,17 +355,17 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
     res = 0;
 
 exit:
-    Py_XDECREF(hook);
-    Py_XDECREF(hooks);
-    Py_XDECREF(eventName);
-    Py_XDECREF(eventArgs);
+    PyRegion_CLEARLOCAL(hook);
+    PyRegion_CLEARLOCAL(hooks);
+    PyRegion_CLEARLOCAL(eventName);
+    PyRegion_CLEARLOCAL(eventArgs);
 
     if (!res) {
         _PyErr_SetRaisedException(ts, exc);
     }
     else {
         assert(_PyErr_Occurred(ts));
-        Py_XDECREF(exc);
+        PyRegion_CLEARLOCAL(exc);
     }
 
     return res;
