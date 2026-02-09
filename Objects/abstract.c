@@ -2619,7 +2619,7 @@ abstract_get_bases(PyObject *cls)
 
     (void)PyObject_GetOptionalAttr(cls, &_Py_ID(__bases__), &bases);
     if (bases != NULL && !PyTuple_Check(bases)) {
-        Py_DECREF(bases);
+        PyRegion_CLEARLOCAL(bases);
         return NULL;
     }
     return bases;
@@ -2635,7 +2635,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
 
     while (1) {
         if (derived == cls) {
-            Py_XDECREF(bases); /* See below comment */
+            PyRegion_CLEARLOCAL(bases);
             return 1;
         }
         /* Use XSETREF to drop bases reference *after* finishing with
@@ -2643,7 +2643,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
            XSETREF is used instead of SETREF, because bases is NULL on the
            first iteration of the loop.
         */
-        Py_XSETREF(bases, abstract_get_bases(derived));
+        PyRegion_XSETLOCALREF(bases, abstract_get_bases(derived));
         if (bases == NULL) {
             if (PyErr_Occurred())
                 return -1;
@@ -2651,7 +2651,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
         }
         n = PyTuple_GET_SIZE(bases);
         if (n == 0) {
-            Py_DECREF(bases);
+            PyRegion_CLEARLOCAL(bases);
             return 0;
         }
         /* Avoid recursivity in the single inheritance case */
@@ -2663,7 +2663,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
     }
     assert(n >= 2);
     if (_Py_EnterRecursiveCall(" in __issubclass__")) {
-        Py_DECREF(bases);
+        PyRegion_CLEARLOCAL(bases);
         return -1;
     }
     for (i = 0; i < n; i++) {
@@ -2673,7 +2673,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
         }
     }
     _Py_LeaveRecursiveCall();
-    Py_DECREF(bases);
+    PyRegion_CLEARLOCAL(bases);
     return r;
 }
 
@@ -2711,7 +2711,7 @@ object_isinstance(PyObject *inst, PyObject *cls)
                 else {
                     retval = 0;
                 }
-                Py_DECREF(icls);
+                PyRegion_CLEARLOCAL(icls);
             }
         }
     }
@@ -2722,7 +2722,7 @@ object_isinstance(PyObject *inst, PyObject *cls)
         retval = PyObject_GetOptionalAttr(inst, &_Py_ID(__class__), &icls);
         if (icls != NULL) {
             retval = abstract_issubclass(icls, cls);
-            Py_DECREF(icls);
+            PyRegion_CLEARLOCAL(icls);
         }
     }
 
@@ -2916,12 +2916,13 @@ PyObject_GetIter(PyObject *o)
         return type_error("'%.200s' object is not iterable", o);
     }
     else {
+        PyRegion_NotifyTypeUse(t);
         PyObject *res = (*f)(o);
         if (res != NULL && !PyIter_Check(res)) {
             PyErr_Format(PyExc_TypeError,
                          "%T.__iter__() must return an iterator, not %T",
                          o, res);
-            Py_SETREF(res, NULL);
+            PyRegion_CLEARLOCAL(res);
         }
         return res;
     }

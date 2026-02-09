@@ -819,11 +819,11 @@ _PyType_GetSubclasses(PyTypeObject *self)
         }
 
         if (PyList_Append(list, _PyObject_CAST(subclass)) < 0) {
-            Py_DECREF(list);
-            Py_DECREF(subclass);
+            PyRegion_CLEARLOCAL(list);
+            PyRegion_CLEARLOCAL(subclass);
             return NULL;
         }
-        Py_DECREF(subclass);
+        PyRegion_CLEARLOCAL(subclass);
     }
     return list;
 }
@@ -6892,7 +6892,7 @@ merge_class_dict(PyObject *dict, PyObject *aclass)
     }
     if (classdict != NULL) {
         int status = PyDict_Update(dict, classdict);
-        Py_DECREF(classdict);
+        PyRegion_CLEARLOCAL(classdict);
         if (status < 0)
             return -1;
     }
@@ -6906,7 +6906,7 @@ merge_class_dict(PyObject *dict, PyObject *aclass)
         Py_ssize_t i, n;
         n = PySequence_Size(bases); /* This better be right */
         if (n < 0) {
-            Py_DECREF(bases);
+            PyRegion_CLEARLOCAL(bases);
             return -1;
         }
         else {
@@ -6914,18 +6914,18 @@ merge_class_dict(PyObject *dict, PyObject *aclass)
                 int status;
                 PyObject *base = PySequence_GetItem(bases, i);
                 if (base == NULL) {
-                    Py_DECREF(bases);
+                    PyRegion_CLEARLOCAL(bases);
                     return -1;
                 }
                 status = merge_class_dict(dict, base);
-                Py_DECREF(base);
+                PyRegion_CLEARLOCAL(base);
                 if (status < 0) {
-                    Py_DECREF(bases);
+                    PyRegion_CLEARLOCAL(bases);
                     return -1;
                 }
             }
         }
-        Py_DECREF(bases);
+        PyRegion_CLEARLOCAL(bases);
     }
     return 0;
 }
@@ -6950,7 +6950,7 @@ type___dir___impl(PyTypeObject *self)
     if (dict != NULL && merge_class_dict(dict, (PyObject *)self) == 0)
         result = PyDict_Keys(dict);
 
-    Py_XDECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return result;
 }
 
@@ -7237,28 +7237,28 @@ object_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         if (abstract_methods == NULL)
             return NULL;
         sorted_methods = PySequence_List(abstract_methods);
-        Py_DECREF(abstract_methods);
+        PyRegion_CLEARLOCAL(abstract_methods);
         if (sorted_methods == NULL)
             return NULL;
         if (PyList_Sort(sorted_methods)) {
-            Py_DECREF(sorted_methods);
+            PyRegion_CLEARLOCAL(sorted_methods);
             return NULL;
         }
         comma_w_quotes_sep = PyUnicode_FromString("', '");
         if (!comma_w_quotes_sep) {
-            Py_DECREF(sorted_methods);
+            PyRegion_CLEARLOCAL(sorted_methods);
             return NULL;
         }
         joined = PyUnicode_Join(comma_w_quotes_sep, sorted_methods);
-        Py_DECREF(comma_w_quotes_sep);
+        PyRegion_CLEARLOCAL(comma_w_quotes_sep);
         if (joined == NULL)  {
-            Py_DECREF(sorted_methods);
+            PyRegion_CLEARLOCAL(sorted_methods);
             return NULL;
         }
         method_count = PyObject_Length(sorted_methods);
-        Py_DECREF(sorted_methods);
+        PyRegion_CLEARLOCAL(sorted_methods);
         if (method_count == -1) {
-            Py_DECREF(joined);
+            PyRegion_CLEARLOCAL(joined);
             return NULL;
         }
 
@@ -7268,7 +7268,7 @@ object_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
                      type->tp_name,
                      method_count > 1 ? "s" : "",
                      joined);
-        Py_DECREF(joined);
+        PyRegion_CLEARLOCAL(joined);
         return NULL;
     }
     PyObject *obj = type->tp_alloc(type, 0);
@@ -7380,7 +7380,7 @@ _Py_BaseObject_RichCompare(PyObject* self, PyObject* other, int op)
 static PyObject *
 object_get_class(PyObject *self, void *closure)
 {
-    return Py_NewRef(Py_TYPE(self));
+    return PyRegion_NewRef(Py_TYPE(self));
 }
 
 static int
@@ -7630,7 +7630,7 @@ object_set_class(PyObject *self, PyObject *value, void *closure)
     types_start_world();
     if (res == 0) {
         if (oldto->tp_flags & Py_TPFLAGS_HEAPTYPE) {
-            Py_DECREF(oldto);
+            PyRegion_CLEARLOCAL(oldto);
         }
 
         RARE_EVENT_INC(set_class);
@@ -7745,8 +7745,7 @@ object_getstate_default(PyObject *obj, int required)
 
     slotnames = _PyType_GetSlotNames(Py_TYPE(obj));
     if (slotnames == NULL) {
-        PyRegion_RemoveLocalRef(state);
-        Py_DECREF(state);
+        PyRegion_CLEARLOCAL(state);
         return NULL;
     }
 
@@ -7765,10 +7764,8 @@ object_getstate_default(PyObject *obj, int required)
             basicsize += sizeof(PyObject *) * PyList_GET_SIZE(slotnames);
         }
         if (Py_TYPE(obj)->tp_basicsize > basicsize) {
-            PyRegion_RemoveLocalRef(slotnames);
-            PyRegion_RemoveLocalRef(state);
-            Py_DECREF(slotnames);
-            Py_DECREF(state);
+            PyRegion_CLEARLOCAL(slotnames);
+            PyRegion_CLEARLOCAL(state);
             PyErr_Format(PyExc_TypeError,
                          "cannot pickle '%.200s' object",
                          Py_TYPE(obj)->tp_name);
@@ -7782,10 +7779,8 @@ object_getstate_default(PyObject *obj, int required)
 
         slots = PyDict_New();
         if (slots == NULL) {
-            PyRegion_RemoveLocalRef(slotnames);
-            PyRegion_RemoveLocalRef(state);
-            Py_DECREF(slotnames);
-            Py_DECREF(state);
+            PyRegion_CLEARLOCAL(slotnames);
+            PyRegion_CLEARLOCAL(state);
             return NULL;
         }
 
@@ -7795,26 +7790,21 @@ object_getstate_default(PyObject *obj, int required)
 
             name = Py_NewRef(PyList_GET_ITEM(slotnames, i));
             if (PyRegion_AddLocalRef(name)) {
-                PyRegion_AddLocalRef(name);
-                Py_DECREF(name);
+                PyRegion_CLEARLOCAL(name);
                 goto error;
             }
             if (PyObject_GetOptionalAttr(obj, name, &value) < 0) {
-                PyRegion_AddLocalRef(name);
-                Py_DECREF(name);
+                PyRegion_CLEARLOCAL(name);
                 goto error;
             }
             if (value == NULL) {
-                PyRegion_AddLocalRef(name);
-                Py_DECREF(name);
+                PyRegion_CLEARLOCAL(name);
                 /* It is not an error if the attribute is not present. */
             }
             else {
                 int err = PyDict_SetItem(slots, name, value);
-                PyRegion_AddLocalRef(name);
-                Py_DECREF(name);
-                PyRegion_AddLocalRef(value);
-                Py_DECREF(value);
+                PyRegion_CLEARLOCAL(name);
+                PyRegion_CLEARLOCAL(value);
                 if (err) {
                     goto error;
                 }
@@ -7831,12 +7821,9 @@ object_getstate_default(PyObject *obj, int required)
             /* We handle errors within the loop here. */
             if (0) {
               error:
-                PyRegion_RemoveLocalRef(slotnames);
-                PyRegion_RemoveLocalRef(slots);
-                PyRegion_RemoveLocalRef(state);
-                Py_DECREF(slotnames);
-                Py_DECREF(slots);
-                Py_DECREF(state);
+                PyRegion_CLEARLOCAL(slotnames);
+                PyRegion_CLEARLOCAL(slots);
+                PyRegion_CLEARLOCAL(state);
                 return NULL;
             }
         }
@@ -7847,22 +7834,17 @@ object_getstate_default(PyObject *obj, int required)
             PyObject *state2;
 
             state2 = PyTuple_Pack(2, state, slots);
-            PyRegion_RemoveLocalRef(state);
-            Py_DECREF(state);
+            PyRegion_CLEARLOCAL(state);
             if (state2 == NULL) {
-                PyRegion_RemoveLocalRef(slotnames);
-                PyRegion_RemoveLocalRef(slots);
-                Py_DECREF(slotnames);
-                Py_DECREF(slots);
+                PyRegion_CLEARLOCAL(slotnames);
+                PyRegion_CLEARLOCAL(slots);
                 return NULL;
             }
             state = state2;
         }
-        PyRegion_RemoveLocalRef(slots);
-        Py_DECREF(slots);
+        PyRegion_CLEARLOCAL(slots);
     }
-    PyRegion_RemoveLocalRef(slotnames);
-    Py_DECREF(slotnames);
+    PyRegion_CLEARLOCAL(slotnames);
 
     return state;
 }
@@ -7886,8 +7868,7 @@ object_getstate(PyObject *obj, int required)
     else {
         state = _PyObject_CallNoArgs(getstate);
     }
-    PyRegion_RemoveLocalRef(getstate);
-    Py_DECREF(getstate);
+    PyRegion_CLEARLOCAL(getstate);
     return state;
 }
 
@@ -7925,8 +7906,7 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
     getnewargs_ex = _PyObject_LookupSpecial(obj, &_Py_ID(__getnewargs_ex__));
     if (getnewargs_ex != NULL) {
         PyObject *newargs = _PyObject_CallNoArgs(getnewargs_ex);
-        PyRegion_RemoveLocalRef(getnewargs_ex);
-        Py_DECREF(getnewargs_ex);
+        PyRegion_CLEARLOCAL(getnewargs_ex);
         if (newargs == NULL) {
             return -1;
         }
@@ -7934,21 +7914,26 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
             PyErr_Format(PyExc_TypeError,
                          "__getnewargs_ex__ should return a tuple, "
                          "not '%.200s'", Py_TYPE(newargs)->tp_name);
-            PyRegion_RemoveLocalRef(newargs);
-            Py_DECREF(newargs);
+            PyRegion_CLEARLOCAL(newargs);
             return -1;
         }
         if (PyTuple_GET_SIZE(newargs) != 2) {
             PyErr_Format(PyExc_ValueError,
                          "__getnewargs_ex__ should return a tuple of "
                          "length 2, not %zd", PyTuple_GET_SIZE(newargs));
-            PyRegion_RemoveLocalRef(newargs);
-            Py_DECREF(newargs);
+            PyRegion_CLEARLOCAL(newargs);
             return -1;
         }
-        *args = Py_NewRef(PyTuple_GET_ITEM(newargs, 0));
-        *kwargs = Py_NewRef(PyTuple_GET_ITEM(newargs, 1));
-        Py_DECREF(newargs);
+
+        *args = PyTuple_GET_ITEM(newargs, 0);
+        *kwargs = PyTuple_GET_ITEM(newargs, 1);
+        if (PyRegion_AddLocalRefs(*args, *kwargs)) {
+            PyRegion_CLEARLOCAL(newargs);
+            return -1;
+        }
+        Py_INCREF(*args);
+        Py_INCREF(*kwargs);
+        PyRegion_CLEARLOCAL(newargs);
 
         /* XXX We should perhaps allow None to be passed here. */
         if (!PyTuple_Check(*args)) {
@@ -7956,8 +7941,8 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
                          "first item of the tuple returned by "
                          "__getnewargs_ex__ must be a tuple, not '%.200s'",
                          Py_TYPE(*args)->tp_name);
-            Py_CLEAR(*args);
-            Py_CLEAR(*kwargs);
+            PyRegion_CLEARLOCAL(*args);
+            PyRegion_CLEARLOCAL(*kwargs);
             return -1;
         }
         if (!PyDict_Check(*kwargs)) {
@@ -7965,8 +7950,8 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
                          "second item of the tuple returned by "
                          "__getnewargs_ex__ must be a dict, not '%.200s'",
                          Py_TYPE(*kwargs)->tp_name);
-            Py_CLEAR(*args);
-            Py_CLEAR(*kwargs);
+            PyRegion_CLEARLOCAL(*args);
+            PyRegion_CLEARLOCAL(*kwargs);
             return -1;
         }
         return 0;
@@ -7979,7 +7964,7 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
     getnewargs = _PyObject_LookupSpecial(obj, &_Py_ID(__getnewargs__));
     if (getnewargs != NULL) {
         *args = _PyObject_CallNoArgs(getnewargs);
-        Py_DECREF(getnewargs);
+        PyRegion_CLEARLOCAL(getnewargs);
         if (*args == NULL) {
             return -1;
         }
@@ -7987,7 +7972,7 @@ _PyObject_GetNewArguments(PyObject *obj, PyObject **args, PyObject **kwargs)
             PyErr_Format(PyExc_TypeError,
                          "__getnewargs__ should return a tuple, "
                          "not '%.200s'", Py_TYPE(*args)->tp_name);
-            Py_CLEAR(*args);
+            PyRegion_CLEARLOCAL(*args);
             return -1;
         }
         *kwargs = NULL;
@@ -8029,13 +8014,13 @@ _PyObject_GetItemsIter(PyObject *obj, PyObject **listitems,
     else {
         PyObject *items = PyObject_CallMethodNoArgs(obj, &_Py_ID(items));
         if (items == NULL) {
-            Py_CLEAR(*listitems);
+            PyRegion_CLEARLOCAL(*listitems);
             return -1;
         }
         *dictitems = PyObject_GetIter(items);
-        Py_DECREF(items);
+        PyRegion_CLEARLOCAL(items);
         if (*dictitems == NULL) {
-            Py_CLEAR(*listitems);
+            PyRegion_CLEARLOCAL(*listitems);
             return -1;
         }
     }
@@ -8065,8 +8050,8 @@ reduce_newobj(PyObject *obj)
 
     copyreg = import_copyreg();
     if (copyreg == NULL) {
-        Py_XDECREF(args);
-        Py_XDECREF(kwargs);
+        PyRegion_CLEARLOCAL(args);
+        PyRegion_CLEARLOCAL(kwargs);
         return NULL;
     }
     hasargs = (args != NULL);
@@ -8074,18 +8059,18 @@ reduce_newobj(PyObject *obj)
         PyObject *cls;
         Py_ssize_t i, n;
 
-        Py_XDECREF(kwargs);
+        PyRegion_CLEARLOCAL(kwargs);
         newobj = PyObject_GetAttr(copyreg, &_Py_ID(__newobj__));
-        Py_DECREF(copyreg);
+        PyRegion_CLEARLOCAL(copyreg);
         if (newobj == NULL) {
-            Py_XDECREF(args);
+            PyRegion_CLEARLOCAL(args);
             return NULL;
         }
         n = args ? PyTuple_GET_SIZE(args) : 0;
         newargs = PyTuple_New(n+1);
         if (newargs == NULL) {
-            Py_XDECREF(args);
-            Py_DECREF(newobj);
+            PyRegion_CLEARLOCAL(args);
+            PyRegion_CLEARLOCAL(newobj);
             return NULL;
         }
         cls = (PyObject *) Py_TYPE(obj);
@@ -8094,51 +8079,51 @@ reduce_newobj(PyObject *obj)
             PyObject *v = PyTuple_GET_ITEM(args, i);
             PyTuple_SET_ITEM(newargs, i+1, Py_NewRef(v));
         }
-        Py_XDECREF(args);
+        PyRegion_CLEARLOCAL(args);
     }
     else if (args != NULL) {
         newobj = PyObject_GetAttr(copyreg, &_Py_ID(__newobj_ex__));
-        Py_DECREF(copyreg);
+        PyRegion_CLEARLOCAL(copyreg);
         if (newobj == NULL) {
-            Py_DECREF(args);
-            Py_DECREF(kwargs);
+            PyRegion_CLEARLOCAL(args);
+            PyRegion_CLEARLOCAL(kwargs);
             return NULL;
         }
         newargs = PyTuple_Pack(3, Py_TYPE(obj), args, kwargs);
-        Py_DECREF(args);
-        Py_DECREF(kwargs);
+        PyRegion_CLEARLOCAL(args);
+        PyRegion_CLEARLOCAL(kwargs);
         if (newargs == NULL) {
-            Py_DECREF(newobj);
+            PyRegion_CLEARLOCAL(newobj);
             return NULL;
         }
     }
     else {
         /* args == NULL */
-        Py_DECREF(copyreg);
-        Py_DECREF(kwargs);
+        PyRegion_CLEARLOCAL(copyreg);
+        PyRegion_CLEARLOCAL(kwargs);
         PyErr_BadInternalCall();
         return NULL;
     }
 
     state = object_getstate(obj, !(hasargs || PyList_Check(obj) || PyDict_Check(obj)));
     if (state == NULL) {
-        Py_DECREF(newobj);
-        Py_DECREF(newargs);
+        PyRegion_CLEARLOCAL(newobj);
+        PyRegion_CLEARLOCAL(newargs);
         return NULL;
     }
     if (_PyObject_GetItemsIter(obj, &listitems, &dictitems) < 0) {
-        Py_DECREF(newobj);
-        Py_DECREF(newargs);
-        Py_DECREF(state);
+        PyRegion_CLEARLOCAL(newobj);
+        PyRegion_CLEARLOCAL(newargs);
+        PyRegion_CLEARLOCAL(state);
         return NULL;
     }
 
     result = PyTuple_Pack(5, newobj, newargs, state, listitems, dictitems);
-    Py_DECREF(newobj);
-    Py_DECREF(newargs);
-    Py_DECREF(state);
-    Py_DECREF(listitems);
-    Py_DECREF(dictitems);
+    PyRegion_CLEARLOCAL(newobj);
+    PyRegion_CLEARLOCAL(newargs);
+    PyRegion_CLEARLOCAL(state);
+    PyRegion_CLEARLOCAL(listitems);
+    PyRegion_CLEARLOCAL(dictitems);
     return result;
 }
 
@@ -8170,7 +8155,7 @@ _common_reduce(PyObject *self, int proto)
         return NULL;
 
     res = PyObject_CallMethod(copyreg, "_reduce_ex", "Oi", self, proto);
-    Py_DECREF(copyreg);
+    PyRegion_CLEARLOCAL(copyreg);
 
     return res;
 }
@@ -8332,13 +8317,13 @@ object___dir___impl(PyObject *self)
         dict = PyDict_New();
     }
     else if (!PyDict_Check(dict)) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         dict = PyDict_New();
     }
     else {
         /* Copy __dict__ to avoid mutating it. */
         PyObject *temp = PyDict_Copy(dict);
-        Py_SETREF(dict, temp);
+        PyRegion_XSETLOCALREF(dict, temp);
     }
 
     if (dict == NULL)
@@ -8356,8 +8341,8 @@ object___dir___impl(PyObject *self)
     result = PyDict_Keys(dict);
     /* fall through */
 error:
-    Py_XDECREF(itsclass);
-    Py_XDECREF(dict);
+    PyRegion_CLEARLOCAL(itsclass);
+    PyRegion_CLEARLOCAL(dict);
     return result;
 }
 
@@ -8409,9 +8394,6 @@ PyTypeObject PyBaseObject_Type = {
     0,                                          /* tp_weaklistoffset */
     0,                                          /* tp_iter */
     0,                                          /* tp_iternext */
-
-    // TODO: Migrate rest of these functions to support Regions
-
     object_methods,                             /* tp_methods */
     0,                                          /* tp_members */
     object_getsets,                             /* tp_getset */
@@ -8424,6 +8406,7 @@ PyTypeObject PyBaseObject_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     object_new,                                 /* tp_new */
     PyObject_Free,                              /* tp_free */
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
