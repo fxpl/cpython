@@ -1382,24 +1382,24 @@ descriptor_get_wrapped_attribute(PyObject *wrapped, PyObject *obj, PyObject *nam
     }
     PyObject *res;
     if (PyDict_GetItemRef(dict, name, &res) < 0) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return NULL;
     }
     if (res != NULL) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return res;
     }
     res = PyObject_GetAttr(wrapped, name);
     if (res == NULL) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return NULL;
     }
     if (PyDict_SetItem(dict, name, res) < 0) {
-        Py_DECREF(dict);
-        Py_DECREF(res);
+        PyRegion_CLEARLOCAL(dict);
+        PyRegion_CLEARLOCAL(res);
         return NULL;
     }
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return res;
 }
 
@@ -1418,19 +1418,19 @@ descriptor_set_wrapped_attribute(PyObject *oobj, PyObject *name, PyObject *value
                 PyErr_Format(PyExc_AttributeError,
                              "'%.200s' object has no attribute '%U'",
                              type_name, name);
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(dict);
                 return -1;
             }
             else {
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(dict);
                 return -1;
             }
         }
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return 0;
     }
     else {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return PyDict_SetItem(dict, name, value);
     }
 }
@@ -1471,8 +1471,8 @@ cm_dealloc(PyObject *self)
 {
     classmethod *cm = _PyClassMethod_CAST(self);
     _PyObject_GC_UNTRACK((PyObject *)cm);
-    Py_XDECREF(cm->cm_callable);
-    Py_XDECREF(cm->cm_dict);
+    PyRegion_CLEAR(cm, cm->cm_callable);
+    PyRegion_CLEAR(cm, cm->cm_dict);
     Py_TYPE(cm)->tp_free((PyObject *)cm);
 }
 
@@ -1489,8 +1489,8 @@ static int
 cm_clear(PyObject *self)
 {
     classmethod *cm = _PyClassMethod_CAST(self);
-    Py_CLEAR(cm->cm_callable);
-    Py_CLEAR(cm->cm_dict);
+    PyRegion_CLEAR(cm, cm->cm_callable);
+    PyRegion_CLEAR(cm, cm->cm_dict);
     return 0;
 }
 
@@ -1520,7 +1520,9 @@ cm_init(PyObject *self, PyObject *args, PyObject *kwds)
         return -1;
     if (!PyArg_UnpackTuple(args, "classmethod", 1, 1, &callable))
         return -1;
-    Py_XSETREF(cm->cm_callable, Py_NewRef(callable));
+    if (PyRegion_XSETNEWREF(cm, cm->cm_callable, callable)) {
+        return -1;
+    }
 
     if (functools_wraps((PyObject *)cm, cm->cm_callable) < 0) {
         return -1;
@@ -1658,6 +1660,7 @@ PyTypeObject PyClassMethod_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyObject *
