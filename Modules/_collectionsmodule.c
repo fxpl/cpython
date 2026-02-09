@@ -2717,6 +2717,10 @@ tuplegetter_new_impl(PyTypeObject *type, Py_ssize_t index, PyObject *doc)
     if (self == NULL) {
         return NULL;
     }
+    if (PyRegion_AddRef(self, doc)) {
+        Py_DECREF(self);
+        return NULL;
+    }
     self->index = index;
     self->doc = Py_NewRef(doc);
     return (PyObject *)self;
@@ -2729,11 +2733,11 @@ tuplegetter_descr_get(PyObject *self, PyObject *obj, PyObject *type)
     PyObject *result;
 
     if (obj == NULL) {
-        return Py_NewRef(self);
+        return PyRegion_NewRef(self);
     }
     if (!PyTuple_Check(obj)) {
         if (obj == Py_None) {
-            return Py_NewRef(self);
+            return PyRegion_NewRef(self);
         }
         PyErr_Format(PyExc_TypeError,
                      "descriptor for index '%zd' for tuple subclasses "
@@ -2749,7 +2753,7 @@ tuplegetter_descr_get(PyObject *self, PyObject *obj, PyObject *type)
     }
 
     result = PyTuple_GET_ITEM(obj, index);
-    return Py_NewRef(result);
+    return PyRegion_NewRef(result);
 }
 
 static int
@@ -2776,7 +2780,7 @@ static int
 tuplegetter_clear(PyObject *self)
 {
     _tuplegetterobject *tuplegetter = tuplegetterobject_CAST(self);
-    Py_CLEAR(tuplegetter->doc);
+    PyRegion_CLEAR(tuplegetter, tuplegetter->doc);
     return 0;
 }
 
@@ -2787,7 +2791,7 @@ tuplegetter_dealloc(PyObject *self)
     PyObject_GC_UnTrack(self);
     (void)tuplegetter_clear(self);
     tp->tp_free(self);
-    Py_DECREF(tp);
+    PyRegion_CLEARLOCAL(tp);
 }
 
 static PyObject*
@@ -2838,6 +2842,7 @@ static PyType_Spec tuplegetter_spec = {
     .flags = (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
               Py_TPFLAGS_IMMUTABLETYPE),
     .slots = tuplegetter_slots,
+    .flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
