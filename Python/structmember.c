@@ -95,6 +95,9 @@ PyMember_GetOne(const char *obj_addr, PyMemberDef *l)
                 Py_END_CRITICAL_SECTION();
             }
 #else
+            if (PyRegion_AddLocalRef(v)) {
+                return NULL;
+            }
             Py_INCREF(v);
 #endif
         }
@@ -105,6 +108,9 @@ PyMember_GetOne(const char *obj_addr, PyMemberDef *l)
     case Py_T_OBJECT_EX:
         v = member_get_object(addr, obj_addr, l);
 #ifndef Py_GIL_DISABLED
+        if (PyRegion_AddLocalRef(v)) {
+            return NULL;
+        }
         Py_XINCREF(v);
 #else
         if (v != NULL) {
@@ -141,7 +147,12 @@ PyMember_GetOne(const char *obj_addr, PyMemberDef *l)
     } while (0)
 
 int
-PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
+PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v) {
+    return PyMember_SetOneOn(NULL, addr, l, v);
+}
+
+int
+PyMember_SetOneOn(PyObject* target, char *addr, PyMemberDef *l, PyObject *v)
 {
     PyObject *oldv;
     if (l->flags & Py_RELATIVE_OFFSET) {
@@ -244,7 +255,7 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
         }
         if (_PyLong_IsNegative((PyLongObject *)v)) {
             long long_val = PyLong_AsLong(v);
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
             if (long_val == -1 && PyErr_Occurred()) {
                 return -1;
             }
@@ -253,7 +264,7 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
         }
         else {
             unsigned long ulong_val = PyLong_AsUnsignedLong(v);
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
             if (ulong_val == (unsigned long)-1 && PyErr_Occurred()) {
                 return -1;
             }
@@ -280,7 +291,7 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
         }
         if (_PyLong_IsNegative((PyLongObject *)v)) {
             long long_val = PyLong_AsLong(v);
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
             if (long_val == -1 && PyErr_Occurred()) {
                 return -1;
             }
@@ -289,7 +300,7 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
         }
         else {
             unsigned long ulong_val = PyLong_AsUnsignedLong(v);
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
             if (ulong_val == (unsigned long)-1 && PyErr_Occurred()) {
                 return -1;
             }
@@ -320,6 +331,12 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
     }
     case _Py_T_OBJECT:
     case Py_T_OBJECT_EX:
+
+        if (target == NULL) {
+            PyRegion_DirtyAllRegions("Call of `PyMember_SetOne`");
+        } else if (PyRegion_AddRef(target, v)) {
+            return -1;
+        }
         Py_BEGIN_CRITICAL_SECTION(obj);
         oldv = *(PyObject **)addr;
         FT_ATOMIC_STORE_PTR_RELEASE(*(PyObject **)addr, Py_XNewRef(v));
@@ -356,7 +373,7 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
         }
         if (_PyLong_IsNegative((PyLongObject *)v)) {
             long long_val = PyLong_AsLong(v);
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
             if (long_val == -1 && PyErr_Occurred()) {
                 return -1;
             }
@@ -365,7 +382,7 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
         }
         else {
             unsigned long long ulonglong_val = PyLong_AsUnsignedLongLong(v);
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
             if (ulonglong_val == (unsigned long long)-1 && PyErr_Occurred()) {
                 return -1;
             }

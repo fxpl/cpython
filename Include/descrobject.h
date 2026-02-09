@@ -87,7 +87,16 @@ struct PyMemberDef {
 // TODO(Immutable): Could use this to mark members as needing a lock.
 
 PyAPI_FUNC(PyObject *) PyMember_GetOne(const char *, PyMemberDef *);
+
+// TODO(regions): xFrednet: This function is used to modify Python objects
+//      but we can't really add a region write barrier, because we don't
+//      have the reference source.
+//      I see two solutions:
+//      (1) Break the public API (Which I'm doing in this patch)
+//      (2) Deprecate this function in favor of a new one. Usage of this
+//          old API will result in regions being marked as dirty.
 PyAPI_FUNC(int) PyMember_SetOne(char *, PyMemberDef *, PyObject *);
+PyAPI_FUNC(int) PyMember_SetOneOn(PyObject* obj, char *, PyMemberDef *, PyObject *);
 
 #ifndef Py_LIMITED_API
 #  define Py_CPYTHON_DESCROBJECT_H
