@@ -633,6 +633,12 @@ _PyStackRef_FromPyObjectNew(PyObject *obj)
     if (_Py_IsImmortal(obj)) {
         return (_PyStackRef){ .bits = ((uintptr_t)obj) | Py_TAG_REFCNT};
     }
+    // Regions: This should always succeed, since we already have a local
+    // reference of the object on the stack.
+    if (PyRegion_AddLocalRef(obj)) {
+        assert(false);
+        return PyStackRef_NULL;
+    }
     _Py_INCREF_MORTAL(obj);
     _PyStackRef ref = (_PyStackRef){ .bits = (uintptr_t)obj };
     PyStackRef_CheckValid(ref);
@@ -644,6 +650,12 @@ static inline _PyStackRef
 _PyStackRef_FromPyObjectNewMortal(PyObject *obj)
 {
     assert(obj != NULL);
+    // Regions: This should always succeed, since we already have a local
+    // reference of the object on the stack.
+    if (PyRegion_AddLocalRef(obj)) {
+        assert(false);
+        return PyStackRef_NULL;
+    }
     _Py_INCREF_MORTAL(obj);
     _PyStackRef ref = (_PyStackRef){ .bits = (uintptr_t)obj };
     PyStackRef_CheckValid(ref);
@@ -660,6 +672,7 @@ PyStackRef_FromPyObjectBorrow(PyObject *obj)
 
 /* WARNING: This macro evaluates its argument more than once */
 #ifdef _WIN32
+// TODO(regions): xFrednet: Include a `AddLocalRef` for this `_Py_INCREF_MORTAL` call
 #define PyStackRef_DUP(REF) \
     (PyStackRef_RefcountOnObject(REF) ? (_Py_INCREF_MORTAL(BITS_TO_PTR(REF)), (REF)) : (REF))
 #else
@@ -668,6 +681,12 @@ PyStackRef_DUP(_PyStackRef ref)
 {
     assert(!PyStackRef_IsNull(ref));
     if (PyStackRef_RefcountOnObject(ref)) {
+        // Regions: This should always succeed, since we already have a local
+        // reference of the object on the stack.
+        if (PyRegion_AddLocalRef(BITS_TO_PTR(ref))) {
+            assert(false);
+            return PyStackRef_NULL;
+        }
         _Py_INCREF_MORTAL(BITS_TO_PTR(ref));
     }
     return ref;

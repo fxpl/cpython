@@ -1655,7 +1655,6 @@ int regiondata_clean(PyObject* bridge) {
         // Merge the region into local
         if (regiondata_union_merge(item_region, _Py_LOCAL_REGION)) {
             regiondata_mark_as_dirty(item_region);
-            Py_DECREF(item);
             goto error;
         }
 
