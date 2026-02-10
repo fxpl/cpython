@@ -923,6 +923,7 @@ analyze_descriptor_load(PyTypeObject *type, PyObject *name, PyObject **descr, un
         /* Normal attribute lookup; */
         has_getattr = false;
     }
+    // TODO(regions): xFrednet: Support slots getter and setter
     else if (getattro_slot == _Py_slot_tp_getattr_hook ||
         getattro_slot == _Py_slot_tp_getattro) {
         /* One or both of __getattribute__ or __getattr__ may have been
@@ -944,7 +945,7 @@ analyze_descriptor_load(PyTypeObject *type, PyObject *name, PyObject **descr, un
             }
             /* Potentially both __getattr__ and __getattribute__ are set.
                Too complicated */
-            Py_DECREF(getattribute);
+            PyRegion_CLEARLOCAL(getattribute);
             *descr = NULL;
             *tp_version = ga_version;
             return GETSET_OVERRIDDEN;
@@ -956,7 +957,7 @@ analyze_descriptor_load(PyTypeObject *type, PyObject *name, PyObject **descr, un
            raised. This means some specializations, e.g. specializing
            for property() isn't safe.
         */
-        Py_XDECREF(getattribute);
+        PyRegion_CLEARLOCAL(getattribute);
     }
     else {
         *descr = NULL;
@@ -1337,7 +1338,7 @@ specialize_instance_load_attr(PyObject* owner, _Py_CODEUNIT* instr, PyObject* na
     PyTypeObject *type = Py_TYPE(owner);
     DescriptorClassification kind = analyze_descriptor_load(type, name, &descr, &tp_version);
     int result = do_specialize_instance_load_attr(owner, instr, name, shadow, shared_keys_version, kind, descr, tp_version);
-    Py_XDECREF(descr);
+    PyRegion_CLEARLOCAL(descr);
     return result;
 }
 
@@ -1523,7 +1524,7 @@ specialize_class_load_attr(PyObject *owner, _Py_CODEUNIT *instr,
     unsigned int meta_version = 0;
     PyObject *metadescriptor = _PyType_LookupRefAndVersion(Py_TYPE(cls), name, &meta_version);
     DescriptorClassification metakind = classify_descriptor(metadescriptor, false);
-    Py_XDECREF(metadescriptor);
+    PyRegion_CLEARLOCAL(metadescriptor);
     switch (metakind) {
         case METHOD:
         case NON_DESCRIPTOR:
@@ -1542,7 +1543,7 @@ specialize_class_load_attr(PyObject *owner, _Py_CODEUNIT *instr,
     kind = analyze_descriptor_load(cls, name, &descr, &tp_version);
     if (tp_version == 0) {
         SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_OUT_OF_VERSIONS);
-        Py_XDECREF(descr);
+        PyRegion_CLEARLOCAL(descr);
         return -1;
     }
     bool metaclass_check = false;
@@ -1550,7 +1551,7 @@ specialize_class_load_attr(PyObject *owner, _Py_CODEUNIT *instr,
         metaclass_check = true;
         if (meta_version == 0) {
             SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_OUT_OF_VERSIONS);
-            Py_XDECREF(descr);
+            PyRegion_CLEARLOCAL(descr);
             return -1;
         }
     }
@@ -1573,17 +1574,17 @@ specialize_class_load_attr(PyObject *owner, _Py_CODEUNIT *instr,
             else {
                 specialize(instr, LOAD_ATTR_CLASS);
             }
-            Py_XDECREF(descr);
+            PyRegion_CLEARLOCAL(descr);
             return 0;
 #ifdef Py_STATS
         case ABSENT:
             SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_EXPECTED_ERROR);
-            Py_XDECREF(descr);
+            PyRegion_CLEARLOCAL(descr);
             return -1;
 #endif
         default:
             SPECIALIZATION_FAIL(LOAD_ATTR, load_attr_fail_kind(kind));
-            Py_XDECREF(descr);
+            PyRegion_CLEARLOCAL(descr);
             return -1;
     }
 }

@@ -1615,7 +1615,7 @@ _PyObject_GetDictPtr(PyObject *obj)
 PyObject *
 PyObject_SelfIter(PyObject *obj)
 {
-    return Py_NewRef(obj);
+    return PyRegion_NewRef(obj);
 }
 
 /* Helper used when the __next__ method is removed from a type:
