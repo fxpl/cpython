@@ -111,6 +111,28 @@ static inline int _PyRegion_XSetNewRef(PyObject *src, PyObject **field, PyObject
 #define PyRegion_XSETREF(src, dst, val) _PyRegion_XSetRef(_PyObject_CAST(src), (PyObject **)&(dst), _PyObject_CAST(val))
 #define PyRegion_XSETNEWREF(src, dst, val) _PyRegion_XSetNewRef(_PyObject_CAST(src), (PyObject **)&(dst), _PyObject_CAST(val))
 
+static inline int _PyRegion_SetLocalRef(PyObject **field, PyObject *val) {
+    PyObject *old = *field;
+    *field = val;
+    PyRegion_RemoveLocalRef(old);
+    Py_XDECREF(old);
+
+    return 0;
+}
+static inline int _PyRegion_SetNewLocalRef(PyObject **field, PyObject *val) {
+    PyObject *old = *field;
+    if (PyRegion_AddLocalRef(val)) {
+        return 1;
+    }
+    *field = Py_NewRef(val);
+    PyRegion_RemoveLocalRef(old);
+    Py_XDECREF(old);
+
+    return 0;
+}
+#define PyRegion_XSETLOCALREF(dst, val) _PyRegion_SetLocalRef((PyObject **)&(dst), _PyObject_CAST(val))
+#define PyRegion_XSETLOCALNEWREF(dst, val) _PyRegion_SetNewLocalRef((PyObject **)&(dst), _PyObject_CAST(val))
+
 static inline void _PyRegion_Clear(PyObject *src, PyObject **field) {
     PyObject* old = *field;
     if (old) {
@@ -120,6 +142,7 @@ static inline void _PyRegion_Clear(PyObject *src, PyObject **field) {
     }
 }
 #define PyRegion_CLEAR(src, dst) _PyRegion_Clear(_PyObject_CAST(src), (PyObject **)&(dst))
+#define PyRegion_CLEARLOCAL(local) PyRegion_XSETLOCALREF(local, NULL)
 
 PyAPI_FUNC(void) PyRegion_NotifyTypeUse(PyTypeObject* type);
 PyAPI_FUNC(void) PyRegion_RecycleObject(PyObject *obj);
