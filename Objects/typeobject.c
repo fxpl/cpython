@@ -6052,6 +6052,10 @@ find_name_in_mro(PyTypeObject *type, PyObject *name, int *error)
     PyObject *res = NULL;
     /* Keep a strong reference to mro because type->tp_mro can be replaced
        during dict lookup, e.g. when comparing to non-string keys. */
+    if (PyRegion_AddLocalRef(mro)) {
+        *error = -1;
+        return NULL;
+    }
     Py_INCREF(mro);
     PyRegion_AddLocalRef(mro);
     Py_ssize_t n = PyTuple_GET_SIZE(mro);
@@ -6069,8 +6073,7 @@ find_name_in_mro(PyTypeObject *type, PyObject *name, int *error)
     }
     *error = 0;
 done:
-    PyRegion_RemoveLocalRef(mro);
-    Py_DECREF(mro);
+    PyRegion_CLEARLOCAL(mro);
     return res;
 }
 
@@ -6263,8 +6266,7 @@ _PyType_LookupStackRefAndVersion(PyTypeObject *type, PyObject *name, _PyStackRef
         update_cache_gil_disabled(entry, name, assigned_version, res);
 #else
         PyObject *old_value = update_cache(entry, name, assigned_version, res);
-        PyRegion_RemoveLocalRef(old_value);
-        Py_DECREF(old_value);
+        PyRegion_CLEARLOCAL(old_value);
 #endif
     }
     *out = res ? PyStackRef_FromPyObjectSteal(res) : PyStackRef_NULL;

@@ -187,16 +187,16 @@ gen_dealloc(PyObject *self)
         /* We have to handle this case for asynchronous generators
            right here, because this code has to be between UNTRACK
            and GC_Del. */
-        Py_CLEAR(((PyAsyncGenObject*)gen)->ag_origin_or_finalizer);
+        PyRegion_CLEAR(gen, ((PyAsyncGenObject*)gen)->ag_origin_or_finalizer);
     }
     if (PyCoro_CheckExact(gen)) {
-        Py_CLEAR(((PyCoroObject *)gen)->cr_origin_or_finalizer);
+        PyRegion_CLEAR(gen, ((PyCoroObject *)gen)->cr_origin_or_finalizer);
     }
     gen_clear_frame(gen);
     assert(gen->gi_exc_state.exc_value == NULL);
     PyStackRef_CLEAR(gen->gi_iframe.f_executable);
-    Py_CLEAR(gen->gi_name);
-    Py_CLEAR(gen->gi_qualname);
+    PyRegion_CLEAR(gen, gen->gi_name);
+    PyRegion_CLEAR(gen, gen->gi_qualname);
 
     PyObject_GC_Del(gen);
 }
@@ -285,7 +285,7 @@ gen_send_ex2(PyGenObject *gen, PyObject *arg, PyObject **presult,
         assert(result == Py_None || !PyAsyncGen_CheckExact(gen));
         if (result == Py_None && !PyAsyncGen_CheckExact(gen) && !arg) {
             /* Return NULL if called by gen_iternext() */
-            Py_CLEAR(result);
+            PyRegion_CLEARLOCAL(result);
         }
     }
     else {
@@ -322,7 +322,7 @@ gen_send_ex(PyGenObject *gen, PyObject *arg, int exc, int closing)
         else {
             _PyGen_SetStopIterationValue(result);
         }
-        Py_CLEAR(result);
+        PyRegion_CLEARLOCAL(result);
     }
     return result;
 }
@@ -648,7 +648,7 @@ gen_iternext(PyObject *self)
         if (result != Py_None) {
             _PyGen_SetStopIterationValue(result);
         }
-        Py_CLEAR(result);
+        PyRegion_CLEARLOCAL(result);
     }
     return result;
 }
@@ -908,6 +908,7 @@ PyTypeObject PyGen_Type = {
     offsetof(PyGenObject, gi_weakreflist),      /* tp_weaklistoffset */
     PyObject_SelfIter,                          /* tp_iter */
     gen_iternext,                               /* tp_iternext */
+    // TODO: Migrate
     gen_methods,                                /* tp_methods */
     gen_memberlist,                             /* tp_members */
     gen_getsetlist,                             /* tp_getset */

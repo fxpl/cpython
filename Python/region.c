@@ -1291,10 +1291,15 @@ int _add_to_region_check_obj(PyObject *obj, void *state_void) {
     assert(_PyRegion_Get(obj) == ((AddRegionState*)state_void)->merge_region);
     assert(_PyRegion_GetFollowPending(obj) == ((AddRegionState*)state_void)->subject_region);
 
-    if (PyFrame_Check(obj)) {
+    if (PyFrame_Check(obj)
+        || PyGen_CheckExact(obj)
+        || PyCoro_CheckExact(obj)
+        || PyAsyncGen_CheckExact(obj)
+        || PyAsyncGenASend_CheckExact(obj)
+    ) {
         throw_region_error(
-            "Frame objects are not movable and have to remain local",
-             NULL, NULL, obj);
+            "The given object is movable and has to remain local",
+            NULL, NULL, obj);
         return Py_OWNERSHIP_TRAVERSE_ERR;
     }
 
