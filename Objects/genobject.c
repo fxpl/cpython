@@ -864,6 +864,7 @@ PyDoc_STRVAR(sizeof__doc__,
 
 static PyMethodDef gen_methods[] = {
     {"send", gen_send, METH_O, send_doc},
+    // TODO(regions): Migrate
     {"throw", _PyCFunction_CAST(gen_throw), METH_FASTCALL, throw_doc},
     {"close", gen_close, METH_NOARGS, close_doc},
     {"__sizeof__", gen_sizeof, METH_NOARGS, sizeof__doc__},
@@ -908,7 +909,7 @@ PyTypeObject PyGen_Type = {
     offsetof(PyGenObject, gi_weakreflist),      /* tp_weaklistoffset */
     PyObject_SelfIter,                          /* tp_iter */
     gen_iternext,                               /* tp_iternext */
-    // TODO: Migrate
+    // TODO(regions): Migrate
     gen_methods,                                /* tp_methods */
     gen_memberlist,                             /* tp_members */
     gen_getsetlist,                             /* tp_getset */

@@ -124,11 +124,11 @@ _PyFrame_ClearExceptCode(_PyInterpreterFrame *frame)
         frame->frame_obj = NULL;
         if (!_PyObject_IsUniquelyReferenced((PyObject *)f)) {
             take_ownership(f, frame);
-            assert(PyRegion_IsLocal(f) && "No write barrier, since frames are always local");
+            assert((PyRegion_IsLocal(f) || _Py_IsImmortalOrImmutable(f)) && "No write barrier, since frames are always local");
             Py_DECREF(f);
             return;
         }
-        assert(PyRegion_IsLocal(f) && "No write barrier, since frames are always local");
+        assert((PyRegion_IsLocal(f) || _Py_IsImmortalOrImmutable(f)) && "No write barrier, since frames are always local");
         Py_DECREF(f);
     }
     _PyFrame_ClearLocals(frame);

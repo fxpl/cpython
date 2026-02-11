@@ -889,7 +889,6 @@ PyTypeObject PyGetSetDescr_Type = {
     getset_set,                                 /* tp_descr_set */
     .tp_reachable = _PyObject_ReachableVisitType,
     .tp_flags2 = Py_TPFLAGS2_REGION_AWARE
-    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyTypeObject PyWrapperDescr_Type = {

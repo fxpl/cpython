@@ -345,7 +345,7 @@ BaseException_args_get_impl(PyBaseExceptionObject *self)
     if (self->args == NULL) {
         Py_RETURN_NONE;
     }
-    return Py_NewRef(self->args);
+    return PyRegion_NewRef(self->args);
 }
 
 /*[clinic input]
@@ -366,7 +366,9 @@ BaseException_args_set_impl(PyBaseExceptionObject *self, PyObject *value)
     seq = PySequence_Tuple(value);
     if (!seq)
         return -1;
-    Py_XSETREF(self->args, seq);
+    if (PyRegion_XSETREF(self, self->args, seq)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -383,7 +385,7 @@ BaseException___traceback___get_impl(PyBaseExceptionObject *self)
     if (self->traceback == NULL) {
         Py_RETURN_NONE;
     }
-    return Py_NewRef(self->traceback);
+    return PyRegion_NewRef(self->traceback);
 }
 
 
@@ -403,10 +405,12 @@ BaseException___traceback___set_impl(PyBaseExceptionObject *self,
         return -1;
     }
     if (PyTraceBack_Check(value)) {
-        Py_XSETREF(self->traceback, Py_NewRef(value));
+        if (PyRegion_XSETNEWREF(self, self->traceback, value)) {
+            return -1;
+        }
     }
     else if (value == Py_None) {
-        Py_CLEAR(self->traceback);
+        PyRegion_CLEAR(self, self->traceback);
     }
     else {
         PyErr_SetString(PyExc_TypeError,
@@ -429,7 +433,7 @@ BaseException___context___get_impl(PyBaseExceptionObject *self)
     if (self->context == NULL) {
         Py_RETURN_NONE;
     }
-    return Py_NewRef(self->context);
+    return PyRegion_NewRef(self->context);
 }
 
 /*[clinic input]
@@ -453,9 +457,18 @@ BaseException___context___set_impl(PyBaseExceptionObject *self,
                         "or derive from BaseException");
         return -1;
     } else {
+        if (PyRegion_AddLocalRef(value)) {
+            // Regions: This should never happen, since we have a reference to self.
+            assert(false);
+            PyRegion_DirtyObjectRegion(value);
+            return -1;
+        }
         Py_INCREF(value);
     }
-    Py_XSETREF(self->context, value);
+    if (PyRegion_XSETREF(self, self->context, value)) {
+        Py_XDECREF(value);
+        return -1;
+    }
     return 0;
 }
 
@@ -519,7 +532,15 @@ PyException_GetTraceback(PyObject *self)
 {
     PyObject *traceback;
     Py_BEGIN_CRITICAL_SECTION(self);
-    traceback = Py_XNewRef(PyBaseExceptionObject_CAST(self)->traceback);
+    traceback = PyBaseExceptionObject_CAST(self)->traceback;
+    if (PyRegion_AddLocalRef(traceback)) {
+        // Regions: This should never happen, since we have a reference to self.
+        assert(false);
+        PyRegion_DirtyObjectRegion(traceback);
+        traceback = NULL;
+    } else {
+        Py_XINCREF(traceback);
+    }
     Py_END_CRITICAL_SECTION();
     return traceback;
 }
@@ -540,7 +561,15 @@ PyException_GetCause(PyObject *self)
 {
     PyObject *cause;
     Py_BEGIN_CRITICAL_SECTION(self);
-    cause = Py_XNewRef(PyBaseExceptionObject_CAST(self)->cause);
+    cause = PyBaseExceptionObject_CAST(self)->cause;
+    if (PyRegion_AddLocalRef(cause)) {
+        // Regions: This should never happen, since we have a reference to self.
+        assert(false);
+        PyRegion_DirtyObjectRegion(cause);
+        cause = NULL;
+    } else {
+        Py_XINCREF(cause);
+    }
     Py_END_CRITICAL_SECTION();
     return cause;
 }
@@ -551,8 +580,11 @@ PyException_SetCause(PyObject *self, PyObject *cause)
 {
     Py_BEGIN_CRITICAL_SECTION(self);
     PyBaseExceptionObject *base_self = PyBaseExceptionObject_CAST(self);
-    base_self->suppress_context = 1;
-    Py_XSETREF(base_self->cause, cause);
+    if (PyRegion_XSETREF(base_self, base_self->cause, cause)) {
+        // FIXME(Regions): xFrednet: This function doesn't support failure.
+    } else {
+        base_self->suppress_context = 1;
+    }
     Py_END_CRITICAL_SECTION();
 }
 
@@ -561,7 +593,15 @@ PyException_GetContext(PyObject *self)
 {
     PyObject *context;
     Py_BEGIN_CRITICAL_SECTION(self);
-    context = Py_XNewRef(PyBaseExceptionObject_CAST(self)->context);
+    context = PyBaseExceptionObject_CAST(self)->context;
+    if (PyRegion_AddLocalRef(context)) {
+        // Regions: This should never happen, since we have a reference to self.
+        assert(false);
+        PyRegion_DirtyObjectRegion(context);
+        context = NULL;
+    } else {
+        Py_XINCREF(context);
+    }
     Py_END_CRITICAL_SECTION();
     return context;
 }
@@ -571,7 +611,9 @@ void
 PyException_SetContext(PyObject *self, PyObject *context)
 {
     Py_BEGIN_CRITICAL_SECTION(self);
-    Py_XSETREF(PyBaseExceptionObject_CAST(self)->context, context);
+    if (PyRegion_XSETREF(self, PyBaseExceptionObject_CAST(self)->context, context)) {
+        // FIXME(Regions): xFrednet: This function doesn't support failure.
+    }
     Py_END_CRITICAL_SECTION();
 }
 
@@ -580,7 +622,15 @@ PyException_GetArgs(PyObject *self)
 {
     PyObject *args;
     Py_BEGIN_CRITICAL_SECTION(self);
-    args = Py_NewRef(PyBaseExceptionObject_CAST(self)->args);
+    args = PyBaseExceptionObject_CAST(self)->args;
+    if (PyRegion_AddLocalRef(args)) {
+        // This should never happen, since we have a reference to self.
+        assert(false);
+        PyRegion_DirtyObjectRegion(args);
+        args = NULL;
+    } else {
+        Py_INCREF(args);
+    }
     Py_END_CRITICAL_SECTION();
     return args;
 }
@@ -588,9 +638,18 @@ PyException_GetArgs(PyObject *self)
 void
 PyException_SetArgs(PyObject *self, PyObject *args)
 {
-    Py_BEGIN_CRITICAL_SECTION(self);
+    // Regions: This should always succeed, since we have a reference to args
+    if (PyRegion_AddLocalRef(args)) {
+        assert(false);
+        PyRegion_DirtyObjectRegion(args);
+        return;
+    }
     Py_INCREF(args);
-    Py_XSETREF(PyBaseExceptionObject_CAST(self)->args, args);
+
+    Py_BEGIN_CRITICAL_SECTION(self);
+    if (PyRegion_XSETREF(self, PyBaseExceptionObject_CAST(self)->args, args)) {
+        // FIXME(Regions): xFrednet: This function doesn't support failure.
+    }
     Py_END_CRITICAL_SECTION();
 }
 

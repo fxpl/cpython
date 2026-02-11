@@ -588,6 +588,7 @@ PyObject_CallFinalizer(PyObject *self)
     if (_PyType_IS_GC(tp) && _PyGC_FINALIZED(self))
         return;
 
+    PyRegion_NotifyTypeUse(tp);
     tp->tp_finalize(self);
     if (_PyType_IS_GC(tp)) {
         _PyGC_SET_FINALIZED(self);
@@ -782,6 +783,7 @@ PyObject_Repr(PyObject *v)
                                      " while getting the repr of an object")) {
         return NULL;
     }
+    PyRegion_NotifyTypeUse(Py_TYPE(v));
     res = (*Py_TYPE(v)->tp_repr)(v);
     _Py_LeaveRecursiveCallTstate(tstate);
 
@@ -791,7 +793,7 @@ PyObject_Repr(PyObject *v)
     if (!PyUnicode_Check(res)) {
         _PyErr_Format(tstate, PyExc_TypeError,
                       "%T.__repr__() must return a str, not %T", v, res);
-        Py_DECREF(res);
+        PyRegion_CLEARLOCAL(res);
         return NULL;
     }
     return res;
@@ -3271,6 +3273,7 @@ _Py_Dealloc(PyObject *op)
 #ifdef Py_TRACE_REFS
     _Py_ForgetReference(op);
 #endif
+    PyRegion_NotifyTypeUse(type);
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
     (*dealloc)(op);
 

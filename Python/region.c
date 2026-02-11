@@ -1292,6 +1292,13 @@ int _add_to_region_check_obj(PyObject *obj, void *state_void) {
     assert(_PyRegion_GetFollowPending(obj) == ((AddRegionState*)state_void)->subject_region);
 
     if (PyFrame_Check(obj)
+        // FIXME(regions): xFrednet: These objects are currently unmovable
+        //      because they store a interpreter frame inside them. However,
+        //      a pre-move-hook may enable moving of these. We would need to
+        //      package the frame in a subregion for the move and then dissolve
+        //      it into the local region before using the frame again.
+        //    For now, I've added the write barriers in them as if these types
+        //    support this suggested behavior.
         || PyGen_CheckExact(obj)
         || PyCoro_CheckExact(obj)
         || PyAsyncGen_CheckExact(obj)
