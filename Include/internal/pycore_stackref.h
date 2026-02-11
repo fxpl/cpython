@@ -597,9 +597,13 @@ PyStackRef_AsPyObjectSteal(_PyStackRef ref)
     if (PyStackRef_RefcountOnObject(ref)) {
         return BITS_TO_PTR(ref);
     }
-    else {
-        return PyRegion_NewRef(BITS_TO_PTR_MASKED(ref));
+    PyObject *obj = BITS_TO_PTR_MASKED(ref);
+    if (PyRegion_AddLocalRef(obj)) {
+        // Regions: This should never happen since we have a stack ref
+        assert(false);
+        return NULL;
     }
+    return Py_NewRef(obj);
 }
 
 static inline _PyStackRef
@@ -795,9 +799,21 @@ PyStackRef_TYPE(_PyStackRef stackref) {
     return Py_TYPE(PyStackRef_AsPyObjectBorrow(stackref));
 }
 
+static inline PyObject*
+_PyStackRef_AsPyObjectNew(_PyStackRef stackref) {
+    PyObject *obj = PyStackRef_AsPyObjectBorrow(stackref);
+    if (PyRegion_AddLocalRef(obj)) {
+        // Regions: This should never happens since we already have a
+        // stack reference which is local.
+        assert(false);
+        return NULL;
+    }
+    return Py_NewRef(obj);
+}
+
 // Converts a PyStackRef back to a PyObject *, converting the
 // stackref to a new reference.
-#define PyStackRef_AsPyObjectNew(stackref) Py_NewRef(PyStackRef_AsPyObjectBorrow(stackref))
+#define PyStackRef_AsPyObjectNew(stackref) _PyStackRef_AsPyObjectNew(stackref)
 
 // StackRef type checks
 
