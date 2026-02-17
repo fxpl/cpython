@@ -633,7 +633,7 @@ int _PyCown_SwitchFromGcToIp(_PyCownObject *self) {
 
     _PyCown_ipid_t ipid = _PyCown_ThisInterpreterId();
     _PyCown_ipid_t gcid = GC_IPID;
-    if (_Py_atomic_compare_exchange_uint64(&self->owning_ip, &gcid, ipid)) {
+    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &gcid, ipid)) {
         return -1;
     }
 
@@ -653,12 +653,12 @@ int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region)
     BAIL_UNLESS_OWNED_BY(self, ipid, -1);
 
     PyObject *value = self->value;
+    Py_region_t value_region = _PyRegion_Get(value);
+    *contained_region = value_region;
 
     // Cowns holding cowns or immutable objects can be released without any
     // restrictions
-    Py_region_t value_region = _PyRegion_Get(value);
     if (value_region == _Py_COWN_REGION || value_region == _Py_IMMUTABLE_REGION) {
-        *contained_region = value_region;
         return cown_release_unchecked(self, ipid);
     }
 
@@ -675,10 +675,12 @@ int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region)
 
     // A closed region is safe to release
     if (_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
+        *contained_region = NULL_REGION;
         return 1;
     }
 
-    if (_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, GC_IPID)) {
+    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, GC_IPID)) {
+        *contained_region = NULL_REGION;
         return -1;
     }
     return 0;
