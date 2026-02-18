@@ -1466,7 +1466,8 @@ _PyNumber_Index(PyObject *item)
     }
 
     if (PyLong_Check(item)) {
-        return Py_NewRef(item);
+        // PyRegion_AddLocalRef(item); // Can Fail
+        return PyRegion_NewRef(item);
     }
     if (!_PyIndex_Check(item)) {
         PyErr_Format(PyExc_TypeError,
@@ -1508,6 +1509,7 @@ PyObject *
 PyNumber_Index(PyObject *item)
 {
     PyObject *result = _PyNumber_Index(item);
+    // For subclass handling
     if (result != NULL && !PyLong_CheckExact(result)) {
         Py_SETREF(result, _PyLong_Copy((PyLongObject *)result));
     }

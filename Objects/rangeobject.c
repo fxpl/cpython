@@ -39,6 +39,7 @@ validate_step(PyObject *step)
     if (step && _PyLong_IsZero((PyLongObject *)step)) {
         PyErr_SetString(PyExc_ValueError,
                         "range() arg 3 must not be zero");
+        PyRegion_RemoveLocalRef(step); 
         Py_CLEAR(step);
     }
 
@@ -65,6 +66,14 @@ make_range_object(PyTypeObject *type, PyObject *start,
             return NULL;
         }
     }
+    if(PyRegion_TakeRefs(obj, start, stop, step, length))
+    {   
+        Py_DECREF(obj);
+        PyRegion_RemoveLocalRef(length);
+        Py_DECREF(length);
+        return NULL;
+    }
+    
     obj->start = start;
     obj->stop = stop;
     obj->step = step;
@@ -82,31 +91,50 @@ range_from_array(PyTypeObject *type, PyObject *const *args, Py_ssize_t num_args)
 {
     rangeobject *obj;
     PyObject *start = NULL, *stop = NULL, *step = NULL;
+    // PyObject *startLog = NULL, *stopLog = NULL; // For Debug extra +1 of "step"
 
     switch (num_args) {
         case 3:
             step = args[2];
+            // start = args[0]; // For Debug extra +1 of "step"
+            // stop = args[1]; // For Debug extra +1 of "step"
             _Py_FALLTHROUGH;
         case 2:
             /* Convert borrowed refs to owned refs */
             start = PyNumber_Index(args[0]);
+            // if (start == NULL || stop == NULL) {
+            //     start = args[0]; // For Debug extra +1 of "step"
+            //     stop = args[1]; // For Debug extra +1 of "step"
+            // }
+            // start = PyNumber_Index(start); // For Debug extra +1 of "step"
             if (!start) {
                 return NULL;
             }
             stop = PyNumber_Index(args[1]);
+            // stop = PyNumber_Index(stop); // For Debug extra +1 of "step"
             if (!stop) {
+                PyRegion_RemoveLocalRef(start); // Since start has already increased the _lrc but stop failed to convert, we need to remove the local ref for start to avoid refcount issues.
+                // RemoveLocalRef before Py_DECREF to prevent the object to be deallocated before we remove the local ref, which can cause refcount issues.
                 Py_DECREF(start);
                 return NULL;
             }
-            step = validate_step(step);  /* Caution, this can clear exceptions */
+            step = validate_step(step);  /* Caution, this can clear exceptions */ 
+            /* Also have Py_INCREF inside in the form of Py_NEWREF*/
+            // validate_step already handles the case that no step is provided, so we don't need to handle that case here.
+            // This if-statement handles only the case that step is provided but invalid (e.g. step is 0 or step is not an integer).
             if (!step) {
+                PyRegion_RemoveLocalRef(start); // Since start has already increased the _lrc but step failed to convert, we need to remove the local ref for start to avoid refcount issues.
+                PyRegion_RemoveLocalRef(stop); // Since stop has already increased the _lrc but step failed to convert, we need to remove the local ref for stop to avoid refcount issues.
                 Py_DECREF(start);
                 Py_DECREF(stop);
                 return NULL;
             }
             break;
         case 1:
+            // printf("num_args is 1\n");
             stop = PyNumber_Index(args[0]);
+            // stop = args[0]; // For Debug extra +1 of "step"
+            // stop = PyNumber_Index(stop); // For Debug extra +1 of "step"
             if (!stop) {
                 return NULL;
             }
@@ -170,9 +198,14 @@ static void
 range_dealloc(PyObject *op)
 {
     rangeobject *r = (rangeobject*)op;
+
+    PyRegion_RemoveLocalRef(r->start);
+    PyRegion_RemoveLocalRef(r->stop);
+    PyRegion_RemoveLocalRef(r->step);
     Py_DECREF(r->start);
     Py_DECREF(r->stop);
     Py_DECREF(r->step);
+    // TODO: Check if PyRegion_RemoveLocalRef(r->length) is required here.
     Py_DECREF(r->length);
     _Py_FREELIST_FREE_OBJ(ranges, r, PyObject_Free);
 }
@@ -778,6 +811,21 @@ static PyMemberDef range_members[] = {
     {0}
 };
 
+static int
+range_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    rangeobject *r = (rangeobject *)self;
+
+    // Py_VISIT is a macro that calls visit(object, arg)
+    // and returns early if visit() returns non-zero (error)
+    Py_VISIT(r->start);
+    Py_VISIT(r->stop);
+    Py_VISIT(r->step);
+    Py_VISIT(r->length);
+
+    return 0;
+}
+
 PyTypeObject PyRange_Type = {
         PyVarObject_HEAD_INIT(&PyType_Type, 0)
         "range",                /* Name of this type */
@@ -800,7 +848,7 @@ PyTypeObject PyRange_Type = {
         0,                      /* tp_as_buffer */
         Py_TPFLAGS_DEFAULT | Py_TPFLAGS_SEQUENCE,  /* tp_flags */
         range_doc,              /* tp_doc */
-        0,                      /* tp_traverse */
+        range_traverse,         /* tp_traverse */
         0,                      /* tp_clear */
         range_richcompare,      /* tp_richcompare */
         0,                      /* tp_weaklistoffset */
@@ -904,6 +952,14 @@ rangeiter_dealloc(PyObject *self)
     _Py_FREELIST_FREE_OBJ(range_iters, (_PyRangeIterObject *)self, PyObject_Free);
 }
 
+static int
+rangeiter_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    // _PyRangeIterObject holds only C longs (start, step, len),
+    // not PyObject* references, so there is nothing to visit.
+    return 0;
+}
+
 PyDoc_STRVAR(reduce_doc, "Return state information for pickling.");
 PyDoc_STRVAR(setstate_doc, "Set state information for unpickling.");
 
@@ -937,7 +993,7 @@ PyTypeObject PyRangeIter_Type = {
         0,                                      /* tp_as_buffer */
         Py_TPFLAGS_DEFAULT,                     /* tp_flags */
         0,                                      /* tp_doc */
-        0,                                      /* tp_traverse */
+        rangeiter_traverse,                     /* tp_traverse */
         0,                                      /* tp_clear */
         0,                                      /* tp_richcompare */
         0,                                      /* tp_weaklistoffset */
@@ -1118,6 +1174,18 @@ longrangeiter_next(PyObject *op)
     return result;
 }
 
+static int
+longrangeiter_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    longrangeiterobject *r = (longrangeiterobject *)self;
+
+    Py_VISIT(r->start);
+    Py_VISIT(r->step);
+    Py_VISIT(r->len);
+
+    return 0;
+}
+
 PyTypeObject PyLongRangeIter_Type = {
         PyVarObject_HEAD_INIT(&PyType_Type, 0)
         "longrange_iterator",                   /* tp_name */
@@ -1141,7 +1209,7 @@ PyTypeObject PyLongRangeIter_Type = {
         0,                                      /* tp_as_buffer */
         Py_TPFLAGS_DEFAULT,                     /* tp_flags */
         0,                                      /* tp_doc */
-        0,                                      /* tp_traverse */
+        longrangeiter_traverse,                 /* tp_traverse */
         0,                                      /* tp_clear */
         0,                                      /* tp_richcompare */
         0,                                      /* tp_weaklistoffset */
