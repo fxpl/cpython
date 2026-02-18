@@ -8,7 +8,9 @@ class TestRegionGC(unittest.TestCase):
         pass
 
     def setUp(self):
-        gc.collect()  # Ensure there are no lingering cycles
+        # Need to run collection multiple times to clean up region chains
+        while gc.collect() > 0:
+            pass
 
     def build_cycle(self):
         a = self.A()
@@ -27,7 +29,8 @@ class TestRegionGC(unittest.TestCase):
 
         # A normal cycle should be collected
         self.build_cycle()
-        self.assertGreaterEqual(gc.collect(), 2)
+        self.assertEqual(gc.collect(), 2)
+        self.assertEqual(gc.collect(), 0)
 
         # A cycle inside a region should be ignored
         r.a = self.build_cycle()
@@ -36,7 +39,7 @@ class TestRegionGC(unittest.TestCase):
 
         # Dissolving a region should allow cycles to be collected again
         r = None
-        self.assertGreaterEqual(gc.collect(), 2)
+        self.assertEqual(gc.collect(), 2)
 
     def test_collect_cycle(self):
         r = self.build_region_with_unreachable_cycle()
@@ -86,10 +89,8 @@ class TestRegionGC(unittest.TestCase):
         self.assertEqual(gc.collect_region(c), 2)
         self.assertEqual(gc.collect(), 2)
 
-    # FIXME(regions-gc)
-    @unittest.skip("finalizers currently do not work")
     def test_finalizer(self):
-        class Finalizable:
+        class Resurrectable:
             def __init__(self, data):
                 self.data = data
 
@@ -100,22 +101,73 @@ class TestRegionGC(unittest.TestCase):
         r = Region()
         r.data = {"counter": 0, "instance": None}
         r.a = self.build_cycle()
-        r.a.f = Finalizable(r.data)
+        r.a.f = Resurrectable(r.data)
         r.a = None
 
         c = Cown(r)
         r = None
         c.release()
-        # The cycle should be collected; the finalizer should run exactly once
+        # The cycle should be collected
         self.assertEqual(gc.collect_region(c), 2)
+        c.acquire()
+        r = c.value
+        # The finalizer should have run exactly once
         self.assertEqual(r.data["counter"], 1)
+        # The instance should not have been collected
+        self.assertIs(r.data["instance"].data, r.data)
         # The finalizer should not run again
         r.data["instance"] = None
         self.assertEqual(r.data["counter"], 1)
 
+    def test_region_opened_by_finalizer(self):
+        class RegionOpener:
+            def __init__(self, r):
+                self.r = r
+
+            def __del__(self):
+                # Create a cycle; it outlives the finalizer
+                a = {}
+                a["a"] = a
+                # Open the region
+                a["r"] = self.r
+
+        r = Region()
+        r.a = self.build_cycle()
+        r.a.f = RegionOpener(r)
+        r.a = None
+
+        c = Cown(r)
+        r = None
+        c.release()
+        # Collection should be aborted
+        self.assertEqual(gc.collect_region(c), 0)
+        c.acquire()
+        # The region should have been replaced with None
+        self.assertIsNone(c.value)
+
+    def test_cown_changed_by_finalizer(self):
+        class CownChanger:
+            def __init__(self, c):
+                self.c = c
+
+            def __del__(self):
+                # Change the cown's region
+                self.c.value = Region()
+
+        r = Region()
+        c = Cown(r)
+        r.a = self.build_cycle()
+        r.a.f = CownChanger(c)
+        r.a = None
+        r = None
+        c.release()
+        # Collection should be aborted
+        self.assertEqual(gc.collect_region(c), 0)
+
+
     # TODO(regions-gc): test that region GC is triggered, but not when disabled
-    # TODO(regions-gc): callbacks
-    # TODO(regions-gc): weakref
+    # TODO(regions-gc): GC callbacks
+    # TODO(regions-gc): weakrefs
 
 
 def setUpModule():

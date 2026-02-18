@@ -121,6 +121,8 @@ _PyGC_NEXT_MASK_UNREACHABLE
 // Automatically choose the generation that needs collecting.
 #define GENERATION_AUTO (-1)
 
+#define _Py_region_data_CAST(op)  _Py_CAST(_Py_region_data*, op)
+
 static inline int
 gc_is_collecting(PyGC_Head *g)
 {
@@ -1849,6 +1851,38 @@ gc_collect_chunk(PyThreadState *tstate,
     validate_list(to, collecting_clear_unreachable_clear);
 }
 
+struct region_collection_state {
+    _PyCownObject *cown;
+    Py_region_t region_in_cown_orig;
+    Py_region_t region_in_cown_new;
+};
+
+/* Start of a section where Python code is executed. */
+static inline void
+python_code_start(struct region_collection_state *rcstate)
+{
+    int switch_result = _PyCown_SwitchFromGcToIp(rcstate->cown);
+    assert(switch_result == 0);
+}
+
+/* End of a section where Python code is executed. */
+static inline void
+python_code_end(struct region_collection_state *rcstate)
+{
+    int switch_result = _PyCown_SwitchFromIpToGc(
+        rcstate->cown,
+        &rcstate->region_in_cown_new
+    );
+    assert(switch_result == 0);
+}
+
+/* Returns true if the region contained in the cown has changed. */
+static inline int
+has_region_changed(struct region_collection_state *rcstate)
+{
+    return rcstate->region_in_cown_new != rcstate->region_in_cown_orig;
+}
+
 static void
 region_list_split(PyGC_Head *list, PyGC_Head *contained)
 {
@@ -1882,6 +1916,7 @@ region_list_split(PyGC_Head *list, PyGC_Head *contained)
 static void
 gc_collect_region(PyThreadState *tstate,
                   Py_region_t region,
+                  struct region_collection_state *rcstate,
                   struct gc_collection_stats *stats)
 {
     if (region == _Py_LOCAL_REGION
@@ -1889,9 +1924,9 @@ gc_collect_region(PyThreadState *tstate,
         || region == _Py_COWN_REGION) {
         return;
     }
-    _Py_region_data *data = (_Py_region_data*)region;
 
-    PyGC_Head *gc; /* initialize to prevent a compiler warning */
+    _Py_region_data *data = _Py_region_data_CAST(region);
+    PyGC_Head *gc;
     GCState *gcstate = &tstate->interp->gc;
     assert(!_PyErr_Occurred(tstate));
 
@@ -1917,6 +1952,8 @@ gc_collect_region(PyThreadState *tstate,
         }
     }
 
+    python_code_start(rcstate);
+
     /* Invoke weakref callbacks as necessary. */
     stats->collected += handle_weakref_callbacks(&unreachable, &contained);
     validate_list(&contained, collecting_clear_unreachable_clear);
@@ -1924,6 +1961,16 @@ gc_collect_region(PyThreadState *tstate,
 
     /* Call tp_finalize on objects which have one. */
     finalize_garbage(tstate, &unreachable);
+
+    python_code_end(rcstate);
+    if (has_region_changed(rcstate)) {
+        /* Abort. */
+        /* Restore the GC list. Make sure child regions come first. */
+        gc_list_merge(&contained, &data->gc_list);
+        gc_list_merge(&unreachable, &data->gc_list);
+        return;
+    }
+
     /* Handle any objects that may have resurrected after the call
      * to 'finalize_garbage' and continue the collection with the
      * objects that are still unreachable */
@@ -1936,6 +1983,8 @@ gc_collect_region(PyThreadState *tstate,
      */
     clear_weakrefs(&final_unreachable);
 
+    python_code_start(rcstate);
+
     /* Call tp_clear on objects in the final_unreachable set.  This will cause
     * the reference cycles to be broken.  It may also cause some objects
     * in finalizers to be freed.
@@ -1943,19 +1992,25 @@ gc_collect_region(PyThreadState *tstate,
     stats->collected += gc_list_size(&final_unreachable);
     delete_garbage(tstate, gcstate, &final_unreachable, &contained);
 
+    python_code_end(rcstate);
+
     /* Restore the GC list. Make sure child regions come first. */
     gc_list_merge(&contained, &data->gc_list);
 
     /* Collect child regions. */
     gc = GC_NEXT(&data->gc_list);
     while (gc != &data->gc_list) {
+        if (has_region_changed(rcstate)) {
+            /* Abort. */
+            return;
+        }
         // Stop looping if this is not a bridge
         PyObject *obj = _Py_FROM_GC(gc);
         if (Py_TYPE(obj) != &_PyRegion_Type) {
             break;
         }
         Py_region_t child = _PyRegion_Get(obj);
-        gc_collect_region(tstate, child, stats);
+        gc_collect_region(tstate, child, rcstate, stats);
         gc = GC_NEXT(gc);
     }
 }
@@ -2299,7 +2354,7 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *cown, _PyGC_Reason reason)
     GCState *gcstate = &tstate->interp->gc;
     struct gc_collection_stats stats = { 0 };
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
-        _PyRegionObject* bridge = ((_Py_region_data*)region)->bridge;
+        _PyRegionObject* bridge = _Py_region_data_CAST(region)->bridge;
         const char *name = get_region_name(bridge);
         if (name == NULL) {
             PySys_WriteStderr("gc: collecting region at %p\n", bridge);
@@ -2308,10 +2363,16 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *cown, _PyGC_Reason reason)
             PySys_WriteStderr("gc: collecting region '%s' at %p\n", name, bridge);
         }
     }
+
+    struct region_collection_state rcstate = {
+        .cown = _PyCownObject_CAST(cown),
+        .region_in_cown_orig = region,
+        .region_in_cown_new = region,
+    };
     PyObject *exc = _PyErr_GetRaisedException(tstate);
-    gc_collect_region(tstate, region, &stats);
+    gc_collect_region(tstate, region, &rcstate, &stats);
     _PyErr_SetRaisedException(tstate, exc);
-    _PyCown_ReleaseGC(_PyCownObject_CAST(cown));
+    _PyCown_ReleaseGC(rcstate.cown);
     return stats.collected;
 }
 
