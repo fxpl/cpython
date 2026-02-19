@@ -12,9 +12,9 @@ r3.step = 4454354354355500000
 # r1.start = 1
 # r2.stop = 10
 # r3.step = 2
-# print("sys.getrefcount(r.start): ", sys.getrefcount(r1.start))
-# print("sys.getrefcount(r.stop): ", sys.getrefcount(r2.stop))
-# print("sys.getrefcount(r.step): ", sys.getrefcount(r3.step))
+print("sys.getrefcount(r1.start): ", sys.getrefcount(r1.start))
+print("sys.getrefcount(r2.stop): ", sys.getrefcount(r2.stop))
+print("sys.getrefcount(r3.step): ", sys.getrefcount(r3.step))
 # print(f"{r1.owns(r1.start)}")
 # print(f"{r2.owns(r2.stop)}")
 # print(f"{r3.owns(r3.step)}")

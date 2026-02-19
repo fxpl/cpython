@@ -1150,9 +1150,12 @@ static void
 longrangeiter_dealloc(PyObject *op)
 {
     longrangeiterobject *r = (longrangeiterobject*)op;
-    Py_XDECREF(r->start);
-    Py_XDECREF(r->step);
-    Py_XDECREF(r->len);
+    PyRegion_CLEAR(r, r->start);
+    PyRegion_CLEAR(r, r->step);
+    PyRegion_CLEAR(r, r->len);
+    // Py_XDECREF(r->start);
+    // Py_XDECREF(r->step);
+    // Py_XDECREF(r->len);
     PyObject_Free(r);
 }
 
@@ -1218,7 +1221,7 @@ PyTypeObject PyLongRangeIter_Type = {
         0,                                      /* tp_richcompare */
         0,                                      /* tp_weaklistoffset */
         PyObject_SelfIter,                      /* tp_iter */
-        longrangeiter_next,                     /* tp_iternext */
+        longrangeiter_next,                     /* tp_iternext */ /*next(it)*/
         longrangeiter_methods,                  /* tp_methods */
         0,
 };
@@ -1272,6 +1275,10 @@ range_iter(PyObject *seq)
     if (it == NULL)
         return NULL;
 
+    if(PyRegion_AddRefs(it, r->start, r->step, r->length)) {
+        Py_DECREF(it);
+        return NULL;
+    }
     it->start = Py_NewRef(r->start);
     it->step = Py_NewRef(r->step);
     it->len = Py_NewRef(r->length);
@@ -1355,6 +1362,10 @@ long_range:
     it->start = it->step = NULL;
 
     /* start + (len - 1) * step */
+    if(PyRegion_AddRef(it, range->length)) {
+        Py_DECREF(it);
+        return NULL;
+    }
     it->len = Py_NewRef(range->length);
 
     diff = PyNumber_Subtract(it->len, _PyLong_GetOne());

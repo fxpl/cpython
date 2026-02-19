@@ -7,8 +7,8 @@ r2 = Region()
 r3 = Region()
 # freeze(10)
 r1.start = 445435435435535340000000
-r2.stop = 445435435435535345547898
-r3.step = 445435435435550
+r2.stop = 4454354354355353455478980000000
+r3.step = 44543543545555
 # r1.start = 1
 # r2.stop = 10
 # r3.step = 2
@@ -24,8 +24,11 @@ print(f"Initial Region: {r2}")
 print(f"Initial Region: {r3}")
 #print(sys.getrefcount(r.stop))
 # print(f"{r.stop}")
-ra1 = range(r1.start, r2.stop, r3.step)[2]
+ra1 = range(r1.start, r2.stop, r3.step)
 
 print(f"{r1.owns(ra1)}")
 print(f"{r2.owns(ra1)}")
 print(f"{r3.owns(ra1)}")
+
+print(f"is_local(ra1[0]): {is_local(ra1[0])}")
+print(f"is_local(ra1[1]): {is_local(ra1[1])}")

@@ -7,7 +7,12 @@ r = Region()
 r.start = 44543543543553534000
 # r.start=3
 r.stop = 44543543543553534554
+# r.stop = 100
 r.step = 44543543543555
+# r.step = 10
+# a=10**20
+# b=100000000000000000000
+# print(f"{hex(id(a))}, {hex(id(b))}")
 print("sys.getrefcount(r.start): ", sys.getrefcount(r.start))
 print("sys.getrefcount(r.stop): ", sys.getrefcount(r.stop))
 print("sys.getrefcount(r.step): ", sys.getrefcount(r.step))
@@ -18,6 +23,7 @@ print(f"{r.owns(r.step)}")
 print(f"Initial Region: {r}")
 #print(sys.getrefcount(r.stop))
 # print(f"{r.stop}")
+input("Press Enter to continue...")
 ra = range(r.start, r.stop, r.step)
 print(f"{ra}")
 print(f"{r.owns(ra)}, {is_local(ra)}")
