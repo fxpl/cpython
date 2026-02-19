@@ -62,12 +62,14 @@ make_range_object(PyTypeObject *type, PyObject *start,
     if (obj == NULL) {
         obj = PyObject_New(rangeobject, type);
         if (obj == NULL) {
+            PyRegion_RemoveLocalRef(length);
             Py_DECREF(length);
             return NULL;
         }
     }
     if(PyRegion_TakeRefs(obj, start, stop, step, length))
     {   
+        assert(PyRegion_IsLocal(obj)); // No write barrier bc obj is newly created and being in the local region
         Py_DECREF(obj);
         PyRegion_RemoveLocalRef(length);
         Py_DECREF(length);
@@ -96,22 +98,14 @@ range_from_array(PyTypeObject *type, PyObject *const *args, Py_ssize_t num_args)
     switch (num_args) {
         case 3:
             step = args[2];
-            // start = args[0]; // For Debug extra +1 of "step"
-            // stop = args[1]; // For Debug extra +1 of "step"
             _Py_FALLTHROUGH;
         case 2:
             /* Convert borrowed refs to owned refs */
             start = PyNumber_Index(args[0]);
-            // if (start == NULL || stop == NULL) {
-            //     start = args[0]; // For Debug extra +1 of "step"
-            //     stop = args[1]; // For Debug extra +1 of "step"
-            // }
-            // start = PyNumber_Index(start); // For Debug extra +1 of "step"
             if (!start) {
                 return NULL;
             }
             stop = PyNumber_Index(args[1]);
-            // stop = PyNumber_Index(stop); // For Debug extra +1 of "step"
             if (!stop) {
                 PyRegion_RemoveLocalRef(start); // Since start has already increased the _lrc but stop failed to convert, we need to remove the local ref for start to avoid refcount issues.
                 // RemoveLocalRef before Py_DECREF to prevent the object to be deallocated before we remove the local ref, which can cause refcount issues.
@@ -131,10 +125,7 @@ range_from_array(PyTypeObject *type, PyObject *const *args, Py_ssize_t num_args)
             }
             break;
         case 1:
-            // printf("num_args is 1\n");
             stop = PyNumber_Index(args[0]);
-            // stop = args[0]; // For Debug extra +1 of "step"
-            // stop = PyNumber_Index(stop); // For Debug extra +1 of "step"
             if (!stop) {
                 return NULL;
             }
@@ -157,9 +148,15 @@ range_from_array(PyTypeObject *type, PyObject *const *args, Py_ssize_t num_args)
     }
 
     /* Failed to create object, release attributes */
+    PyRegion_RemoveLocalRef(start);
+    PyRegion_RemoveLocalRef(stop);
+    PyRegion_RemoveLocalRef(step);
     Py_DECREF(start);
     Py_DECREF(stop);
     Py_DECREF(step);
+    // PyRegion_CLEARLOCAL(start);
+    // PyRegion_CLEARLOCAL(stop);
+    // PyRegion_CLEARLOCAL(step);
     return NULL;
 }
 
@@ -198,15 +195,14 @@ static void
 range_dealloc(PyObject *op)
 {
     rangeobject *r = (rangeobject*)op;
-
-    PyRegion_RemoveLocalRef(r->start);
-    PyRegion_RemoveLocalRef(r->stop);
-    PyRegion_RemoveLocalRef(r->step);
-    Py_DECREF(r->start);
-    Py_DECREF(r->stop);
-    Py_DECREF(r->step);
-    // TODO: Check if PyRegion_RemoveLocalRef(r->length) is required here.
-    Py_DECREF(r->length);
+    PyRegion_CLEAR(r, r->start);
+    /* Equivalent to:
+        PyRegion_RemoveRef(r, r->start);
+        Py_DECREF(r->start);
+    */
+    PyRegion_CLEAR(r, r->stop);
+    PyRegion_CLEAR(r, r->step);
+    PyRegion_CLEAR(r, r->length);
     _Py_FREELIST_FREE_OBJ(ranges, r, PyObject_Free);
 }
 
@@ -295,6 +291,10 @@ compute_range_length(PyObject *start, PyObject *stop, PyObject *step)
     if (cmp_result == 1) {
         lo = start;
         hi = stop;
+        if(PyRegion_AddLocalRef(step)) // Should never fail, but just in case
+        {
+            return NULL;
+        }
         Py_INCREF(step);
     } else {
         lo = stop;
@@ -307,6 +307,7 @@ compute_range_length(PyObject *start, PyObject *stop, PyObject *step)
     /* if (lo >= hi), return length of 0. */
     cmp_result = PyObject_RichCompareBool(lo, hi, Py_GE);
     if (cmp_result != 0) {
+        PyRegion_RemoveLocalRef(step);
         Py_DECREF(step);
         if (cmp_result < 0)
             return NULL;
@@ -328,11 +329,13 @@ compute_range_length(PyObject *start, PyObject *stop, PyObject *step)
 
     Py_DECREF(tmp2);
     Py_DECREF(diff);
+    PyRegion_RemoveLocalRef(step);
     Py_DECREF(step);
     Py_DECREF(tmp1);
     return result;
 
   Fail:
+    PyRegion_RemoveLocalRef(step);
     Py_DECREF(step);
     Py_XDECREF(tmp2);
     Py_XDECREF(diff);
@@ -838,6 +841,7 @@ PyTypeObject PyRange_Type = {
         0,                      /* tp_as_async */
         range_repr,             /* tp_repr */
         &range_as_number,       /* tp_as_number */
+        // TODO
         &range_as_sequence,     /* tp_as_sequence */
         &range_as_mapping,      /* tp_as_mapping */
         range_hash,             /* tp_hash */

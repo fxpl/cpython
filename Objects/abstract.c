@@ -1564,6 +1564,7 @@ PyNumber_AsSsize_t(PyObject *item, PyObject *err)
     }
 
  finish:
+    PyRegion_RemoveLocalRef(value);
     Py_DECREF(value);
     return result;
 }
