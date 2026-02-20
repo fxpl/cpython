@@ -77,10 +77,18 @@ gen_traverse(PyObject *self, visitproc visit, void *arg)
         // ensure that it's kept alive if the reference is deferred.
         _Py_VISIT_STACKREF(gen->gi_iframe.f_executable);
     }
-    /* No need to visit cr_origin, because it's just tuples/str/int, so can't
-       participate in a reference cycle. */
+    /* No need to visit gi_exc_state.exc_value for cycles with tuples/str/int.
+       cr_origin (on coroutines sharing this traversal) is also just
+       tuples/str/int, so can't participate in a reference cycle. */
     Py_VISIT(gen->gi_exc_state.exc_value);
     return 0;
+}
+
+static int
+gen_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return gen_traverse(self, visit, arg);
 }
 
 void
@@ -917,6 +925,7 @@ PyTypeObject PyGen_Type = {
     0,                                          /* tp_del */
     0,                                          /* tp_version_tag */
     _PyGen_Finalize,                            /* tp_finalize */
+    .tp_reachable = gen_reachable,
 };
 
 static PyObject *
@@ -1225,6 +1234,24 @@ static PyAsyncMethods coro_as_async = {
     PyGen_am_send,                              /* am_send  */
 };
 
+static int coro_traverse(PyObject *, visitproc, void *);
+
+static int
+coro_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return coro_traverse(self, visit, arg);
+}
+
+/* Coroutine traversal.  Currently identical to gen_traverse, but kept
+   separate so that coro_reachable stays correct if PyCoro_Type ever
+   gains its own tp_traverse (e.g. to visit cr_origin_or_finalizer). */
+static int
+coro_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    return gen_traverse(self, visit, arg);
+}
+
 PyTypeObject PyCoro_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "coroutine",                                /* tp_name */
@@ -1248,7 +1275,7 @@ PyTypeObject PyCoro_Type = {
     0,                                          /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,    /* tp_flags */
     0,                                          /* tp_doc */
-    gen_traverse,                               /* tp_traverse */
+    coro_traverse,                              /* tp_traverse */
     0,                                          /* tp_clear */
     0,                                          /* tp_richcompare */
     offsetof(PyCoroObject, cr_weakreflist),     /* tp_weaklistoffset */
@@ -1275,6 +1302,7 @@ PyTypeObject PyCoro_Type = {
     0,                                          /* tp_del */
     0,                                          /* tp_version_tag */
     _PyGen_Finalize,                            /* tp_finalize */
+    .tp_reachable = coro_reachable,
 };
 
 static void
@@ -1488,6 +1516,13 @@ async_gen_traverse(PyObject *self, visitproc visit, void *arg)
     PyAsyncGenObject *ag = _PyAsyncGenObject_CAST(self);
     Py_VISIT(ag->ag_origin_or_finalizer);
     return gen_traverse((PyObject*)ag, visit, arg);
+}
+
+static int
+async_gen_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return async_gen_traverse(self, visit, arg);
 }
 
 
@@ -1711,6 +1746,7 @@ PyTypeObject PyAsyncGen_Type = {
     0,                                          /* tp_del */
     0,                                          /* tp_version_tag */
     _PyGen_Finalize,                            /* tp_finalize */
+    .tp_reachable = async_gen_reachable,
 };
 
 

@@ -1217,6 +1217,7 @@ is_freezable_builtin(PyTypeObject *type)
         type == &PyMethodDescr_Type ||
         type == &PyClassMethod_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
         type == &PyClassMethodDescr_Type ||
+        type == &PyStaticMethod_Type ||
         type == &PyMethod_Type ||
         type == &PyCFunction_Type ||
         type == &PyCapsule_Type ||
@@ -1455,21 +1456,13 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
         SUCCEEDS(_Py_module_freeze_hook(obj));
     }
 
-    if(PyType_Check(obj)){
-        // TODO(Immutable): mjp: Special case for types not sure if required. We should review.
-        PyTypeObject* type = (PyTypeObject*)obj;
-
-        SUCCEEDS(freeze_visit(type->tp_dict, freeze_state));
-        SUCCEEDS(freeze_visit(type->tp_mro, freeze_state));
-        // We need to freeze the tuple object, even though the types
-        // within will have been frozen already.
-        SUCCEEDS(freeze_visit(type->tp_bases, freeze_state));
-    }
-    else
     {
-        traverseproc traverse = Py_TYPE(obj)->tp_traverse;
-        if(traverse != NULL){
-            SUCCEEDS(traverse(obj, (visitproc)freeze_visit, freeze_state));
+        traverseproc references = Py_TYPE(obj)->tp_reachable;
+        if (references == NULL) {
+            references = Py_TYPE(obj)->tp_traverse;
+        }
+        if(references != NULL){
+            SUCCEEDS(references(obj, (visitproc)freeze_visit, freeze_state));
         }
     }
 
@@ -1489,13 +1482,6 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
                 goto error;
             }
         }
-    }
-
-    // The default tp_traverse will not visit the type object if it is
-    // not heap allocated, so we need to do that manually here to freeze
-    // the statically allocated types that are reachable.
-    if (!(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
-        SUCCEEDS(freeze_visit(_PyObject_CAST(Py_TYPE(obj)), freeze_state));
     }
 
     return 0;

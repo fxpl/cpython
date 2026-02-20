@@ -2073,6 +2073,13 @@ static PyMethodDef frame_methods[] = {
     {NULL, NULL}  /* sentinel */
 };
 
+static int
+frame_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return frame_traverse(self, visit, arg);
+}
+
 PyTypeObject PyFrame_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "frame",
@@ -2107,6 +2114,7 @@ PyTypeObject PyFrame_Type = {
     frame_getsetlist,                           /* tp_getset */
     0,                                          /* tp_base */
     0,                                          /* tp_dict */
+    .tp_reachable = frame_reachable,
 };
 
 static void

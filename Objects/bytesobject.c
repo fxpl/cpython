@@ -1708,6 +1708,13 @@ bytes_subscript(PyObject *op, PyObject* item)
 }
 
 static int
+bytes_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return 0;
+}
+
+static int
 bytes_buffer_getbuffer(PyObject *op, Py_buffer *view, int flags)
 {
     PyBytesObject *self = _PyBytes_CAST(op);
@@ -3157,6 +3164,7 @@ PyTypeObject PyBytes_Type = {
     bytes_alloc,                                /* tp_alloc */
     bytes_new,                                  /* tp_new */
     PyObject_Free,                              /* tp_free */
+    .tp_reachable = bytes_reachable,
     .tp_version_tag = _Py_TYPE_VERSION_BYTES,
 };
 
@@ -3399,6 +3407,13 @@ static PyMethodDef striter_methods[] = {
     {NULL,              NULL}           /* sentinel */
 };
 
+static int
+bytesiter_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return striter_traverse(self, visit, arg);
+}
+
 PyTypeObject PyBytesIter_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "bytes_iterator",                           /* tp_name */
@@ -3430,6 +3445,7 @@ PyTypeObject PyBytesIter_Type = {
     striter_next,                               /* tp_iternext */
     striter_methods,                            /* tp_methods */
     0,
+    .tp_reachable = bytesiter_reachable,
 };
 
 static PyObject *

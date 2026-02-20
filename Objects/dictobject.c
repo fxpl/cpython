@@ -4749,6 +4749,54 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
 }
 
 static int
+dict_reachable(PyObject *op, visitproc visit, void *arg)
+{
+    PyDictObject *mp = (PyDictObject *)op;
+    PyDictKeysObject *keys = mp->ma_keys;
+    Py_ssize_t n = keys->dk_nentries;
+
+    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
+
+    if (DK_IS_UNICODE(keys)) {
+        PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
+        if (_PyDict_HasSplitTable(mp)) {
+            PyObject **values = mp->ma_values->values;
+            for (Py_ssize_t i = 0; i < n; i++) {
+                PyObject *value = values[i];
+                if (value == NULL) {
+                    continue;
+                }
+                Py_VISIT(entries[i].me_key);
+                Py_VISIT(value);
+            }
+        }
+        else {
+            for (Py_ssize_t i = 0; i < n; i++) {
+                PyObject *value = entries[i].me_value;
+                if (value == NULL) {
+                    continue;
+                }
+                Py_VISIT(entries[i].me_key);
+                Py_VISIT(value);
+            }
+        }
+    }
+    else {
+        PyDictKeyEntry *entries = DK_ENTRIES(keys);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            PyObject *value = entries[i].me_value;
+            if (value == NULL) {
+                continue;
+            }
+            Py_VISIT(entries[i].me_key);
+            Py_VISIT(value);
+        }
+    }
+
+    return 0;
+}
+
+static int
 dict_tp_clear(PyObject *op)
 {
     return PyDict_Clear(op);
@@ -5072,6 +5120,7 @@ PyTypeObject PyDict_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = dict_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_DICT,
+    .tp_reachable = dict_reachable,
 };
 
 /* For backward compatibility with old dictionary interface */

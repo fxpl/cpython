@@ -3554,6 +3554,20 @@ memory_iter(PyObject *seq)
     return (PyObject *)it;
 }
 
+static int
+memoryiter_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return memoryiter_traverse(self, visit, arg);
+}
+
+static int
+memory_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return memory_traverse(self, visit, arg);
+}
+
 PyTypeObject _PyMemoryIter_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     .tp_name = "memory_iterator",
@@ -3565,6 +3579,7 @@ PyTypeObject _PyMemoryIter_Type = {
     .tp_traverse = memoryiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = memoryiter_next,
+    .tp_reachable = memoryiter_reachable,
 };
 
 PyTypeObject PyMemoryView_Type = {
@@ -3607,4 +3622,5 @@ PyTypeObject PyMemoryView_Type = {
     0,                                        /* tp_init */
     0,                                        /* tp_alloc */
     memoryview,                               /* tp_new */
+    .tp_reachable = memory_reachable,
 };
