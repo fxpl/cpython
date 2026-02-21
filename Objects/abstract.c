@@ -1467,6 +1467,12 @@ _PyNumber_Index(PyObject *item)
 
     if (PyLong_Check(item)) {
         // PyRegion_AddLocalRef(item); // Can Fail
+        /*
+            if (PyRegion_AddLocalRef(item)) {
+                return NULL;
+            }
+            return Py_NewRef(item);
+        */
         return PyRegion_NewRef(item);
     }
     if (!_PyIndex_Check(item)) {

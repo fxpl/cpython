@@ -9,7 +9,7 @@ r1.stop = 2**200
 r1.step = 2**50
 print(f"{sys.getrefcount(r1.start)}")
 print(f"Initial Region: {r1}") #_lrc=3
-# input("1: Press Enter to continue...")
+input("1: Press Enter to continue...")
 r_large = range(r1.start, r1.stop, r1.step)
 print(f"{r_large}")
 print(f"{r1.owns(r_large)}")

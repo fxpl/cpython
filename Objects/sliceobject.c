@@ -128,13 +128,17 @@ _PyBuildSlice_Consume2(PyObject *start, PyObject *stop, PyObject *step)
         }
     }
 
+    PyRegion_TakeRefs(obj, start, stop);
     obj->start = start;
     obj->stop = stop;
+    PyRegion_AddRef(obj, step);
     obj->step = Py_NewRef(step);
 
     _PyObject_GC_TRACK(obj);
     return obj;
 error:
+    PyRegion_RemoveRef(obj, start);
+    PyRegion_RemoveRef(obj, stop);
     Py_DECREF(start);
     Py_DECREF(stop);
     return NULL;
@@ -152,8 +156,8 @@ PySlice_New(PyObject *start, PyObject *stop, PyObject *step)
     if (stop == NULL) {
         stop = Py_None;
     }
-    return (PyObject *)_PyBuildSlice_Consume2(Py_NewRef(start),
-                                              Py_NewRef(stop), step);
+    return (PyObject *)_PyBuildSlice_Consume2(PyRegion_NewRef(start),
+                                              PyRegion_NewRef(stop), step);
 }
 
 PyObject *
@@ -348,6 +352,9 @@ slice_dealloc(PyObject *op)
 {
     PySliceObject *r = _PySlice_CAST(op);
     PyObject_GC_UnTrack(r);
+    PyRegion_RemoveRef(r, r->start);
+    PyRegion_RemoveRef(r, r->stop);
+    PyRegion_RemoveRef(r, r->step);
     Py_DECREF(r->step);
     Py_DECREF(r->start);
     Py_DECREF(r->stop);
@@ -396,6 +403,7 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
                         PyObject **step_ptr)
 {
     PyObject *start=NULL, *stop=NULL, *step=NULL;
+    PyObject *final_start=NULL, *final_stop=NULL;
     PyObject *upper=NULL, *lower=NULL;
     int step_is_negative, cmp_result;
 
@@ -433,12 +441,17 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
     }
     else {
         lower = _PyLong_GetZero();
+        PyRegion_AddRef(self, length);
         upper = Py_NewRef(length);
     }
 
     /* Compute start. */
     if (self->start == Py_None) {
-        start = Py_NewRef(step_is_negative ? upper : lower);
+        final_start = step_is_negative ? upper : lower;
+        PyRegion_AddRef(self, final_start);
+        start = Py_NewRef(final_start);
+        /* Original */
+        // start = Py_NewRef(step_is_negative ? upper : lower);
     }
     else {
         start = evaluate_slice_index(self->start);
@@ -456,6 +469,7 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
+                PyRegion_AddRef(self, lower);
                 Py_SETREF(start, Py_NewRef(lower));
             }
         }
@@ -464,6 +478,7 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
+                PyRegion_AddRef(self, upper);
                 Py_SETREF(start, Py_NewRef(upper));
             }
         }
@@ -471,7 +486,11 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
 
     /* Compute stop. */
     if (self->stop == Py_None) {
-        stop = Py_NewRef(step_is_negative ? lower : upper);
+        final_stop = step_is_negative ? lower : upper;
+        PyRegion_AddRef(self, final_stop);
+        stop = Py_NewRef(final_stop);
+        /* Original */
+        // stop = Py_NewRef(step_is_negative ? lower : upper);
     }
     else {
         stop = evaluate_slice_index(self->stop);
@@ -489,6 +508,7 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
+                PyRegion_AddRef(self, lower);
                 Py_SETREF(stop, Py_NewRef(lower));
             }
         }
@@ -497,6 +517,7 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
+                PyRegion_AddRef(self, upper);
                 Py_SETREF(stop, Py_NewRef(upper));
             }
         }
@@ -505,12 +526,19 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
     *start_ptr = start;
     *stop_ptr = stop;
     *step_ptr = step;
+    PyRegion_RemoveRef(self, upper);
+    PyRegion_RemoveRef(self, lower);
     Py_DECREF(upper);
     Py_DECREF(lower);
     return 0;
 
   error:
     *start_ptr = *stop_ptr = *step_ptr = NULL;
+    PyRegion_RemoveRef(self, upper);
+    PyRegion_RemoveRef(self, lower);
+    PyRegion_RemoveRef(self, step);
+    PyRegion_RemoveRef(self, start);
+    PyRegion_RemoveRef(self, stop);
     Py_XDECREF(start);
     Py_XDECREF(stop);
     Py_XDECREF(step);

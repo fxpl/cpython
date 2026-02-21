@@ -423,6 +423,9 @@ compute_range_item(rangeobject *r, PyObject *arg)
     return result;
 }
 
+/*
+Different from range_subscript since range_item accepts only Py_ssize_t, while range_subscript accepts any PyObject as the index.
+*/
 static PyObject *
 range_item(PyObject *op, Py_ssize_t i)
 {
@@ -451,14 +454,17 @@ compute_slice(rangeobject *r, PyObject *_slice)
 
     substep = PyNumber_Multiply(r->step, step);
     if (substep == NULL) goto fail;
+    PyRegion_RemoveRef(slice, step);
     Py_CLEAR(step);
 
     substart = compute_item(r, start);
     if (substart == NULL) goto fail;
+    PyRegion_RemoveRef(slice, start);
     Py_CLEAR(start);
 
     substop = compute_item(r, stop);
     if (substop == NULL) goto fail;
+    PyRegion_RemoveRef(slice, stop);
     Py_CLEAR(stop);
 
     result = make_range_object(Py_TYPE(r), substart, substop, substep);
@@ -466,6 +472,9 @@ compute_slice(rangeobject *r, PyObject *_slice)
         return (PyObject *) result;
     }
 fail:
+    PyRegion_RemoveRef(slice, start);
+    PyRegion_RemoveRef(slice, stop);
+    PyRegion_RemoveRef(slice, step);
     Py_XDECREF(start);
     Py_XDECREF(stop);
     Py_XDECREF(step);
@@ -706,6 +715,7 @@ range_index(PyObject *self, PyObject *ob)
 }
 
 static PySequenceMethods range_as_sequence = {
+    // No need for barrier for all of these since there is no modification to "rangeobject"
     range_length,               /* sq_length */
     0,                          /* sq_concat */
     0,                          /* sq_repeat */
@@ -751,6 +761,8 @@ range_subscript(PyObject *op, PyObject *item)
 {
     rangeobject *self = (rangeobject*)op;
     if (_PyIndex_Check(item)) {
+        // No change needed even if the PyNumber_Index has PyRegion_NewRef.
+        // My guess: It does nothing if "item" is not in a region.
         PyObject *i, *result;
         i = PyNumber_Index(item);
         if (!i)
@@ -760,6 +772,7 @@ range_subscript(PyObject *op, PyObject *item)
         return result;
     }
     if (PySlice_Check(item)) {
+        // TODO
         return compute_slice(self, item);
     }
     PyErr_Format(PyExc_TypeError,
@@ -841,9 +854,9 @@ PyTypeObject PyRange_Type = {
         0,                      /* tp_as_async */
         range_repr,             /* tp_repr */
         &range_as_number,       /* tp_as_number */
-        // TODO
         &range_as_sequence,     /* tp_as_sequence */
         &range_as_mapping,      /* tp_as_mapping */
+        // TODO
         range_hash,             /* tp_hash */
         0,                      /* tp_call */
         0,                      /* tp_str */
