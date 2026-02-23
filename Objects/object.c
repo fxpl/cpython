@@ -2038,11 +2038,15 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
         }
     }
     else {
+        if (PyRegion_AddLocalRef(dict)) {
+            goto done;
+        }
         Py_INCREF(dict);
         if (value == NULL)
             res = PyDict_DelItem(dict, name);
         else
             res = PyDict_SetItem(dict, name, value);
+        PyRegion_RemoveLocalRef(dict);
         Py_DECREF(dict);
     }
   error_check:
