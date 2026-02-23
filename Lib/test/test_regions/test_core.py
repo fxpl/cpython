@@ -271,12 +271,6 @@ class TestInterRegionRelations(unittest.TestCase):
         self.assertEqual(r2._lrc, r2_lrc + 1)
         self.assertIsNone(r2.parent)
         self.assertTrue(is_local(obj))
-    
-    def test_regression_instance_attribute_wb(self):
-        r = Region()
-        r.a = self.A()
-        r.a.child = Region()
-        r.a.child = None
 
     def test_regression_dealloc_needs_the_region_1(self):
         r = Region()

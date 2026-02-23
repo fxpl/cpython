@@ -7601,6 +7601,10 @@ _PyObject_TryGetInstanceAttribute(PyObject *obj, PyObject *name, PyObject **attr
     return success;
 #else
     PyObject *value = values->values[ix];
+    if (PyRegion_AddLocalRef(value)) {
+        *attr = NULL;
+        return false;
+    }
     *attr = Py_XNewRef(value);
     return true;
 #endif

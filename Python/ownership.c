@@ -662,7 +662,7 @@ int _PyOwnership_traverse_object_graph(
             case Py_OWNERSHIP_TRAVERSE_SKIP:
                 continue;
 
-            // The object is okat and should be traversed
+            // The object is okay and should be traversed
             case Py_OWNERSHIP_TRAVERSE_VISIT:
                 traverse_state.source = item;
                 SUCCEEDS(_PyOwnership_prep_and_traverse_obj(
