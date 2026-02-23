@@ -5275,6 +5275,13 @@ dictiter_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+dictiter_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return dictiter_traverse(self, visit, arg);
+}
+
 static PyObject *
 dictiter_len(PyObject *self, PyObject *Py_UNUSED(ignored))
 {
@@ -5430,6 +5437,7 @@ PyTypeObject PyDictIterKey_Type = {
     dictiter_iternextkey,                       /* tp_iternext */
     dictiter_methods,                           /* tp_methods */
     0,
+    .tp_reachable = dictiter_reachable,
 };
 
 #ifndef Py_GIL_DISABLED
@@ -5553,6 +5561,7 @@ PyTypeObject PyDictIterValue_Type = {
     dictiter_iternextvalue,                     /* tp_iternext */
     dictiter_methods,                           /* tp_methods */
     0,
+    .tp_reachable = dictiter_reachable,
 };
 
 static int
@@ -5862,6 +5871,7 @@ PyTypeObject PyDictIterItem_Type = {
     dictiter_iternextitem,                      /* tp_iternext */
     dictiter_methods,                           /* tp_methods */
     0,
+    .tp_reachable = dictiter_reachable,
 };
 
 
@@ -5988,7 +5998,8 @@ PyTypeObject PyDictRevIterKey_Type = {
     .tp_traverse = dictiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = dictreviter_iternext,
-    .tp_methods = dictiter_methods
+    .tp_methods = dictiter_methods,
+    .tp_reachable = dictiter_reachable,
 };
 
 
@@ -6030,7 +6041,8 @@ PyTypeObject PyDictRevIterItem_Type = {
     .tp_traverse = dictiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = dictreviter_iternext,
-    .tp_methods = dictiter_methods
+    .tp_methods = dictiter_methods,
+    .tp_reachable = dictiter_reachable,
 };
 
 PyTypeObject PyDictRevIterValue_Type = {
@@ -6042,7 +6054,8 @@ PyTypeObject PyDictRevIterValue_Type = {
     .tp_traverse = dictiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = dictreviter_iternext,
-    .tp_methods = dictiter_methods
+    .tp_methods = dictiter_methods,
+    .tp_reachable = dictiter_reachable,
 };
 
 /***********************************************/
@@ -6067,6 +6080,13 @@ dictview_traverse(PyObject *self, visitproc visit, void *arg)
     _PyDictViewObject *dv = (_PyDictViewObject *)self;
     Py_VISIT(dv->dv_dict);
     return 0;
+}
+
+static int
+dictview_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return dictview_traverse(self, visit, arg);
 }
 
 static Py_ssize_t
@@ -6645,6 +6665,7 @@ PyTypeObject PyDictKeys_Type = {
     0,                                          /* tp_iternext */
     dictkeys_methods,                           /* tp_methods */
     .tp_getset = dictview_getset,
+    .tp_reachable = dictview_reachable,
 };
 
 /*[clinic input]
@@ -6757,6 +6778,7 @@ PyTypeObject PyDictItems_Type = {
     0,                                          /* tp_iternext */
     dictitems_methods,                          /* tp_methods */
     .tp_getset = dictview_getset,
+    .tp_reachable = dictview_reachable,
 };
 
 /*[clinic input]
@@ -6847,6 +6869,7 @@ PyTypeObject PyDictValues_Type = {
     0,                                          /* tp_iternext */
     dictvalues_methods,                         /* tp_methods */
     .tp_getset = dictview_getset,
+    .tp_reachable = dictview_reachable,
 };
 
 /*[clinic input]

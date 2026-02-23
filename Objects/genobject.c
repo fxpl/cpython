@@ -87,7 +87,11 @@ gen_traverse(PyObject *self, visitproc visit, void *arg)
 static int
 gen_reachable(PyObject *self, visitproc visit, void *arg)
 {
+    PyGenObject *gen = _PyGen_CAST(self);
     Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    /* Visit cr_origin which gen_traverse skips because it only contains
+       tuples/str/int that can't participate in reference cycles. */
+    Py_VISIT(gen->gi_origin_or_finalizer);
     return gen_traverse(self, visit, arg);
 }
 
@@ -1239,7 +1243,11 @@ static int coro_traverse(PyObject *, visitproc, void *);
 static int
 coro_reachable(PyObject *self, visitproc visit, void *arg)
 {
+    PyGenObject *gen = _PyGen_CAST(self);
     Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    /* Visit cr_origin_or_finalizer which coro_traverse skips because it only
+       contains tuples/str/int that can't participate in reference cycles. */
+    Py_VISIT(gen->gi_origin_or_finalizer);
     return coro_traverse(self, visit, arg);
 }
 

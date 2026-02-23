@@ -15124,6 +15124,13 @@ unicodeiter_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+unicodeiter_reachable(PyObject *op, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
+    return unicodeiter_traverse(op, visit, arg);
+}
+
 static PyObject *
 unicodeiter_next(PyObject *op)
 {
@@ -15265,6 +15272,7 @@ PyTypeObject PyUnicodeIter_Type = {
     unicodeiter_next,   /* tp_iternext */
     unicodeiter_methods,            /* tp_methods */
     0,
+    .tp_reachable = unicodeiter_reachable,
 };
 
 PyTypeObject _PyUnicodeASCIIIter_Type = {
@@ -15278,6 +15286,7 @@ PyTypeObject _PyUnicodeASCIIIter_Type = {
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = unicode_ascii_iter_next,
     .tp_methods = unicodeiter_methods,
+    .tp_reachable = unicodeiter_reachable,
 };
 
 static PyObject *

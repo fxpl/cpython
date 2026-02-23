@@ -144,6 +144,13 @@ mbuf_traverse(PyObject *_self, visitproc visit, void *arg)
 }
 
 static int
+mbuf_reachable(PyObject *_self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(_self)));
+    return mbuf_traverse(_self, visit, arg);
+}
+
+static int
 mbuf_clear(PyObject *_self)
 {
     _PyManagedBufferObject *self = (_PyManagedBufferObject *)_self;
@@ -175,7 +182,8 @@ PyTypeObject _PyManagedBuffer_Type = {
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, /* tp_flags */
     0,                                       /* tp_doc */
     mbuf_traverse,                           /* tp_traverse */
-    mbuf_clear                               /* tp_clear */
+    mbuf_clear,                              /* tp_clear */
+    .tp_reachable = mbuf_reachable,
 };
 
 
