@@ -366,6 +366,7 @@ compute_item(rangeobject *r, PyObject *i)
             return NULL;
         }
         result = PyNumber_Add(r->start, incr);
+        assert(PyRegion_IsLocal(incr)); // incr should be local, so no write barrier here.
         Py_DECREF(incr);
     }
     return result;
@@ -395,6 +396,9 @@ compute_range_item(rangeobject *r, PyObject *arg)
           return NULL;
         }
     } else {
+        if(PyRegion_AddLocalRef(arg)) {
+            return NULL;
+        }
         i = Py_NewRef(arg);
     }
 
@@ -408,10 +412,12 @@ compute_range_item(rangeobject *r, PyObject *arg)
         cmp_result = PyObject_RichCompareBool(i, r->length, Py_GE);
     }
     if (cmp_result == -1) {
-       Py_DECREF(i);
+        PyRegion_RemoveLocalRef(i);
+        Py_DECREF(i);
        return NULL;
     }
     if (cmp_result == 1) {
+        PyRegion_RemoveLocalRef(i);
         Py_DECREF(i);
         PyErr_SetString(PyExc_IndexError,
                         "range object index out of range");
@@ -419,6 +425,7 @@ compute_range_item(rangeobject *r, PyObject *arg)
     }
 
     result = compute_item(r, i);
+    PyRegion_RemoveLocalRef(i);
     Py_DECREF(i);
     return result;
 }
@@ -454,17 +461,17 @@ compute_slice(rangeobject *r, PyObject *_slice)
 
     substep = PyNumber_Multiply(r->step, step);
     if (substep == NULL) goto fail;
-    PyRegion_RemoveRef(slice, step);
+    PyRegion_RemoveLocalRef(step);
     Py_CLEAR(step);
 
     substart = compute_item(r, start);
     if (substart == NULL) goto fail;
-    PyRegion_RemoveRef(slice, start);
+    PyRegion_RemoveLocalRef(start);
     Py_CLEAR(start);
 
     substop = compute_item(r, stop);
     if (substop == NULL) goto fail;
-    PyRegion_RemoveRef(slice, stop);
+    PyRegion_RemoveLocalRef(stop);
     Py_CLEAR(stop);
 
     result = make_range_object(Py_TYPE(r), substart, substop, substep);
@@ -472,9 +479,12 @@ compute_slice(rangeobject *r, PyObject *_slice)
         return (PyObject *) result;
     }
 fail:
-    PyRegion_RemoveRef(slice, start);
-    PyRegion_RemoveRef(slice, stop);
-    PyRegion_RemoveRef(slice, step);
+    PyRegion_RemoveLocalRef(start);
+    PyRegion_RemoveLocalRef(stop);
+    PyRegion_RemoveLocalRef(step);
+    PyRegion_RemoveLocalRef(substart);
+    PyRegion_RemoveLocalRef(substop);
+    PyRegion_RemoveLocalRef(substep);
     Py_XDECREF(start);
     Py_XDECREF(stop);
     Py_XDECREF(step);
@@ -525,6 +535,8 @@ range_contains_long(rangeobject *r, PyObject *ob)
     /* result = ((int(ob) - start) % step) == 0 */
     result = PyObject_RichCompareBool(tmp2, zero, Py_EQ);
   end:
+    assert(PyRegion_IsLocal(tmp1) || Py_IsImmutable(tmp1)); // tmp1 should be local or immutable, so no write barrier here.
+    assert(PyRegion_IsLocal(tmp2) || Py_IsImmutable(tmp2)); // tmp2 should be local or immutable, so no write barrier here.
     Py_XDECREF(tmp1);
     Py_XDECREF(tmp2);
     return result;
@@ -631,28 +643,50 @@ range_hash(PyObject *op)
     t = PyTuple_New(3);
     if (!t)
         return -1;
-    PyTuple_SET_ITEM(t, 0, Py_NewRef(r->length));
+
+    // First element of the tuple is always the length of the range
+    PyObject* length = PyRegion_NewRef(r->length);
+    if(length == NULL) return -1;
+    PyTuple_SET_ITEM(t, 0, length);
+
+    // len == 0 or not
     cmp_result = PyObject_Not(r->length);
     if (cmp_result == -1)
+    {
         goto end;
+    }
+
+    // len is 0
     if (cmp_result == 1) {
         PyTuple_SET_ITEM(t, 1, Py_NewRef(Py_None));
         PyTuple_SET_ITEM(t, 2, Py_NewRef(Py_None));
     }
     else {
-        PyTuple_SET_ITEM(t, 1, Py_NewRef(r->start));
+        // Second element of the tuple is always the start of the range
+        PyObject* start = PyRegion_NewRef(r->start);
+        if(start == NULL) return -1;
+        PyTuple_SET_ITEM(t, 1, start);
+
+        // Check if len == 1 or not
         cmp_result = PyObject_RichCompareBool(r->length, _PyLong_GetOne(), Py_EQ);
         if (cmp_result == -1)
+        {
             goto end;
+        }
+        // len is 1, step doesn't matter
         if (cmp_result == 1) {
             PyTuple_SET_ITEM(t, 2, Py_NewRef(Py_None));
         }
         else {
-            PyTuple_SET_ITEM(t, 2, Py_NewRef(r->step));
+            // The third element of the tuple is the step of the range when len > 1
+            PyObject* step = PyRegion_NewRef(r->step);
+            if(step == NULL) return -1;
+            PyTuple_SET_ITEM(t, 2, step);
         }
     }
     result = PyObject_Hash(t);
   end:
+    PyRegion_RemoveLocalRef(t);
     Py_DECREF(t);
     return result;
 }
@@ -705,6 +739,7 @@ range_index(PyObject *self, PyObject *ob)
 
         /* idx = (ob - r.start) // r.step */
         PyObject *sidx = PyNumber_FloorDivide(idx, r->step);
+        assert(PyRegion_IsLocal(idx) || Py_IsImmutable(idx)); // idx should be local, so no write barrier here.
         Py_DECREF(idx);
         return sidx;
     }
@@ -715,7 +750,6 @@ range_index(PyObject *self, PyObject *ob)
 }
 
 static PySequenceMethods range_as_sequence = {
-    // No need for barrier for all of these since there is no modification to "rangeobject"
     range_length,               /* sq_length */
     0,                          /* sq_concat */
     0,                          /* sq_repeat */
@@ -768,11 +802,11 @@ range_subscript(PyObject *op, PyObject *item)
         if (!i)
             return NULL;
         result = compute_range_item(self, i);
+        PyRegion_RemoveLocalRef(i);
         Py_DECREF(i);
         return result;
     }
     if (PySlice_Check(item)) {
-        // TODO
         return compute_slice(self, item);
     }
     PyErr_Format(PyExc_TypeError,
@@ -856,7 +890,6 @@ PyTypeObject PyRange_Type = {
         &range_as_number,       /* tp_as_number */
         &range_as_sequence,     /* tp_as_sequence */
         &range_as_mapping,      /* tp_as_mapping */
-        // TODO
         range_hash,             /* tp_hash */
         0,                      /* tp_call */
         0,                      /* tp_str */
@@ -940,6 +973,9 @@ rangeiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
     return Py_BuildValue("N(N)O", _PyEval_GetBuiltin(&_Py_ID(iter)),
                          range, Py_None);
 err:
+    assert(PyRegion_IsLocal(start) || Py_IsImmutable(start)); // start should be local or immutable, so no write barrier here.
+    assert(PyRegion_IsLocal(stop) || Py_IsImmutable(stop)); 
+    assert(PyRegion_IsLocal(step) || Py_IsImmutable(step)); 
     Py_XDECREF(start);
     Py_XDECREF(stop);
     Py_XDECREF(step);
@@ -1079,6 +1115,11 @@ static PyObject *
 longrangeiter_len(PyObject *op, PyObject *Py_UNUSED(ignored))
 {
     longrangeiterobject *r = (longrangeiterobject*)op;
+    // 0 on success
+    if(PyRegion_AddLocalRef(r->len)) {
+        return NULL;
+    }
+    // We dont do any assignment here, so No AddRef
     Py_INCREF(r->len);
     return r->len;
 }
@@ -1098,10 +1139,17 @@ longrangeiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
     Py_DECREF(product);
     if (stop ==  NULL)
         return NULL;
+    if(PyRegion_AddLocalRefs(r->start, r->step)) {
+        Py_DECREF(stop);
+        return NULL;
+    }
     range =  (PyObject*)make_range_object(&PyRange_Type,
                                Py_NewRef(r->start), stop, Py_NewRef(r->step));
     if (range == NULL) {
+        PyRegion_RemoveLocalRef(r->start); // Because r is has a relationship to r->start, so No RemoveRef here
+        PyRegion_RemoveLocalRef(r->step);
         Py_DECREF(r->start);
+        assert(PyRegion_IsLocal(stop) || Py_IsImmutable(stop));
         Py_DECREF(stop);
         Py_DECREF(r->step);
         return NULL;
@@ -1137,6 +1185,7 @@ longrangeiter_setstate(PyObject *op, PyObject *state)
     if (product == NULL)
         return NULL;
     PyObject *new_start = PyNumber_Add(r->start, product);
+    assert(PyRegion_IsLocal(product) || Py_IsImmutable(product));
     Py_DECREF(product);
     if (new_start == NULL)
         return NULL;
@@ -1146,8 +1195,19 @@ longrangeiter_setstate(PyObject *op, PyObject *state)
         return NULL;
     }
     PyObject *tmp = r->start;
+    if(PyRegion_TakeRef(r, new_start)) {
+        Py_DECREF(new_start);
+        Py_DECREF(new_len);
+        return NULL;
+    }
     r->start = new_start;
-    Py_SETREF(r->len, new_len);
+    if(PyRegion_XSETREF(r, r->len, new_len)) {
+        Py_DECREF(new_start);
+        Py_DECREF(new_len);
+        return NULL;
+    }
+    // Original: Py_SETREF(r->len, new_len);
+    PyRegion_RemoveRef(r, tmp); 
     Py_DECREF(tmp);
     Py_RETURN_NONE;
 }
@@ -1185,12 +1245,19 @@ longrangeiter_next(PyObject *op)
     }
     PyObject *new_len = PyNumber_Subtract(r->len, _PyLong_GetOne());
     if (new_len == NULL) {
+        assert(PyRegion_IsLocal(new_start) || Py_IsImmutable(new_start));
         Py_DECREF(new_start);
         return NULL;
     }
     PyObject *result = r->start;
     r->start = new_start;
-    Py_SETREF(r->len, new_len);
+    // r->len is not Local, so we need to use PyRegion_XSETREF to update it.
+    if(PyRegion_XSETREF(r, r->len, new_len)) {
+        Py_DECREF(new_start);
+        Py_DECREF(new_len);
+        return NULL;
+    }
+    // Original: Py_SETREF(r->len, new_len);
     return result;
 }
 
@@ -1403,6 +1470,7 @@ long_range:
     return (PyObject *)it;
 
 create_failure:
+    PyRegion_RemoveLocalRef(it);
     Py_DECREF(it);
     return NULL;
 }

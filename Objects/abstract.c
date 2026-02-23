@@ -2266,6 +2266,7 @@ _PySequence_IterSearch(PyObject *seq, PyObject *obj, int operation)
         }
 
         cmp = PyObject_RichCompareBool(item, obj, Py_EQ);
+        PyRegion_RemoveLocalRef(item);
         Py_DECREF(item);
         if (cmp < 0)
             goto Fail;
@@ -2314,6 +2315,7 @@ Fail:
     n = -1;
     /* fall through */
 Done:
+    PyRegion_RemoveLocalRef(it);
     Py_DECREF(it);
     return n;
 

@@ -395,7 +395,10 @@ evaluate_slice_index(PyObject *v)
 
 /* Compute slice indices given a slice and length.  Return -1 on failure.  Used
    by slice.indices and rangeobject slicing.  Assumes that `len` is a
-   nonnegative instance of PyLong. */
+   nonnegative instance of PyLong. 
+   
+   For now, start_ptr, stop_ptr, step_ptr must be local.
+*/
 
 int
 _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
@@ -441,14 +444,18 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
     }
     else {
         lower = _PyLong_GetZero();
-        PyRegion_AddRef(self, length);
+        if(PyRegion_AddLocalRef(length)) {
+            goto error;
+        }
         upper = Py_NewRef(length);
     }
 
     /* Compute start. */
     if (self->start == Py_None) {
         final_start = step_is_negative ? upper : lower;
-        PyRegion_AddRef(self, final_start);
+        if(PyRegion_AddLocalRef(final_start)) {
+            goto error;
+        }
         start = Py_NewRef(final_start);
         /* Original */
         // start = Py_NewRef(step_is_negative ? upper : lower);
@@ -461,7 +468,10 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
         if (_PyLong_IsNegative((PyLongObject *)start)) {
             /* start += length */
             PyObject *tmp = PyNumber_Add(start, length);
-            Py_SETREF(start, tmp);
+            if(PyRegion_XSETLOCALREF(start, tmp)) {
+                goto error;
+            }
+            // Original: Py_SETREF(start, tmp);
             if (start == NULL)
                 goto error;
 
@@ -469,8 +479,10 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
-                PyRegion_AddRef(self, lower);
-                Py_SETREF(start, Py_NewRef(lower));
+                if(PyRegion_XSETLOCALNEWREF(start, lower)) {
+                    goto error;
+                }
+                // Original: Py_SETREF(start, Py_NewRef(lower));
             }
         }
         else {
@@ -478,8 +490,10 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
-                PyRegion_AddRef(self, upper);
-                Py_SETREF(start, Py_NewRef(upper));
+                if(PyRegion_XSETLOCALNEWREF(start, upper)) {
+                    goto error;
+                }
+                // Original: Py_SETREF(start, Py_NewRef(upper));
             }
         }
     }
@@ -487,7 +501,9 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
     /* Compute stop. */
     if (self->stop == Py_None) {
         final_stop = step_is_negative ? lower : upper;
-        PyRegion_AddRef(self, final_stop);
+        if(PyRegion_AddLocalRef(final_stop)) {
+            goto error;
+        }
         stop = Py_NewRef(final_stop);
         /* Original */
         // stop = Py_NewRef(step_is_negative ? lower : upper);
@@ -500,7 +516,10 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
         if (_PyLong_IsNegative((PyLongObject *)stop)) {
             /* stop += length */
             PyObject *tmp = PyNumber_Add(stop, length);
-            Py_SETREF(stop, tmp);
+            if(PyRegion_XSETLOCALREF(stop, tmp)) {
+                goto error;
+            }
+            // Original: Py_SETREF(stop, tmp);
             if (stop == NULL)
                 goto error;
 
@@ -508,8 +527,10 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
-                PyRegion_AddRef(self, lower);
-                Py_SETREF(stop, Py_NewRef(lower));
+                if(PyRegion_XSETLOCALNEWREF(stop, lower)) {
+                    goto error;
+                }
+                // Original: Py_SETREF(stop, Py_NewRef(lower));
             }
         }
         else {
@@ -517,28 +538,30 @@ _PySlice_GetLongIndices(PySliceObject *self, PyObject *length,
             if (cmp_result < 0)
                 goto error;
             if (cmp_result) {
-                PyRegion_AddRef(self, upper);
-                Py_SETREF(stop, Py_NewRef(upper));
+                if(PyRegion_XSETLOCALNEWREF(stop, upper)) {
+                    goto error;
+                }
+                // Original: Py_SETREF(stop, Py_NewRef(upper));
             }
         }
     }
-
+    // Call TakeRef if the signature is changed.
     *start_ptr = start;
     *stop_ptr = stop;
     *step_ptr = step;
-    PyRegion_RemoveRef(self, upper);
-    PyRegion_RemoveRef(self, lower);
+    PyRegion_RemoveLocalRef(upper);
+    PyRegion_RemoveLocalRef(lower);
     Py_DECREF(upper);
     Py_DECREF(lower);
     return 0;
 
   error:
     *start_ptr = *stop_ptr = *step_ptr = NULL;
-    PyRegion_RemoveRef(self, upper);
-    PyRegion_RemoveRef(self, lower);
-    PyRegion_RemoveRef(self, step);
-    PyRegion_RemoveRef(self, start);
-    PyRegion_RemoveRef(self, stop);
+    PyRegion_RemoveLocalRef(upper);
+    PyRegion_RemoveLocalRef(lower);
+    PyRegion_RemoveLocalRef(step);
+    PyRegion_RemoveLocalRef(start);
+    PyRegion_RemoveLocalRef(stop);
     Py_XDECREF(start);
     Py_XDECREF(stop);
     Py_XDECREF(step);
