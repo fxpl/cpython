@@ -22,13 +22,13 @@ input("Continue")
 
 # res = ra1[r1.slicing_start:r1.slicing_stop
 res = ra1[r1.slicing_start:r1.slicing_stop:r1.slicing_step]
-print(f"Region after accessing ra1[:r1.slicing_stop]: {r1}")
-print(f"Result of slicing: {res[2]}")
+print(f"Region after accessing ra1[:r1.slicing_stop]: {r1}") # LRC should not change since the slice object is destroyed.
+# print(f"Result of slicing: {res[2]}")
 # r1.result_from_idx1 = res
 # print(f"Region after setting result_from_idx1: {r1}")
 
-# res = ra1[idx2]
-# print(f"Region after accessing ra1[idx2]: {r1}") # I guess PyRegion_NewRef does nothing in case that idx2 is not in the region.
+test_slic_obj = slice(r1.slicing_start, r1.slicing_stop, r1.slicing_step)
+print(f"Region after creating test_slic_obj: {r1}") # LRC +3 since the slice object is still alive.
 
 # res = None
 # print(f"Region after deleting res: {r1}")
