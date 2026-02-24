@@ -535,8 +535,8 @@ range_contains_long(rangeobject *r, PyObject *ob)
     /* result = ((int(ob) - start) % step) == 0 */
     result = PyObject_RichCompareBool(tmp2, zero, Py_EQ);
   end:
-    assert(PyRegion_IsLocal(tmp1) || Py_IsImmutable(tmp1)); // tmp1 should be local or immutable, so no write barrier here.
-    assert(PyRegion_IsLocal(tmp2) || Py_IsImmutable(tmp2)); // tmp2 should be local or immutable, so no write barrier here.
+    assert(PyRegion_IsLocal(tmp1) || _Py_IsImmutable(tmp1)); // tmp1 should be local or immutable, so no write barrier here.
+    assert(PyRegion_IsLocal(tmp2) || _Py_IsImmutable(tmp2)); // tmp2 should be local or immutable, so no write barrier here.
     Py_XDECREF(tmp1);
     Py_XDECREF(tmp2);
     return result;
@@ -739,7 +739,7 @@ range_index(PyObject *self, PyObject *ob)
 
         /* idx = (ob - r.start) // r.step */
         PyObject *sidx = PyNumber_FloorDivide(idx, r->step);
-        assert(PyRegion_IsLocal(idx) || Py_IsImmutable(idx)); // idx should be local, so no write barrier here.
+        assert(PyRegion_IsLocal(idx) || _Py_IsImmutable(idx)); // idx should be local, so no write barrier here.
         Py_DECREF(idx);
         return sidx;
     }
@@ -973,9 +973,9 @@ rangeiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
     return Py_BuildValue("N(N)O", _PyEval_GetBuiltin(&_Py_ID(iter)),
                          range, Py_None);
 err:
-    assert(PyRegion_IsLocal(start) || Py_IsImmutable(start)); // start should be local or immutable, so no write barrier here.
-    assert(PyRegion_IsLocal(stop) || Py_IsImmutable(stop)); 
-    assert(PyRegion_IsLocal(step) || Py_IsImmutable(step)); 
+    assert(PyRegion_IsLocal(start) || _Py_IsImmutable(start)); // start should be local or immutable, so no write barrier here.
+    assert(PyRegion_IsLocal(stop) || _Py_IsImmutable(stop)); 
+    assert(PyRegion_IsLocal(step) || _Py_IsImmutable(step)); 
     Py_XDECREF(start);
     Py_XDECREF(stop);
     Py_XDECREF(step);
@@ -1149,7 +1149,7 @@ longrangeiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
         PyRegion_RemoveLocalRef(r->start); // Because r is has a relationship to r->start, so No RemoveRef here
         PyRegion_RemoveLocalRef(r->step);
         Py_DECREF(r->start);
-        assert(PyRegion_IsLocal(stop) || Py_IsImmutable(stop));
+        assert(PyRegion_IsLocal(stop) || _Py_IsImmutable(stop));
         Py_DECREF(stop);
         Py_DECREF(r->step);
         return NULL;
@@ -1185,7 +1185,7 @@ longrangeiter_setstate(PyObject *op, PyObject *state)
     if (product == NULL)
         return NULL;
     PyObject *new_start = PyNumber_Add(r->start, product);
-    assert(PyRegion_IsLocal(product) || Py_IsImmutable(product));
+    assert(PyRegion_IsLocal(product) || _Py_IsImmutable(product));
     Py_DECREF(product);
     if (new_start == NULL)
         return NULL;
@@ -1245,7 +1245,7 @@ longrangeiter_next(PyObject *op)
     }
     PyObject *new_len = PyNumber_Subtract(r->len, _PyLong_GetOne());
     if (new_len == NULL) {
-        assert(PyRegion_IsLocal(new_start) || Py_IsImmutable(new_start));
+        assert(PyRegion_IsLocal(new_start) || _Py_IsImmutable(new_start));
         Py_DECREF(new_start);
         return NULL;
     }
