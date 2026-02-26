@@ -678,8 +678,12 @@ int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region)
         return -1;
     }
     if (clean_res == 1) {
-        return 1;
-    }
+        // The region is still open, and we won't be able to release the cown.
+        // After GC, the cown will still be owned by the current interpreter.
+        // Nobody expects this.
+        // Replace the cown's value with an exception.
+        // FIXME(cowns): exceptions cannot yet be frozen, setting None for now
+        cown_set_value_unchecked(self, Py_None);    }
     // Region is closed, safe to switch
     return cown_switch_to_gc_unchecked(self, ipid, contained_region);
 }
