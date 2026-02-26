@@ -2170,6 +2170,26 @@ int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
     return res;
 }
 
+int _PyRegion_AddRefsArray(PyObject *src, int tgt_count, PyObject** tgt_array) {
+    Py_region_t src_region = _PyRegion_Get(src);
+
+    // Stage local references
+    if (IS_LOCAL_REGION(src_region)) {
+        return _stage_local_refs(src, tgt_count, tgt_array);
+    }
+
+    // Stage the references to be added
+    PyRegion_staged_ref_t staged_ref = regiondata_stage_objects(src_region, src, tgt_count, tgt_array, NULL);
+
+    if (staged_ref == PyRegion_staged_ref_ERR) {
+        return -1;
+    }
+
+    // Should always succeed
+    PyRegion_CommitStagedRef(staged_ref);
+    return 0;
+}
+
 /* Removes the reference from `src` to `tgt` and updates the internal state of
  * the regions.
  *
