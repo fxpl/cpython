@@ -150,6 +150,13 @@ int init_state(struct _Py_immutability_state *state)
         return -1;
     }
 
+    state->warned_types = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+    if(state->warned_types == NULL){
+        return -1;
+    }
+
     return 0;
 }
 
@@ -1459,7 +1466,23 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     {
         traverseproc references = Py_TYPE(obj)->tp_reachable;
         if (references == NULL) {
-            references = Py_TYPE(obj)->tp_traverse;
+            PyTypeObject *tp = Py_TYPE(obj);
+            references = tp->tp_traverse;
+            struct _Py_immutability_state *imm_state = get_immutable_state();
+            if (imm_state != NULL &&
+                _Py_hashtable_get(imm_state->warned_types, (void *)tp) == NULL)
+            {
+                _Py_hashtable_set(imm_state->warned_types, (void *)tp, (void *)1);
+                if (references != NULL) {
+                    PySys_FormatStderr(
+                        "freeze: type '%.100s' has tp_traverse but no tp_reachable\n",
+                        tp->tp_name);
+                } else {
+                    PySys_FormatStderr(
+                        "freeze: type '%.100s' has no tp_traverse and no tp_reachable\n",
+                        tp->tp_name);
+                }
+            }
         }
         if(references != NULL){
             SUCCEEDS(references(obj, (visitproc)freeze_visit, freeze_state));
