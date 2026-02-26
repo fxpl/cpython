@@ -173,6 +173,13 @@ enum_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+enum_reachable(PyObject *op, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
+    return enum_traverse(op, visit, arg);
+}
+
 // increment en_longindex with lock held, return the next index to be used
 // or NULL on error
 static inline PyObject *
@@ -349,6 +356,7 @@ PyTypeObject PyEnum_Type = {
     0,                              /* tp_init */
     PyType_GenericAlloc,            /* tp_alloc */
     enum_new,                       /* tp_new */
+    .tp_reachable = enum_reachable,
     PyObject_GC_Del,                /* tp_free */
     .tp_vectorcall = enumerate_vectorcall
 };
@@ -448,6 +456,13 @@ reversed_traverse(PyObject *op, visitproc visit, void *arg)
     reversedobject *ro = _reversedobject_CAST(op);
     Py_VISIT(ro->seq);
     return 0;
+}
+
+static int
+reversed_reachable(PyObject *op, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
+    return reversed_traverse(op, visit, arg);
 }
 
 static PyObject *
@@ -582,4 +597,5 @@ PyTypeObject PyReversed_Type = {
     reversed_new,                   /* tp_new */
     PyObject_GC_Del,                /* tp_free */
     .tp_vectorcall = reversed_vectorcall,
+    .tp_reachable = reversed_reachable,
 };

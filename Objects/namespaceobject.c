@@ -181,6 +181,13 @@ namespace_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+namespace_reachable(PyObject *op, visitproc visit, void *arg)
+{
+    Py_VISIT(Py_TYPE(op));
+    return namespace_traverse(op, visit, arg);
+}
+
 
 static int
 namespace_clear(PyObject *op)
@@ -306,6 +313,7 @@ PyTypeObject _PyNamespace_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     namespace_new,                              /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = namespace_reachable,
 };
 
 
