@@ -652,7 +652,7 @@ int _PyCown_SwitchFromGcToIp(_PyCownObject *self) {
     return 0;
 }
 
-int cown_switch_to_gc_unchecked(_PyCownObject *self,_PyCown_ipid_t ipid, Py_region_t *contained_region) {
+int cown_switch_to_gc_unchecked(_PyCownObject *self, _PyCown_ipid_t ipid, Py_region_t *contained_region) {
     if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, GC_IPID)) {
         return -1;
     }
