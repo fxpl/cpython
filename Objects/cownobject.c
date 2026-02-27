@@ -659,7 +659,11 @@ int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region)
     // Cowns holding cowns or immutable objects can be released without any
     // restrictions
     if (value_region == _Py_COWN_REGION || value_region == _Py_IMMUTABLE_REGION) {
-        return cown_release_unchecked(self, ipid);
+        if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, GC_IPID)) {
+            *contained_region = NULL_REGION;
+            return -1;
+        }
+        return 0;
     }
 
     assert(value_region != _Py_LOCAL_REGION);
