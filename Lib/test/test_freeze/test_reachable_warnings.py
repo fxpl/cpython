@@ -1,4 +1,10 @@
-"""Tests for freeze warnings when tp_reachable is missing."""
+"""Tests for freeze warnings when tp_reachable is missing.
+
+Uses the _test_reachable C extension which provides two static types:
+
+  HasTraverseNoReachable  – has tp_traverse, tp_reachable deliberately NULL
+  NoTraverseNoReachable   – neither tp_traverse nor tp_reachable
+"""
 import subprocess
 import sys
 import textwrap
@@ -19,83 +25,64 @@ class TestReachableWarnings(unittest.TestCase):
         return result.stdout, result.stderr
 
     def test_warn_tp_traverse_no_tp_reachable(self):
-        """Warn once when a type has tp_traverse but no tp_reachable."""
+        """Warn when a C type has tp_traverse but no tp_reachable."""
         stdout, stderr = self._run_code("""\
-            import _immutable
-
-            class MyClass:
-                def __init__(self):
-                    self.x = 1
-
-            _immutable.register_freezable(MyClass)
-            _immutable._clear_tp_reachable(MyClass)
-
-            obj = MyClass()
+            import _immutable, _test_reachable
+            obj = _test_reachable.HasTraverseNoReachable(42)
             _immutable.freeze(obj)
         """)
         self.assertIn(
-            "freeze: type 'MyClass' has tp_traverse but no tp_reachable",
+            "freeze: type '_test_reachable.HasTraverseNoReachable' "
+            "has tp_traverse but no tp_reachable",
+            stderr,
+        )
+
+    def test_warn_no_traverse_no_reachable(self):
+        """Warn when a C type has neither tp_traverse nor tp_reachable."""
+        stdout, stderr = self._run_code("""\
+            import _immutable, _test_reachable
+            obj = _test_reachable.NoTraverseNoReachable()
+            _immutable.freeze(obj)
+        """)
+        self.assertIn(
+            "freeze: type '_test_reachable.NoTraverseNoReachable' "
+            "has no tp_traverse and no tp_reachable",
             stderr,
         )
 
     def test_warn_only_once_per_type(self):
         """A type should only produce the warning on the first freeze."""
         stdout, stderr = self._run_code("""\
-            import _immutable
-
-            class MyClass:
-                def __init__(self):
-                    self.x = 1
-
-            _immutable.register_freezable(MyClass)
-            _immutable._clear_tp_reachable(MyClass)
-
-            _immutable.freeze(MyClass())
-            _immutable.freeze(MyClass())
-            _immutable.freeze(MyClass())
+            import _immutable, _test_reachable
+            _immutable.freeze(_test_reachable.HasTraverseNoReachable(1))
+            _immutable.freeze(_test_reachable.HasTraverseNoReachable(2))
+            _immutable.freeze(_test_reachable.HasTraverseNoReachable(3))
         """)
-        count = stderr.count(
-            "freeze: type 'MyClass' has tp_traverse but no tp_reachable"
+        msg = (
+            "freeze: type '_test_reachable.HasTraverseNoReachable' "
+            "has tp_traverse but no tp_reachable"
         )
+        count = stderr.count(msg)
         self.assertEqual(count, 1, f"Expected 1 warning, got {count}:\n{stderr}")
 
     def test_warn_different_types_separately(self):
         """Different types should each produce their own warning."""
         stdout, stderr = self._run_code("""\
-            import _immutable
-
-            class ClassA:
-                pass
-
-            class ClassB:
-                pass
-
-            _immutable.register_freezable(ClassA)
-            _immutable.register_freezable(ClassB)
-            _immutable._clear_tp_reachable(ClassA)
-            _immutable._clear_tp_reachable(ClassB)
-
-            _immutable.freeze(ClassA())
-            _immutable.freeze(ClassB())
+            import _immutable, _test_reachable
+            _immutable.freeze(_test_reachable.HasTraverseNoReachable(1))
+            _immutable.freeze(_test_reachable.NoTraverseNoReachable())
         """)
-        self.assertIn("type 'ClassA'", stderr)
-        self.assertIn("type 'ClassB'", stderr)
+        self.assertIn("HasTraverseNoReachable", stderr)
+        self.assertIn("NoTraverseNoReachable", stderr)
 
     def test_no_warning_with_tp_reachable(self):
-        """No warning should appear when tp_reachable is present."""
+        """No warning for a type that has tp_reachable set."""
         stdout, stderr = self._run_code("""\
-            import _immutable
-
-            class MyClass:
-                def __init__(self):
-                    self.x = 1
-
-            _immutable.register_freezable(MyClass)
-            # Do NOT clear tp_reachable
-            _immutable.freeze(MyClass())
+            import _immutable, _test_reachable
+            obj = _test_reachable.HasReachable(42)
+            _immutable.freeze(obj)
         """)
-        self.assertNotIn("tp_reachable", stderr)
-        self.assertNotIn("tp_traverse", stderr)
+        self.assertNotIn("HasReachable", stderr)
 
 
 if __name__ == "__main__":

@@ -126,22 +126,6 @@ PyType_Spec not_freezable_error_spec = {
 };
 
 /*
- * Test helpers
- */
-
-static PyObject *
-immutable_clear_tp_reachable(PyObject *module, PyObject *obj)
-{
-    if (!PyType_Check(obj)) {
-        PyErr_SetString(PyExc_TypeError, "Expected a type");
-        return NULL;
-    }
-    PyTypeObject *tp = (PyTypeObject *)obj;
-    tp->tp_reachable = NULL;
-    Py_RETURN_NONE;
-}
-
-/*
  * MODULE
  */
 

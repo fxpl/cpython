@@ -217,9 +217,6 @@ slot_tp_call(PyObject *self, PyObject *args, PyObject *kwds);
 static int
 type_reachable(PyObject *self, visitproc visit, void *arg);
 
-static int
-object_reachable(PyObject *self, visitproc visit, void *arg);
-
 static inline PyTypeObject *
 type_from_ref(PyObject *ref)
 {
@@ -8380,33 +8377,7 @@ PyTypeObject PyBaseObject_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     object_new,                                 /* tp_new */
     PyObject_Free,                              /* tp_free */
-    .tp_reachable = object_reachable,
 };
-
-/*
- * Default tp_reachable for types that inherit from object but don't
- * define their own.  Visits Py_TYPE(self), then delegates to the
- * type's tp_traverse for any additional references.
- *
- * Invariant: for any given object only ONE of the following should
- * run during a freeze traversal:
- *   - a type-specific tp_reachable (which must visit its own type), OR
- *   - this fallback (object_reachable) inherited via inherit_special.
- * Both paths visit the type then call tp_traverse, so double-visiting
- * cannot occur as long as traverse_freeze uses tp_reachable exclusively.
- */
-static int
-object_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-
-    traverseproc traverse = Py_TYPE(self)->tp_traverse;
-    if (traverse != NULL) {
-        return traverse(self, visit, arg);
-    }
-
-    return 0;
-}
 
 
 static int
@@ -8569,11 +8540,8 @@ inherit_special(PyTypeObject *type, PyTypeObject *base)
     COPYVAL(tp_weaklistoffset);
     COPYVAL(tp_dictoffset);
 
-#undef COPYVAL
 
-    if (type->tp_reachable == NULL) {
-        type->tp_reachable = base->tp_reachable;
-    }
+#undef COPYVAL
 
     /* Setup fast subclass flags */
     PyObject *mro = lookup_tp_mro(base);
