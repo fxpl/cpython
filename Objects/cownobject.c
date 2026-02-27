@@ -381,7 +381,7 @@ static int cown_release_unchecked(_PyCownObject* self, _PyCown_ipid_t unlocking_
     return 0;
 }
 
-/* Check if the cown is not release, and that the owner is as expected. */
+/* Checks that the cown is not released, and that the owner is as the current interpreter. */
 static int cown_check_owner_before_release(_PyCownObject *self, _PyCown_ipid_t unlocking_ip) {
     _PyCown_ipid_t owning_ip = cown_get_owner(self);
     if (owning_ip == RELEASED_IPID) {
@@ -422,7 +422,7 @@ static int cown_try_closing_region(_PyCownObject *self) {
             return -1;
         }
     }
-    // need to get region again, it might have changed
+    // This needs to get the region again as it might have changed
     return _PyRegion_IsOpen(_PyRegion_Get(self->value));
 }
 
@@ -683,7 +683,8 @@ int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region)
         // Nobody expects this.
         // Replace the cown's value with an exception.
         // FIXME(cowns): exceptions cannot yet be frozen, setting None for now
-        cown_set_value_unchecked(self, Py_None);    }
+        cown_set_value_unchecked(self, Py_None);
+    }
     // Region is closed, safe to switch
     return cown_switch_to_gc_unchecked(self, ipid, contained_region);
 }
