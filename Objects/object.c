@@ -2248,6 +2248,12 @@ static Py_hash_t none_hash(PyObject *v)
     return 0xFCA86420;
 }
 
+static int
+none_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    return 0;
+}
+
 static PyNumberMethods none_as_number = {
     0,                          /* nb_add */
     0,                          /* nb_subtract */
@@ -2329,6 +2335,7 @@ PyTypeObject _PyNone_Type = {
     0,                  /*tp_init */
     0,                  /*tp_alloc */
     none_new,           /*tp_new */
+    .tp_reachable = none_traverse,
 };
 
 PyObject _Py_NoneStruct = _PyObject_HEAD_INIT(&_PyNone_Type);

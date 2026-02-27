@@ -1696,6 +1696,13 @@ sm_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
+sm_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return sm_traverse(self, visit, arg);
+}
+
+static int
 sm_clear(PyObject *self)
 {
     staticmethod *sm = _PyStaticMethod_CAST(self);
@@ -1869,6 +1876,7 @@ PyTypeObject PyStaticMethod_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    tp_reachable: sm_reachable,
 };
 
 PyObject *
