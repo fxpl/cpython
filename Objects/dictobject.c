@@ -4715,58 +4715,27 @@ dict_popitem_impl(PyDictObject *self)
 }
 
 static int
-dict_traverse(PyObject *op, visitproc visit, void *arg)
-{
-    PyDictObject *mp = (PyDictObject *)op;
-    PyDictKeysObject *keys = mp->ma_keys;
-    Py_ssize_t i, n = keys->dk_nentries;
-
-    if (DK_IS_UNICODE(keys)) {
-        if (_PyDict_HasSplitTable(mp)) {
-            if (!mp->ma_values->embedded) {
-                for (i = 0; i < n; i++) {
-                    Py_VISIT(mp->ma_values->values[i]);
-                }
-            }
-        }
-        else {
-            PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
-            for (i = 0; i < n; i++) {
-                Py_VISIT(entries[i].me_value);
-            }
-        }
-    }
-    else {
-        PyDictKeyEntry *entries = DK_ENTRIES(keys);
-        for (i = 0; i < n; i++) {
-            if (entries[i].me_value != NULL) {
-                Py_VISIT(entries[i].me_value);
-                Py_VISIT(entries[i].me_key);
-            }
-        }
-    }
-    return 0;
-}
-
-static int
-dict_reachable(PyObject *op, visitproc visit, void *arg)
+dict_visit(PyObject *op, visitproc visit, void *arg, bool visit_all)
 {
     PyDictObject *mp = (PyDictObject *)op;
     PyDictKeysObject *keys = mp->ma_keys;
     Py_ssize_t n = keys->dk_nentries;
 
-    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
-
     if (DK_IS_UNICODE(keys)) {
         PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
         if (_PyDict_HasSplitTable(mp)) {
+            if (!visit_all && mp->ma_values->embedded) {
+                return 0;
+            }
             PyObject **values = mp->ma_values->values;
             for (Py_ssize_t i = 0; i < n; i++) {
                 PyObject *value = values[i];
                 if (value == NULL) {
                     continue;
                 }
-                Py_VISIT(entries[i].me_key);
+                if (visit_all) {
+                    Py_VISIT(entries[i].me_key);
+                }
                 Py_VISIT(value);
             }
         }
@@ -4776,7 +4745,9 @@ dict_reachable(PyObject *op, visitproc visit, void *arg)
                 if (value == NULL) {
                     continue;
                 }
-                Py_VISIT(entries[i].me_key);
+                if (visit_all) {
+                    Py_VISIT(entries[i].me_key);
+                }
                 Py_VISIT(value);
             }
         }
@@ -4788,12 +4759,24 @@ dict_reachable(PyObject *op, visitproc visit, void *arg)
             if (value == NULL) {
                 continue;
             }
-            Py_VISIT(entries[i].me_key);
             Py_VISIT(value);
+            Py_VISIT(entries[i].me_key);
         }
     }
-
     return 0;
+}
+
+static int
+dict_traverse(PyObject *op, visitproc visit, void *arg)
+{
+    return dict_visit(op, visit, arg, false);
+}
+
+static int
+dict_reachable(PyObject *op, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
+    return dict_visit(op, visit, arg, true);
 }
 
 static int

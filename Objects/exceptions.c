@@ -657,21 +657,6 @@ static PyTypeObject _PyExc_BaseException = {
     BaseException_new,          /* tp_new */
     .tp_vectorcall = BaseException_vectorcall,
     .tp_reachable = BaseException_reachable,
-    0,                          /* tp_weaklistoffset */
-    0,                          /* tp_iter */
-    0,                          /* tp_iternext */
-    BaseException_methods,      /* tp_methods */
-    BaseException_members,      /* tp_members */
-    BaseException_getset,       /* tp_getset */
-    0,                          /* tp_base */
-    0,                          /* tp_dict */
-    0,                          /* tp_descr_get */
-    0,                          /* tp_descr_set */
-    offsetof(PyBaseExceptionObject, dict), /* tp_dictoffset */
-    BaseException_init,         /* tp_init */
-    0,                          /* tp_alloc */
-    BaseException_new,          /* tp_new */
-    .tp_vectorcall = BaseException_vectorcall,
 };
 /* the CPython API expects exceptions to be (PyObject *) - both a hold-over
 from the previous implementation and also allowing Python objects to be used
