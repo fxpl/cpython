@@ -1475,7 +1475,7 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
                 _Py_hashtable_set(imm_state->warned_types, (void *)tp, (void *)1);
                 if (references != NULL) {
                     PySys_FormatStderr(
-                        "freeze: type '%.100s' has tp_traverse but no tp_reachable\n",
+                        "freeze: type '%.100s' does not implement tp_reachable\nfalling back to tp_traverse instead\n",
                         tp->tp_name);
                 } else {
                     PySys_FormatStderr(
