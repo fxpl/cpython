@@ -356,8 +356,8 @@ PyTypeObject PyEnum_Type = {
     0,                              /* tp_init */
     PyType_GenericAlloc,            /* tp_alloc */
     enum_new,                       /* tp_new */
-    .tp_reachable = enum_reachable,
     PyObject_GC_Del,                /* tp_free */
+    .tp_reachable = enum_reachable,
     .tp_vectorcall = enumerate_vectorcall
 };
 
