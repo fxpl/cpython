@@ -177,6 +177,12 @@ get_gc_state(void)
     PyInterpreterState *interp = _PyInterpreterState_GET();
     return &interp->gc;
 }
+
+static inline void
+gc_clear_collecting(PyGC_Head *g)
+{
+    g->_gc_prev &= ~_PyGC_PREV_MASK_COLLECTING;
+}
 #endif // Py_GIL_DISABLED
 // **********************************************************************
 // Modified from the GC functions above
@@ -1186,7 +1192,46 @@ static bool regiondata_is_bridge(Py_region_t region, PyObject *obj) {
  * This will just update the RC of the old and new region, all other state,
  * like the LRC, has to be updated separately.
  */
-static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
+static void _PyRegion_SetKeepGC(PyObject* obj, Py_region_t new_region) {
+    // Invariant:
+    assert(obj);
+    ASSERT_IS_UNION_ROOT(new_region);
+    ASSERT_REGION_HAS_NO_TAG(new_region);
+
+    // Set the region first, this is important for the bridge check
+    Py_region_t old_region = obj->ob_region;
+    obj->ob_region = new_region;
+
+    if (Py_TYPE(obj) == &_PyRegion_Type) {
+        // Nothing to do here, bridges are moved by `set_parent`
+    } else if (PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
+        if (HAS_DATA(new_region)) {
+            // This happens because old was merged into new. The merge already
+            // moved the object from the old GC list to the new one.
+            assert(HAS_DATA(old_region));
+        } else if (IS_LOCAL_REGION(new_region)) {
+            // This happens because old was merged into local. The merge already
+            // moved the object from the old GC list to the local one.
+            assert(HAS_DATA(old_region));
+        } else {
+            // This case should never happen.
+            // Congratulation: You broke the system.
+            assert(false);
+        }
+    }
+
+    // Update the RC last to make sure the used GC lists stay allocated
+    regiondata_inc_rc(new_region);
+    regiondata_dec_rc(old_region);
+}
+
+/* Sets the region of the object to the newly given region and removes it
+ * from the GC list.
+ *
+ * This will just update the RC of the old and new region, all other state,
+ * like the LRC, has to be updated separately.
+ */
+static void _PyRegion_SetMoveGC(PyObject* obj, Py_region_t new_region) {
     // Invariant:
     assert(obj);
     ASSERT_IS_UNION_ROOT(new_region);
@@ -1200,17 +1245,27 @@ static void _PyRegion_Set(PyObject* obj, Py_region_t new_region) {
     if (Py_TYPE(obj) == &_PyRegion_Type) {
         // Nothing to do here, bridges are moved by `set_parent`
     } else if (PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
-        if (HAS_DATA(new_region)) {
+        if (IS_LOCAL_REGION(old_region) && HAS_DATA(new_region)) {
             _Py_region_data *data = (_Py_region_data *)new_region;
+            // We need to clear the collecting flag. The flag can be set if
+            // a finalizer creates a reference from within a region to an
+            // object that is currently being collected. Not clearing it
+            // can cause errors, where the GC modifies the metadata because
+            // it assumes this object is in the list currently being collected.
+            gc_clear_collecting(_Py_AS_GC(obj));
             gc_set_old_space(_Py_AS_GC(obj), 0);
             gc_list_move(_Py_AS_GC(obj), &data->gc_list);
         } else if (IS_LOCAL_REGION(new_region)) {
-            struct _gc_runtime_state* gc_state = get_gc_state();
-            // Use `old[0]` here, we are setting the visited space to 0 in _PyRegion_Set().
-            gc_list_move(_Py_AS_GC(obj), &(gc_state->old[0].head));
+            // Objects can't be moved from regions into the local region via
+            // `_PyRegion_SetMoveGC`. Dissolve will always merge the entire list
+            // into the GC list.
+            assert(false);
         } else if (IS_COWN_REGION(new_region)) {
             // Untrack the object, cowns are not GC'ed (yet?)
             PyObject_GC_UnTrack(obj);
+        } else {
+            // This case can happen?
+            assert(false);
         }
     }
 
@@ -1302,7 +1357,7 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
 
         // Add the object to the merge region, this will also prevent it
         // from being traversed again.
-        _PyRegion_Set(tgt, state->merge_region);
+        _PyRegion_SetMoveGC(tgt, state->merge_region);
 
         // Return and notify that `tgt` should also be traversed
         return Py_OWNERSHIP_TRAVERSE_VISIT;
@@ -1739,7 +1794,7 @@ Py_region_t _PyRegion_GetSlow(PyObject *obj, int follow_pending) {
     // Check if the region should be updated, this can happen if the object
     // region was merged into another region.
     if (obj->ob_region != region && update_region) {
-        _PyRegion_Set(obj, region);
+        _PyRegion_SetKeepGC(obj, region);
     }
 
     return region;
@@ -2320,7 +2375,7 @@ int _PyRegion_TakeRefs(PyObject *src, int argc, ...) {
 }
 
 int _PyRegion_SetCownRegion(_PyCownObject *cown) {
-    _PyRegion_Set(_PyObject_CAST(cown), _Py_COWN_REGION);
+    _PyRegion_SetMoveGC(_PyObject_CAST(cown), _Py_COWN_REGION);
     return 0;
 }
 
@@ -2413,8 +2468,17 @@ void PyRegion_RecycleObject(PyObject *obj) {
     }
 
     // Moving the object into a static region, allows the original
-    // region to be deallocated once te RC hits 0
-    _PyRegion_Set(obj, _Py_LOCAL_REGION);
+    // region to be deallocated once te RC hits 0.
+    //
+    // We keep the GC, since the freelist user is responsible for
+    // untracking the object, which will remove it from our list.
+    // Is this sound, IDK, probably. I think this is as good as
+    // it's gonna get.
+    _PyRegion_SetKeepGC(obj, _Py_LOCAL_REGION);
+
+    assert(
+        !PyObject_GC_IsTracked(obj)
+        && "The object needs to be untracked before calling `PyRegion_RecycleObject()`");
 }
 
 // TODO(regions): xFrednet: Cleanup
