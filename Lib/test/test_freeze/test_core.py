@@ -470,20 +470,6 @@ class TestStackCapture(unittest.TestCase):
          self.assertTrue(isfrozen(x))
          self.assertTrue(isfrozen(x["frame"]))
 
-global_test_dict = 0
-class TestGlobalDictMutation(unittest.TestCase):
-    def g():
-        def f1():
-            globals()["global_test_dict"] += 1
-            return globals()["global_test_dict"]
-        freeze(f1)
-        return f1
-
-    def test_global_dict_mutation(self):
-        f1 = TestGlobalDictMutation.g()
-        self.assertTrue(isfrozen(f1))
-        self.assertRaises(TypeError, f1)
-
 
 class TestSubclass(unittest.TestCase):
     def test_subclass(self):

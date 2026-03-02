@@ -1027,24 +1027,16 @@ void mark_all_frozen(struct FreezeState *state)
  */
 static int shadow_function_globals(PyObject* op)
 {
-    PyObject* builtins = NULL;
-    PyObject* shadow_builtins = NULL;
-    PyObject* globals = NULL;
-    PyObject* shadow_globals = NULL;
-    PyFunctionObject* f = NULL;
-    PyObject* f_ptr = NULL;
-    PyCodeObject* f_code = NULL;
-    Py_ssize_t size;
-    bool check_globals = false;
-
     _PyObject_ASSERT(op, PyFunction_Check(op));
 
-    f = (PyFunctionObject*)op;
+    PyObject* shadow_builtins = NULL;
+    PyObject* shadow_globals = NULL;
+    PyObject* shadow_closure = NULL;
+    Py_ssize_t size;
 
-    globals = f->func_globals;
-    builtins = f->func_builtins;
-
-    f_ptr = f->func_code;
+    PyFunctionObject* f = _PyFunction_CAST(op);
+    PyObject* globals = f->func_globals;
+    PyObject* builtins = f->func_builtins;
 
     shadow_builtins = PyDict_New();
     if(shadow_builtins == NULL){
@@ -1063,127 +1055,76 @@ static int shadow_function_globals(PyObject* op)
     debug(" Original globals: %p\n", globals);
     debug(" Shadow globals:   %p\n", shadow_globals);
 
-    if(PyDict_SetItemString(shadow_globals, "__builtins__", Py_NewRef(shadow_builtins))){
-        Py_DECREF(shadow_builtins);
-        Py_DECREF(shadow_globals);
-        return 0;
+    if (PyDict_SetItemString(shadow_globals, "__builtins__", Py_NewRef(shadow_builtins))) {
+        goto error;
     }
 
-    _PyObject_ASSERT(f_ptr, PyCode_Check(f_ptr));
-    f_code = (PyCodeObject*)f_ptr;
+    _PyObject_ASSERT(f->func_code, PyCode_Check(f->func_code));
+    PyCodeObject* f_code = (PyCodeObject*)f->func_code;
 
     size = 0;
     if (f_code->co_names != NULL)
         size = PySequence_Fast_GET_SIZE(f_code->co_names);
-    for(Py_ssize_t i = 0; i < size; i++){
+    for (Py_ssize_t i = 0; i < size; i++) {
         PyObject* name = PySequence_Fast_GET_ITEM(f_code->co_names, i);
 
-        if(PyUnicode_CompareWithASCIIString(name, "globals") == 0){
-            // if the code calls the globals() builtin, then any
-            // cellvar or const in the function could, potentially, refer to
-            // a global variable. As such, we need to check if the globals
-            // dictionary contains that key and then make it immutable
-            // from this point forwards.
-            check_globals = true;
-        }
-
-        if(PyDict_Contains(globals, name)){
+        if( PyDict_Contains(globals, name)){
             PyObject* value = PyDict_GetItem(globals, name);
-            debug(" Copying global %s -> %p\n", PyUnicode_AsUTF8(name), value);
-            if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
-                Py_DECREF(shadow_builtins);
-                Py_DECREF(shadow_globals);
-                return 0;
+            if (PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))) {
+                goto error;
             }
-        }else if(PyDict_Contains(builtins, name)){
+        } else if (PyDict_Contains(builtins, name)) {
             PyObject* value = PyDict_GetItem(builtins, name);
-            debug(" Copying builtin %s -> %p\n", PyUnicode_AsUTF8(name), value);
-            if(PyDict_SetItem(shadow_builtins, Py_NewRef(name), Py_NewRef(value))){
-                Py_DECREF(shadow_builtins);
-                Py_DECREF(shadow_globals);
-                return 0;
+            if (PyDict_SetItem(shadow_builtins, Py_NewRef(name), Py_NewRef(value))) {
+                goto error;
             }
         }
     }
 
-    size = PySequence_Fast_GET_SIZE(f_code->co_consts);
-    for(Py_ssize_t i = 0; i < size; i++){
-        PyObject* value = PySequence_Fast_GET_ITEM(f_code->co_consts, i);
-        if(check_globals && PyUnicode_Check(value)){
-            // if the code calls the globals() builtin, then any
-            // cellvar or const in the function could, potentially, refer to
-            // a global variable. As such, we need to check if the globals
-            // dictionary contains that key and then make it immutable
-            // from this point forwards.
-            PyObject* name = value;
-            if(PyDict_Contains(globals, name)){
-                value = PyDict_GetItem(globals, name);
-                debug(" Copying global %s -> %p\n", PyUnicode_AsUTF8(name), value);
-                if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
-                    Py_DECREF(shadow_builtins);
-                    Py_DECREF(shadow_globals);
-                    return 0;
-                }
-            }
-        }
-    }
-
+    // Shadow cells with a new frozen cell to warn on reassignments in the
+    // capturing function.
     size = 0;
-    if(f->func_closure != NULL){
+    if(f->func_closure != NULL) {
         size = PyTuple_Size(f->func_closure);
-        if(size == -1){
-            Py_DECREF(shadow_builtins);
-            Py_DECREF(shadow_globals);
-            return 0;
+        if (size == -1) {
+            goto error;
+        }
+        shadow_closure = PyTuple_New(size);
+        if (shadow_closure == NULL) {
+            goto error;
         }
     }
-
     for(Py_ssize_t i=0; i < size; ++i){
         PyObject* cellvar = PyTuple_GET_ITEM(f->func_closure, i);
         PyObject* value = PyCell_GET(cellvar);
 
         PyObject* shadow_cellvar = PyCell_New(value);
-        if(PyTuple_SetItem(f->func_closure, i, shadow_cellvar) == -1){
-            Py_DECREF(shadow_builtins);
-            Py_DECREF(shadow_globals);
-            return 0;
-        }
-
-        if(PyUnicode_Check(value) && check_globals){
-            // if the code calls the globals() builtin, then any
-            // cellvar or const in the function could, potentially, refer to
-            // a global variable. As such, we need to check if the globals
-            // dictionary contains that key and then make it immutable
-            // from this point forwards.
-            PyObject* name = value;
-            if(PyDict_Contains(globals, name)){
-                value = PyDict_GetItem(globals, name);
-                debug(" Copying global %s -> %p\n", PyUnicode_AsUTF8(name), value);
-                if(PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))){
-                    Py_DECREF(shadow_builtins);
-                    Py_DECREF(shadow_globals);
-                    return 0;
-                }
-            }
+        if(PyTuple_SetItem(shadow_closure, i, shadow_cellvar) == -1){
+            goto error;
         }
     }
 
-    if(f->func_annotations == NULL){
-        f->func_annotations = PyDict_New();
-        if(f->func_annotations == NULL){
+    if (f->func_annotations == NULL) {
+        PyObject* new_annotations = PyDict_New();
+        if (new_annotations == NULL) {
             goto nomemory;
         }
+        f->func_annotations = new_annotations;
     }
 
-    f->func_globals = shadow_globals;
-    f->func_builtins = shadow_builtins;
+    // Only assign them at the end when everything succeeded
+    Py_XSETREF(f->func_closure, shadow_closure);
+    Py_SETREF(f->func_globals, shadow_globals);
+    Py_SETREF(f->func_builtins, shadow_builtins);
 
     return 0;
 
 nomemory:
+    PyErr_NoMemory();
+error:
     Py_XDECREF(shadow_builtins);
     Py_XDECREF(shadow_globals);
-    PyErr_NoMemory();
+    Py_XDECREF(shadow_closure);
     return -1;
 }
 
