@@ -1876,7 +1876,7 @@ PyTypeObject PyStaticMethod_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
-    tp_reachable: sm_reachable,
+    .tp_reachable = sm_reachable,
 };
 
 PyObject *
