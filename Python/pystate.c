@@ -1385,7 +1385,10 @@ PyModuleObject* _PyInterpreterState_GetModuleState(PyObject *mod) {
             }
 
             // Place immutable proxy in `sys.modules[dict]`
-            PyObject* modules = PySys_GetAttrString("modules");
+            PyObject* modules = _PyImport_GetModulesRef(is);
+            if (modules == Py_None) {
+                return NULL;
+            }
             res = PyDict_SetItem(modules, self->md_name, _PyObject_CAST(self));
             if (res != 0) {
                 return NULL;

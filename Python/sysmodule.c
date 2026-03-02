@@ -4185,6 +4185,10 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
         goto error;
     }
 
+    if (PyDict_SetItemString(sysdict, "mut_modules", interp->mutable_modules) < 0) {
+        goto error;
+    }
+
     PyStatus status = _PySys_SetPreliminaryStderr(sysdict);
     if (_PyStatus_EXCEPTION(status)) {
         return status;
