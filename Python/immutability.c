@@ -308,7 +308,7 @@ struct FreezeState {
 */
 #define SCC_RANK_FLAG _PyGC_PREV_MASK_COLLECTING
 
-int init_freeze_state(struct FreezeState *state)
+static int init_freeze_state(struct FreezeState *state)
 {
 #ifndef GIL_DISABLED
     state->dfs = PyList_New(0);
@@ -325,7 +325,7 @@ int init_freeze_state(struct FreezeState *state)
     return 0;
 }
 
-void deallocate_FreezeState(struct FreezeState *state)
+static void deallocate_FreezeState(struct FreezeState *state)
 {
     _Py_hashtable_destroy(state->visited);
 
@@ -345,7 +345,7 @@ void deallocate_FreezeState(struct FreezeState *state)
 #endif
 }
 
-void set_direct_rc(PyObject* obj)
+static void set_direct_rc(PyObject* obj)
 {
 #ifndef GIL_DISABLED
     IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_DIRECT;
@@ -354,7 +354,7 @@ void set_direct_rc(PyObject* obj)
 #endif
 }
 
-void set_indirect_rc(PyObject* obj)
+static void set_indirect_rc(PyObject* obj)
 {
 #ifndef GIL_DISABLED
     IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_INDIRECT;
@@ -363,7 +363,7 @@ void set_indirect_rc(PyObject* obj)
 #endif
 }
 
-bool has_direct_rc(PyObject* obj)
+static bool has_direct_rc(PyObject* obj)
 {
 #ifdef GIL_DISABLED
     return false;
@@ -373,7 +373,7 @@ bool has_direct_rc(PyObject* obj)
 }
 
 
-int is_representative(PyObject* obj, struct FreezeState *state)
+static int is_representative(PyObject* obj, struct FreezeState *state)
 {
 #ifdef GIL_DISABLED
     void* result = _Py_hashtable_get(state->rep, obj);
@@ -383,7 +383,7 @@ int is_representative(PyObject* obj, struct FreezeState *state)
 #endif
 }
 
-void set_scc_parent(PyObject* obj, PyObject* parent)
+static void set_scc_parent(PyObject* obj, PyObject* parent)
 {
     PyGC_Head* gc = _Py_AS_GC(obj);
     // Use GC space for the parent pointer.
@@ -392,40 +392,40 @@ void set_scc_parent(PyObject* obj, PyObject* parent)
     gc->_gc_prev = finalized_bit | _Py_CAST(uintptr_t, parent);
 }
 
-PyObject* scc_parent(PyObject* obj)
+static PyObject* scc_parent(PyObject* obj)
 {
     // Use GC space for the parent pointer.
     assert((_Py_AS_GC(obj)->_gc_prev & SCC_RANK_FLAG) == 0);
     return _Py_CAST(PyObject*, _Py_AS_GC(obj)->_gc_prev & _PyGC_PREV_MASK);
 }
 
-void set_scc_rank(PyObject* obj, size_t rank)
+static void set_scc_rank(PyObject* obj, size_t rank)
 {
     // Use GC space for the rank.
     _Py_AS_GC(obj)->_gc_prev = (rank << _PyGC_PREV_SHIFT) | SCC_RANK_FLAG;
 }
 
-size_t scc_rank(PyObject* obj)
+static size_t scc_rank(PyObject* obj)
 {
     assert((_Py_AS_GC(obj)->_gc_prev & SCC_RANK_FLAG) == SCC_RANK_FLAG);
     // Use GC space for the rank.
     return _Py_AS_GC(obj)->_gc_prev >> _PyGC_PREV_SHIFT;
 }
 
-void set_scc_next(PyObject* obj, PyObject* next)
+static void set_scc_next(PyObject* obj, PyObject* next)
 {
     debug("   set_scc_next %p -> %p\n", obj, next);
     // Use GC space for the next pointer.
     _Py_AS_GC(obj)->_gc_next = (uintptr_t)next;
 }
 
-PyObject* scc_next(PyObject* obj)
+static PyObject* scc_next(PyObject* obj)
 {
     // Use GC space for the next pointer.
     return _Py_CAST(PyObject*, _Py_AS_GC(obj)->_gc_next);
 }
 
-void scc_init_non_trivial(PyObject* obj)
+static void scc_init_non_trivial(PyObject* obj)
 {
     // Check if this not been part of an SCC yet.
     if (scc_next(obj) == NULL) {
@@ -435,7 +435,7 @@ void scc_init_non_trivial(PyObject* obj)
     }
 }
 
-void return_to_gc(PyObject* op)
+static void return_to_gc(PyObject* op)
 {
     set_scc_next(op, NULL);
     set_scc_parent(op, NULL);
@@ -445,7 +445,7 @@ void return_to_gc(PyObject* op)
     _PyObject_GC_TRACK(op);
 }
 
-void scc_init(PyObject* obj)
+static void scc_init(PyObject* obj)
 {
     assert(_PyObject_IS_GC(obj));
     // Let the Immutable GC take over tracking the lifetime
@@ -461,12 +461,12 @@ void scc_init(PyObject* obj)
     set_scc_rank(obj, 0);
 }
 
-bool scc_is_pending(PyObject* obj)
+static bool scc_is_pending(PyObject* obj)
 {
     return (IMMUTABLE_FLAG_FIELD(obj) & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_PENDING;
 }
 
-PyObject* get_representative(PyObject* obj, struct FreezeState *state)
+static PyObject* get_representative(PyObject* obj, struct FreezeState *state)
 {
     if (is_representative(obj, state)) {
         return obj;
@@ -487,7 +487,7 @@ PyObject* get_representative(PyObject* obj, struct FreezeState *state)
     return rep;
 }
 
-bool
+static bool
 union_scc(PyObject* a, PyObject* b, struct FreezeState *state)
 {
     // Initialize SCC information for both objects.
@@ -524,14 +524,14 @@ union_scc(PyObject* a, PyObject* b, struct FreezeState *state)
     return true;
 }
 
-PyObject* get_next(PyObject* obj, struct FreezeState *freeze_state)
+static PyObject* get_next(PyObject* obj, struct FreezeState *freeze_state)
 {
     (void)freeze_state;
     PyObject* next = scc_next(obj);
     return next;
 }
 
-int has_visited(struct FreezeState *state, PyObject* obj)
+static int has_visited(struct FreezeState *state, PyObject* obj)
 {
 #ifdef GIL_DISABLED
     return _Py_hashtable_get(state->visited, obj) != NULL;
@@ -563,7 +563,7 @@ static PyObject* scc_root(PyObject* obj)
 }
 #endif
 
-void debug_print_scc(struct FreezeState *state, PyObject* start)
+static void debug_print_scc(struct FreezeState *state, PyObject* start)
 {
 #ifdef IMMUTABLE_TRACING
     PyObject* rep = get_representative(start, state);
@@ -580,7 +580,7 @@ void debug_print_scc(struct FreezeState *state, PyObject* start)
 #endif
 }
 
-int debug_print_scc_visit(_Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
+static int debug_print_scc_visit(_Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
 {
 #ifdef IMMUTABLE_TRACING
     struct FreezeState *state = (struct FreezeState *)user_data;
@@ -600,7 +600,7 @@ int debug_print_scc_visit(_Py_hashtable_t *ht, const void *key, const void *valu
     return 0;
 }
 
-void debug_print_all_sccs(struct FreezeState *state)
+static void debug_print_all_sccs(struct FreezeState *state)
 {
 #ifdef IMMUTABLE_TRACING
     // TODO this code needs reinstating.
@@ -893,7 +893,7 @@ static PyObject* PostOrderMarker = &PostOrderMarkerStruct;
   Returns -1 if there was a memory error.
   Otherwise returns 0.
 */
-int add_visited(PyObject* obj, struct FreezeState *state)
+static int add_visited(PyObject* obj, struct FreezeState *state)
 {
     assert (!has_visited(state, obj));
 
@@ -933,7 +933,7 @@ int add_visited(PyObject* obj, struct FreezeState *state)
 /*
     Returns true if the object is part of an SCC that is still pending (not complete).
 */
-int
+static int
 is_pending(PyObject* obj, struct FreezeState *state)
 {
     return scc_is_pending(obj);
@@ -948,7 +948,7 @@ is_pending(PyObject* obj, struct FreezeState *state)
 
     Returns true if the SCC's reference count has become zero.
 */
-void
+static void
 complete_scc(PyObject* obj, struct FreezeState *state)
 {
     PyObject* c = scc_next(obj);
@@ -981,7 +981,7 @@ complete_scc(PyObject* obj, struct FreezeState *state)
     debug_obj("Completed SCC %s (%p) with %zu members with rc %zu \n", obj, count, rc - (count - 1));
 }
 
-void add_internal_reference(PyObject* obj, struct FreezeState *state)
+static void add_internal_reference(PyObject* obj, struct FreezeState *state)
 {
     obj->ob_refcnt--;
     debug_obj("Decrementing rc of %s (%p) to %zd\n", obj, _Py_REFCNT(obj));
@@ -992,7 +992,7 @@ void add_internal_reference(PyObject* obj, struct FreezeState *state)
   Function for use in _Py_hashtable_foreach.
   Marks the key as immutable/frozen.
 */
-int mark_frozen(_Py_hashtable_t* tbl, const void* key, const void* value, void* state)
+static int mark_frozen(_Py_hashtable_t* tbl, const void* key, const void* value, void* state)
 {
     (void)tbl;
     (void)value;
@@ -1005,7 +1005,7 @@ int mark_frozen(_Py_hashtable_t* tbl, const void* key, const void* value, void* 
 /*
   Marks all the objects visited by the freeze operation as frozen.
 */
-void mark_all_frozen(struct FreezeState *state)
+static void mark_all_frozen(struct FreezeState *state)
 {
 #ifdef GIL_DISABLED
     _Py_hashtable_foreach(state->visited, mark_frozen, state);
@@ -1152,7 +1152,7 @@ static int freeze_visit(PyObject* obj, void* freeze_state_untyped)
     return 0;
 }
 
-int is_shallow_immutable(PyObject* obj)
+static int is_shallow_immutable(PyObject* obj)
 {
     if (obj == NULL)
         return 0;
@@ -1403,7 +1403,7 @@ void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
-int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
+static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
 {
     //  WARNING
     //  CHANGES HERE NEED TO BE REFLECTED IN freeze_visit
