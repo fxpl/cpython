@@ -262,12 +262,14 @@ static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
 
+#ifdef GIL_DISABLED
 static inline void _Py_SetImmutable(PyObject *op)
 {
     if(op) {
         IMMUTABLE_FLAG_FIELD(op) |= _Py_IMMUTABLE_FLAG;
     }
 }
+#endif
 
 /**
  * Used to track the state of an in progress freeze operation.
@@ -612,6 +614,7 @@ static void scc_set_refcounts_to_one(PyObject* obj)
         c->ob_refcnt = 1;
     } while (n != obj);
 }
+
 
 static void scc_reset_root_refcount(PyObject* obj)
 {
