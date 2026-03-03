@@ -140,9 +140,9 @@ PyDoc_STRVAR(immutable_module_doc,
 "making them immutable at runtime.");
 
 static struct PyMethodDef immutable_methods[] = {
-    IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
-    IMMUTABLE_FREEZE_METHODDEF
-    IMMUTABLE_ISFROZEN_METHODDEF
+    _IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
+    _IMMUTABLE_FREEZE_METHODDEF
+    _IMMUTABLE_ISFROZEN_METHODDEF
     { NULL, NULL }
 };
 
