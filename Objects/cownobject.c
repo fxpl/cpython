@@ -381,64 +381,76 @@ static int cown_release_unchecked(_PyCownObject* self, _PyCown_ipid_t unlocking_
     return 0;
 }
 
-static int cown_release_region(_PyCownObject* self, _PyCown_ipid_t unlocking_ip) {
-    assert(_PyRegion_IsBridge(self->value));
-
-    // If the region is open attempt to close it by cleaning it.
-    if (_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
-        int cleaning_res = _PyRegion_Clean(_PyRegion_Get(self->value));
-        if (cleaning_res < 0) {
-            goto error;
-        }
-    }
-
-    // A closed region is safe to release
-    if (!_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
-        return cown_release_unchecked(self, unlocking_ip);
-    }
-
-    PyErr_Format(
-        PyExc_RuntimeError,
-        "the cown can't be released, since the contained region is still open");
-error:
-    return -1;
-}
-
-static int cown_release(_PyCownObject *self, _PyCown_ipid_t unlocking_ip) {
+/* Checks that the cown is not released, and that the owner is as the current interpreter. */
+static int cown_check_owner_before_release(_PyCownObject *self, _PyCown_ipid_t unlocking_ip) {
     _PyCown_ipid_t owning_ip = cown_get_owner(self);
-
-    // Error if the cown is already released
     if (owning_ip == RELEASED_IPID) {
         PyErr_Format(
             PyExc_RuntimeError,
-            "interpreter %lld attempted to release a released cown",
+            "interpreter %lld attempted to release/switch a released cown",
             unlocking_ip
         );
         return -1;
     }
-
-    // Error if the cown is owned by a different interpreter
     if (owning_ip != unlocking_ip) {
         PyErr_Format(
             PyExc_RuntimeError,
-            "interpreter %lld attempted to release a cown owned by %lld",
+            "interpreter %lld attempted to release/switch a cown owned by %lld",
             unlocking_ip, owning_ip
         );
         return -1;
     }
+    return 0;
+}
 
-    PyObject *value = self->value;
+static int cown_is_value_cown_or_immutable(_PyCownObject *self) {
+    Py_region_t region = _PyRegion_Get(self->value);
+    return (region == _Py_COWN_REGION || region == _Py_IMMUTABLE_REGION);
+}
 
-    // Cowns holding cowns or immutable objects can be released without any
-    // restrictions
-    Py_region_t value_region = _PyRegion_Get(value);
-    if (value_region == _Py_COWN_REGION || value_region == _Py_IMMUTABLE_REGION) {
-        return cown_release_unchecked(self, unlocking_ip);
+/* Try closing the region by cleaning it.
+ * Returns:
+ * (-1) If an error occurred while trying to clean the region.
+ * (0) If the region is closed after this call.
+ * (1) If the region is still open after this call.
+ */
+static int cown_try_closing_region(_PyCownObject *self) {
+    assert(_PyRegion_IsBridge(self->value));
+    Py_region_t region = _PyRegion_Get(self->value);
+    if (_PyRegion_IsOpen(region)) {
+        if (_PyRegion_Clean(region) < 0) {
+            return -1;
+        }
+    }
+    // This needs to get the region again as it might have changed
+    return _PyRegion_IsOpen(_PyRegion_Get(self->value));
+}
+
+static int cown_release(_PyCownObject *self, _PyCown_ipid_t unlocking_ip) {
+    if (cown_check_owner_before_release(self, unlocking_ip) < 0) {
+        return -1;
     }
 
-    assert(value_region != _Py_LOCAL_REGION);
-    return cown_release_region(self, unlocking_ip);
+    if (cown_is_value_cown_or_immutable(self)) {
+        // Can be released without any restrictions
+        return cown_release_unchecked(self, unlocking_ip);
+    }
+    assert(_PyRegion_Get(self->value) != _Py_LOCAL_REGION);
+
+    int cleaning_res = cown_try_closing_region(self);
+    if (cleaning_res < 0) {
+        return -1;
+    }
+    if (cleaning_res == 1) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "the cown can't be released, since the contained region is still open");
+        return -1;
+    }
+    // Region is closed, safe to release
+    return cown_release_unchecked(self, unlocking_ip);
 }
+
 static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
     _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
     if (cown_release(self, this_ip) < 0) {
@@ -640,50 +652,41 @@ int _PyCown_SwitchFromGcToIp(_PyCownObject *self) {
     return 0;
 }
 
-/*
-* Returns:
-* (-1) On error
-* (0) On success
-* (1) If the cown could not be switched to GC
-*/
-int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region) {
-    // FIXME(cowns): xFrednet: This could be a lot cleaner and share
-    // implementations with the normal release function.
-    _PyCown_ipid_t ipid = _PyCown_ThisInterpreterId();
-    BAIL_UNLESS_OWNED_BY(self, ipid, -1);
-
-    PyObject *value = self->value;
-    Py_region_t value_region = _PyRegion_Get(value);
-    *contained_region = value_region;
-
-    // Cowns holding cowns or immutable objects can be released without any
-    // restrictions
-    if (value_region == _Py_COWN_REGION || value_region == _Py_IMMUTABLE_REGION) {
-        return cown_release_unchecked(self, ipid);
-    }
-
-    assert(value_region != _Py_LOCAL_REGION);
-    assert(_PyRegion_IsBridge(self->value));
-
-    // If the region is open attempt to close it by cleaning it.
-    if (_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
-        int cleaning_res = _PyRegion_Clean(_PyRegion_Get(self->value));
-        if (cleaning_res < 0) {
-            return -1;
-        }
-    }
-
-    // A closed region is safe to release
-    if (_PyRegion_IsOpen(_PyRegion_Get(self->value))) {
-        *contained_region = NULL_REGION;
-        return 1;
-    }
-
+int cown_switch_to_gc_unchecked(_PyCownObject *self, _PyCown_ipid_t ipid, Py_region_t *contained_region) {
     if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, GC_IPID)) {
-        *contained_region = NULL_REGION;
         return -1;
     }
+    *contained_region = _PyRegion_Get(self->value);
     return 0;
+}
+
+int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region) {
+    _PyCown_ipid_t ipid = _PyCown_ThisInterpreterId();
+    *contained_region = NULL_REGION;
+    if (cown_check_owner_before_release(self, ipid) < 0) {
+        return -1;
+    }
+
+    if (cown_is_value_cown_or_immutable(self)) {
+        // Can be switched without any restrictions
+        return cown_switch_to_gc_unchecked(self, ipid, contained_region);
+    }
+    assert(_PyRegion_Get(self->value) != _Py_LOCAL_REGION);
+
+    int clean_res = cown_try_closing_region(self);
+    if (clean_res < 0) {
+        return -1;
+    }
+    if (clean_res == 1) {
+        // The region is still open, and we won't be able to release the cown.
+        // After GC, the cown will still be owned by the current interpreter.
+        // Nobody expects this.
+        // Replace the cown's value with an exception.
+        // FIXME(cowns): exceptions cannot yet be frozen, setting None for now
+        cown_set_value_unchecked(self, Py_None);
+    }
+    // Region is closed, safe to switch
+    return cown_switch_to_gc_unchecked(self, ipid, contained_region);
 }
 
 int _PyCown_ReleaseGC(_PyCownObject *self) {
