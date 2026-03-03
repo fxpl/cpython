@@ -8,6 +8,9 @@ class BaseObjectTest(unittest.TestCase):
         self.obj = obj
 
     def setUp(self):
+        # Explicitly freeze type, then the object
+        # Types are not implicitly frozen by freeze()
+        # freeze(type(self.obj))
         freeze(self.obj)
 
     def test_immutable(self):
@@ -18,7 +21,8 @@ class BaseObjectTest(unittest.TestCase):
             self.obj.new_attribute = 'value'
 
     def test_type_immutable(self):
-        self.assertTrue(isfrozen(type(self.obj)))
+        self.assertTrue(isfrozen(self.obj))
+        self.assertTrue(isfrozen(type(self.obj)), "Type should be frozen when instance is frozen: {}".format(type(self.obj)))
 
 
 class BaseNotFreezableTest(unittest.TestCase):

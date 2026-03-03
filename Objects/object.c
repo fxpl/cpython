@@ -2254,6 +2254,13 @@ none_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+none_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    visit(Py_TYPE(self), arg);
+    return 0;
+}
+
 static PyNumberMethods none_as_number = {
     0,                          /* nb_add */
     0,                          /* nb_subtract */
@@ -2335,7 +2342,7 @@ PyTypeObject _PyNone_Type = {
     0,                  /*tp_init */
     0,                  /*tp_alloc */
     none_new,           /*tp_new */
-    .tp_reachable = none_traverse,
+    .tp_reachable = none_reachable,
 };
 
 PyObject _Py_NoneStruct = _PyObject_HEAD_INIT(&_PyNone_Type);

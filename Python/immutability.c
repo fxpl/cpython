@@ -262,6 +262,54 @@ static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
 
+// Wrapper around tp_traverse that also visits the type object.
+// tp_traverse does not visit the type for non-heap types, but
+// tp_reachable should visit all reachable objects including the type.
+static int
+traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *arg)
+{
+    traverseproc traverse = Py_TYPE(obj)->tp_traverse;
+    if (traverse != NULL) {
+        int err = traverse(obj, visit, arg);
+        if (err) {
+            return err;
+        }
+    }
+
+    return visit((PyObject *)Py_TYPE(obj), arg);
+}
+
+// Returns the appropriate traversal function for reaching all references
+// from an object. Prefers tp_reachable, falls back to tp_traverse wrapped
+// to also visit the type. Emits a warning once per type on fallback.
+static traverseproc
+get_reachable_proc(PyTypeObject *tp)
+{
+    if (tp->tp_reachable != NULL) {
+        return tp->tp_reachable;
+    }
+
+    struct _Py_immutability_state *imm_state = get_immutable_state();
+    if (imm_state != NULL &&
+        _Py_hashtable_get(imm_state->warned_types, (void *)tp) == NULL)
+    {
+        _Py_hashtable_set(imm_state->warned_types, (void *)tp, (void *)1);
+        if (tp->tp_traverse != NULL) {
+            PySys_FormatStderr(
+                "freeze: type '%.100s' has tp_traverse but no tp_reachable\n",
+                tp->tp_name);
+        } else {
+            PySys_FormatStderr(
+                "freeze: type '%.100s' has no tp_traverse and no tp_reachable\n",
+                tp->tp_name);
+        }
+    }
+
+    // Always return the wrapper; even when tp_traverse is NULL, the wrapper
+    // will still visit the type object which tp_reachable is expected to do.
+    return traverse_via_tp_traverse;
+}
+
 #ifdef GIL_DISABLED
 static inline void _Py_SetImmutable(PyObject *op)
 {
@@ -650,23 +698,7 @@ static void scc_add_internal_refcounts(PyObject* obj, struct SCCDetails* details
         //  WARNING
         //  CHANGES HERE NEED TO BE REFLECTED IN freeze_visit
 
-        if (PyType_Check(c)) {
-            // TODO(Immutable): mjp: Special case for types not sure if required. We should review.
-            PyTypeObject* type = (PyTypeObject*)obj;
-
-            scc_add_internal_refcount_visit(type->tp_dict, root);
-            scc_add_internal_refcount_visit(type->tp_mro, root);
-            // We need to freeze the tuple object, even though the types
-            // within will have been frozen already.
-            scc_add_internal_refcount_visit(type->tp_bases, root);
-        }
-        else
-        {
-            traverseproc traverse = Py_TYPE(c)->tp_traverse;
-            if (traverse != NULL) {
-                traverse(c, (visitproc)scc_add_internal_refcount_visit, root);
-            }
-        }
+        get_reachable_proc(Py_TYPE(c))(c, (visitproc)scc_add_internal_refcount_visit, root);
 
         if (PyWeakref_Check(c)) {
             // We followed weakreferences during freeze, so need to here as well.
@@ -680,13 +712,6 @@ static void scc_add_internal_refcounts(PyObject* obj, struct SCCDetails* details
                 Py_DECREF(wr);
             }
             details->has_weakreferences++;
-        }
-
-        // The default tp_traverse will not visit the type object if it is
-        // not heap allocated, so we need to do that manually here to freeze
-        // the statically allocated types that are reachable.
-        if (!(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
-            scc_add_internal_refcount_visit(_PyObject_CAST(Py_TYPE(obj)), root);
         }
 
         if (Py_TYPE(c)->tp_del != NULL)
@@ -1422,31 +1447,7 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
         SUCCEEDS(_Py_module_freeze_hook(obj));
     }
 
-    {
-        traverseproc references = Py_TYPE(obj)->tp_reachable;
-        if (references == NULL) {
-            PyTypeObject *tp = Py_TYPE(obj);
-            references = tp->tp_traverse;
-            struct _Py_immutability_state *imm_state = get_immutable_state();
-            if (imm_state != NULL &&
-                _Py_hashtable_get(imm_state->warned_types, (void *)tp) == NULL)
-            {
-                _Py_hashtable_set(imm_state->warned_types, (void *)tp, (void *)1);
-                if (references != NULL) {
-                    PySys_FormatStderr(
-                        "freeze: type '%.100s' does not implement tp_reachable\nfalling back to tp_traverse instead\n",
-                        tp->tp_name);
-                } else {
-                    PySys_FormatStderr(
-                        "freeze: type '%.100s' has no tp_traverse and no tp_reachable\n",
-                        tp->tp_name);
-                }
-            }
-        }
-        if(references != NULL){
-            SUCCEEDS(references(obj, (visitproc)freeze_visit, freeze_state));
-        }
-    }
+    SUCCEEDS(get_reachable_proc(Py_TYPE(obj))(obj, (visitproc)freeze_visit, freeze_state));
 
     // Weak references are not followed by the GC, but should be
     // for immutability.  Otherwise, we could share mutable state
