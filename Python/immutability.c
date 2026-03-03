@@ -995,6 +995,7 @@ static void add_internal_reference(PyObject* obj, struct FreezeState *state)
     assert(_Py_REFCNT(obj) > 0);
 }
 
+#ifdef GIL_DISABLED
 /*
   Function for use in _Py_hashtable_foreach.
   Marks the key as immutable/frozen.
@@ -1008,6 +1009,7 @@ static int mark_frozen(_Py_hashtable_t* tbl, const void* key, const void* value,
     _Py_SetImmutable((PyObject*)key);
     return 0;
 }
+#endif
 
 /*
   Marks all the objects visited by the freeze operation as frozen.
@@ -1159,41 +1161,41 @@ static int freeze_visit(PyObject* obj, void* freeze_state_untyped)
     return 0;
 }
 
-static int is_shallow_immutable(PyObject* obj)
-{
-    if (obj == NULL)
-        return 0;
+// NEEDED FOR future PR that handles shallow immutable correctly.
+// static int is_shallow_immutable(PyObject* obj)
+// {
+//     if (obj == NULL)
+//         return 0;
+//     if (Py_IS_TYPE(obj, &PyBool_Type) ||
+//         Py_IS_TYPE(obj, &_PyNone_Type) ||
+//         Py_IS_TYPE(obj, &PyLong_Type) ||
+//         Py_IS_TYPE(obj, &PyFloat_Type) ||
+//         Py_IS_TYPE(obj, &PyComplex_Type) ||
+//         Py_IS_TYPE(obj, &PyBytes_Type) ||
+//         Py_IS_TYPE(obj, &PyUnicode_Type) ||
+//         Py_IS_TYPE(obj, &PyTuple_Type) ||
+//         Py_IS_TYPE(obj, &PyFrozenSet_Type) ||
+//         Py_IS_TYPE(obj, &PyRange_Type) ||
+//         Py_IS_TYPE(obj, &PyCode_Type) ||
+//         Py_IS_TYPE(obj, &PyCFunction_Type) ||
+//         Py_IS_TYPE(obj, &PyCMethod_Type)
+//     ) {
+//         return 1;
+//     }
 
-    if (Py_IS_TYPE(obj, &PyBool_Type) ||
-        Py_IS_TYPE(obj, &_PyNone_Type) ||
-        Py_IS_TYPE(obj, &PyLong_Type) ||
-        Py_IS_TYPE(obj, &PyFloat_Type) ||
-        Py_IS_TYPE(obj, &PyComplex_Type) ||
-        Py_IS_TYPE(obj, &PyBytes_Type) ||
-        Py_IS_TYPE(obj, &PyUnicode_Type) ||
-        Py_IS_TYPE(obj, &PyTuple_Type) ||
-        Py_IS_TYPE(obj, &PyFrozenSet_Type) ||
-        Py_IS_TYPE(obj, &PyRange_Type) ||
-        Py_IS_TYPE(obj, &PyCode_Type) ||
-        Py_IS_TYPE(obj, &PyCFunction_Type) ||
-        Py_IS_TYPE(obj, &PyCMethod_Type)
-    ) {
-        return 1;
-    }
+//     // Types may be immutable, check flag.
+//     if (PyType_Check(obj))
+//     {
+//         PyTypeObject* type = (PyTypeObject*)obj;
+//         // Assume immutable types are safe to freeze.
+//         if (type->tp_flags & Py_TPFLAGS_IMMUTABLETYPE) {
+//             return 1;
+//         }
+//     }
 
-    // Types may be immutable, check flag.
-    if (PyType_Check(obj))
-    {
-        PyTypeObject* type = (PyTypeObject*)obj;
-        // Assume immutable types are safe to freeze.
-        if (type->tp_flags & Py_TPFLAGS_IMMUTABLETYPE) {
-            return 1;
-        }
-    }
-
-    // TODO: Add user defined shallow immutable property
-    return 0;
-}
+//     // TODO: Add user defined shallow immutable property
+//     return 0;
+// }
 
 static bool
 is_freezable_builtin(PyTypeObject *type)
