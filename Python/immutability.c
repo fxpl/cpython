@@ -1218,7 +1218,7 @@ is_freezable_builtin(PyTypeObject *type)
         type == &_PyWeakref_RefType ||
         type == &_PyNotImplemented_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
         type == &PyModule_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
-        type == &PyImmModule_Type ||
+        type == &_PyImmModule_Type ||
         type == &PyEllipsis_Type
      )
      {

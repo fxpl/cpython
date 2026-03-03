@@ -176,6 +176,10 @@ immutable_exec(PyObject *module) {
         return -1;
     }
 
+    if (PyModule_AddType(module, &_PyImmModule_Type) != 0) {
+        return -1;
+    }
+
     return 0;
 }
 

@@ -13,6 +13,7 @@ freeze = _c.freeze
 isfrozen = _c.isfrozen
 NotFreezable = getattr(_c, "NotFreezable", None)
 NotFreezableError = _c.NotFreezableError
+ImmutableModule = _c.ImmutableModule
 
 __all__ = [
     "register_freezable",
@@ -20,6 +21,7 @@ __all__ = [
     "isfrozen",
     "NotFreezable",
     "NotFreezableError",
+    "ImmutableModule",
 ]
 
 __version__ = getattr(_c, "__version__", "1.0")

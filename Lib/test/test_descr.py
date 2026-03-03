@@ -2551,7 +2551,6 @@ class ClassPropertiesAndMethods(unittest.TestCase):
             else:
                 self.fail("no ValueError from dict(%r)" % bad)
 
-    @unittest.expectedFailure
     def test_dir(self):
         # Testing dir() ...
         junk = 12
@@ -2616,6 +2615,9 @@ class ClassPropertiesAndMethods(unittest.TestCase):
         m2instance = M2("m2")
         m2instance.b = 2
         m2instance.a = 1
+        self.assertEqual(m2instance.__dict__, "Not a dict!")
+        with self.assertRaises(TypeError):
+            dir(m2instance)
 
         # Two essentially featureless objects, (Ellipsis just inherits stuff
         # from object.
@@ -2640,11 +2642,6 @@ class ClassPropertiesAndMethods(unittest.TestCase):
             __class__ = property(__getclass)
 
         dir(C()) # This used to segfault
-
-        # TODO(immutable):  No idea, why this doesn't raise a type error
-        self.assertEqual(m2instance.__dict__, "Not a dict!")
-        with self.assertRaises(TypeError):
-            dir(m2instance)
 
     def test_supers(self):
         # Testing super...
