@@ -13,7 +13,7 @@
 /*[clinic input]
 module _immutable
 [clinic start generated code]*/
-/*[clinic end generated code: output=da39a3ee5e6b4b0d input=46b92e14e140418a]*/
+/*[clinic end generated code: output=da39a3ee5e6b4b0d input=292286c0a14cb0ff]*/
 
 #include "clinic/_immutablemodule.c.h"
 
@@ -62,8 +62,8 @@ Register a type as freezable.
 [clinic start generated code]*/
 
 static PyObject *
-immutable_register_freezable(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=1afbb9a860e2bde9 input=fbb7f42f02d27a88]*/
+_immutable_register_freezable(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=7a68ab35ee36a572 input=48ad5294977fe780]*/
 {
     if(!PyType_Check(obj)){
         PyErr_SetString(PyExc_TypeError, "Expected a type");
@@ -86,8 +86,8 @@ Freeze an object and its graph.
 [clinic start generated code]*/
 
 static PyObject *
-immutable_freeze(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=76b9e6c577ec3841 input=d7090b2d52afbb4b]*/
+_immutable_freeze(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=7612b209b2d604ab input=3e8ad29453cf365a]*/
 {
     if(_PyImmutability_Freeze(obj) < 0){
         return NULL;
@@ -105,8 +105,8 @@ Check if an object is frozen.
 [clinic start generated code]*/
 
 static PyObject *
-immutable_isfrozen(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=7c10bf6e5f8e4639 input=23d5da80f538c315]*/
+_immutable_isfrozen(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=5857a038e2a68ed7 input=8dc5ebd880c4c8b2]*/
 {
     if(_Py_IsImmutable(obj)){
         Py_RETURN_TRUE;
@@ -140,9 +140,9 @@ PyDoc_STRVAR(immutable_module_doc,
 "making them immutable at runtime.");
 
 static struct PyMethodDef immutable_methods[] = {
-    IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
-    IMMUTABLE_FREEZE_METHODDEF
-    IMMUTABLE_ISFROZEN_METHODDEF
+    _IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
+    _IMMUTABLE_FREEZE_METHODDEF
+    _IMMUTABLE_ISFROZEN_METHODDEF
     { NULL, NULL }
 };
 
