@@ -28,8 +28,10 @@ PyAPI_FUNC(void) PyRegion_CommitStagedRef(PyRegion_staged_ref_t staged_ref);
 
 PyAPI_FUNC(int) _PyRegion_AddRef(PyObject *src, PyObject *tgt);
 PyAPI_FUNC(int) _PyRegion_AddRefs(PyObject *src, int tgt_count, ...);
+PyAPI_FUNC(int) _PyRegion_AddRefsArray(PyObject *src, int tgt_count, PyObject** tgt_array);
 #define PyRegion_AddRef(src, tgt) _PyRegion_AddRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
 #define PyRegion_AddRefs(src, ...) _PyRegion_AddRefs(_PyObject_CAST(src), _PyRegion_COUNT_ARGS(__VA_ARGS__), __VA_ARGS__)
+#define PyRegion_AddRefsArray(src, tgt_count, tgt_array) _PyRegion_AddRefsArray(_PyObject_CAST(src), tgt_count, tgt_array)
 
 PyAPI_FUNC(void) _PyRegion_RemoveRef(PyObject *src, PyObject *tgt);
 #define PyRegion_RemoveRef(src, tgt) _PyRegion_RemoveRef(_PyObject_CAST(src), _PyObject_CAST(tgt))
