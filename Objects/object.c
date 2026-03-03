@@ -2249,12 +2249,6 @@ static Py_hash_t none_hash(PyObject *v)
 }
 
 static int
-none_traverse(PyObject *self, visitproc visit, void *arg)
-{
-    return 0;
-}
-
-static int
 none_reachable(PyObject *self, visitproc visit, void *arg)
 {
     visit(Py_TYPE(self), arg);
