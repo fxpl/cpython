@@ -570,52 +570,6 @@ static PyObject* scc_root(PyObject* obj)
 }
 #endif
 
-static void debug_print_scc(struct FreezeState *state, PyObject* start)
-{
-#ifdef IMMUTABLE_TRACING
-    PyObject* rep = get_representative(start, state);
-    PyObject* curr = rep;
-    do
-    {
-        PyObject* next = get_next(curr, state);
-        debug_obj("SCC member: %s (%p) rc=%zu\n", curr, _Py_REFCNT(curr));
-        curr = next;
-    } while (curr != rep);
-#else
-    (void)state;
-    (void)start;
-#endif
-}
-
-static int debug_print_scc_visit(_Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
-{
-#ifdef IMMUTABLE_TRACING
-    struct FreezeState *state = (struct FreezeState *)user_data;
-    // Only print representatives.
-    if (!is_representative((PyObject*)key, state)) {
-        return 0;
-    }
-    debug("----\n");
-    PyObject* start = (PyObject*)key;
-    debug_print_scc(state, start);
-#else
-    (void)ht;
-    (void)key;
-    (void)value;
-    (void)user_data;
-#endif
-    return 0;
-}
-
-static void debug_print_all_sccs(struct FreezeState *state)
-{
-#ifdef IMMUTABLE_TRACING
-    // TODO this code needs reinstating.
-#else
-    (void)state;
-#endif
-}
-
 // During the freeze, we removed the reference counts associated
 // with the internal edges of the SCC.  This visitor detects these
 // internal edges and re-adds the reference counts to the
