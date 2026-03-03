@@ -2228,13 +2228,13 @@ int _PyRegion_AddRefs(PyObject *src, int argc, ...) {
 int _PyRegion_AddRefsArray(PyObject *src, int tgt_count, PyObject** tgt_array) {
     Py_region_t src_region = _PyRegion_Get(src);
 
-    // Stage local references
+    // Stage references
+    PyRegion_staged_ref_t staged_ref;
     if (IS_LOCAL_REGION(src_region)) {
-        return _stage_local_refs(src, tgt_count, tgt_array);
+        staged_ref = _stage_local_refs(src, tgt_count, tgt_array);
+    } else {
+        staged_ref = regiondata_stage_objects(src_region, src, tgt_count, tgt_array, NULL);
     }
-
-    // Stage the references to be added
-    PyRegion_staged_ref_t staged_ref = regiondata_stage_objects(src_region, src, tgt_count, tgt_array, NULL);
 
     if (staged_ref == PyRegion_staged_ref_ERR) {
         return -1;
