@@ -1,8 +1,11 @@
-import ctypes
 import unittest
+from test.support import import_helper
 from immutable import isfrozen
 
 from .test_common import BaseObjectTest
+
+
+ctypes = import_helper.import_module('ctypes')
 
 
 class TestCharArray(BaseObjectTest):
