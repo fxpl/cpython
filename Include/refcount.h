@@ -335,9 +335,11 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+#ifndef Py_LIMITED_API
 // Implements special logic for immutable objects.
 PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
 PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
+#endif
 
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
@@ -378,6 +380,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_INCREF_IMMORTAL_STAT_INC();
             return;
         }
+#ifndef Py_LIMITED_API
         if (_Py_IsImmutable(op)) {
             // Object is immutable.
             // Slight chance of overflow, and an issue here, so check, and
@@ -385,6 +388,11 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_RefcntAdd_Immutable(op, 1);
             return;
         }
+#else
+        // Immutable object in limited API: delegate to runtime function
+        Py_IncRef(op);
+        return;
+#endif
     }
     op->ob_refcnt = (uint32_t)cur_refcnt + 1;
 #else
@@ -393,6 +401,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_INCREF_IMMORTAL_STAT_INC();
             return;
         }
+#ifndef Py_LIMITED_API
         if (_Py_IsImmutable(op)) {
             // Object is immutable.
             // Slight chance of overflow, and an issue here, so check, and
@@ -400,6 +409,11 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             _Py_RefcntAdd_Immutable(op, 1);
             return;
         }
+#else
+        // Immutable object in limited API: delegate to runtime function
+        Py_IncRef(op);
+        return;
+#endif
     }
     op->ob_refcnt++;
 #endif
@@ -537,6 +551,7 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
+#ifndef Py_LIMITED_API
         if (_Py_IsImmutable(op))
         {
             if (_Py_DecRef_Immutable(op)) {
@@ -544,6 +559,11 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
             }
             return;
         }
+#else
+        // Immutable object in limited API: delegate to runtime function
+        Py_DecRef(op);
+        return;
+#endif
     }
     _Py_DECREF_STAT_INC();
     if (--op->ob_refcnt == 0) {
