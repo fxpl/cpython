@@ -22,7 +22,8 @@ print(f"{s1}")
 s2 = set(r.arr2)
 print(f"Region after creating set2: {r}")
 print(f"{s2}")
-input("Press Enter to create set intersection...")
-result = s1 & s2
-print(f"Region after creating set intersection: {r}")
-print(f"Intersection result: {result}")
+input("Press Enter to create set or...")
+result = s1 | s2
+# result = s1.union(s2)
+print(f"Region after creating set or: {r}")
+print(f"Or result: {result}")

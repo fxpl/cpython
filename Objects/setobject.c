@@ -1396,6 +1396,7 @@ set_copy_impl(PySetObject *so)
         return NULL;
     }
     if (set_merge_lock_held((PySetObject *)copy, (PyObject *)so) < 0) {
+        PyRegion_RemoveLocalRef(copy);
         Py_DECREF(copy);
         return NULL;
     }
@@ -1466,6 +1467,7 @@ set_union_impl(PySetObject *so, PyObject * const *others,
         if ((PyObject *)so == other)
             continue;
         if (set_update_local(result, other)) {
+            PyRegion_RemoveLocalRef(result);
             Py_DECREF(result);
             return NULL;
         }
@@ -1489,6 +1491,7 @@ set_or(PyObject *self, PyObject *other)
         return (PyObject *)result;
     }
     if (set_update_local(result, other)) {
+        PyRegion_RemoveLocalRef(result);
         Py_DECREF(result);
         return NULL;
     }
@@ -1505,7 +1508,7 @@ set_ior(PyObject *self, PyObject *other)
     if (set_update_internal(so, other)) {
         return NULL;
     }
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 static PyObject *
@@ -1636,10 +1639,12 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
         newresult = set_intersection((PySetObject *)result, other);
         Py_END_CRITICAL_SECTION2();
         if (newresult == NULL) {
+            PyRegion_RemoveLocalRef(result);
             Py_DECREF(result);
             return NULL;
         }
-        Py_SETREF(result, newresult);
+        PyRegion_XSETLOCALREF(result, newresult);
+        // Py_SETREF(result, newresult);
     }
     return result;
 }
@@ -1653,6 +1658,7 @@ set_intersection_update(PySetObject *so, PyObject *other)
     if (tmp == NULL)
         return NULL;
     set_swap_bodies(so, (PySetObject *)tmp);
+    PyRegion_RemoveLocalRef(tmp);
     Py_DECREF(tmp);
     Py_RETURN_NONE;
 }
@@ -1678,6 +1684,7 @@ set_intersection_update_multi_impl(PySetObject *so, PyObject * const *others,
     Py_BEGIN_CRITICAL_SECTION(so);
     set_swap_bodies(so, (PySetObject *)tmp);
     Py_END_CRITICAL_SECTION();
+    PyRegion_RemoveLocalRef(tmp);
     Py_DECREF(tmp);
     Py_RETURN_NONE;
 }
@@ -1712,8 +1719,9 @@ set_iand(PyObject *self, PyObject *other)
 
     if (result == NULL)
         return NULL;
+    PyRegion_RemoveLocalRef(result);
     Py_DECREF(result);
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 /*[clinic input]
@@ -1751,8 +1759,12 @@ set_isdisjoint_impl(PySetObject *so, PyObject *other)
         }
         while (set_next((PySetObject *)other, &pos, &entry)) {
             PyObject *key = entry->key;
+            if(PyRegion_AddLocalRef(key)) {
+                return NULL;
+            }
             Py_INCREF(key);
             rv = set_contains_entry(so, key, entry->hash);
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
             if (rv < 0) {
                 return NULL;
@@ -1770,16 +1782,20 @@ set_isdisjoint_impl(PySetObject *so, PyObject *other)
 
     while ((key = PyIter_Next(it)) != NULL) {
         rv = set_contains_key(so, key);
+        PyRegion_RemoveLocalRef(key);
         Py_DECREF(key);
         if (rv < 0) {
+            PyRegion_RemoveLocalRef(it);
             Py_DECREF(it);
             return NULL;
         }
         if (rv) {
+            PyRegion_RemoveLocalRef(it);
             Py_DECREF(it);
             Py_RETURN_FALSE;
         }
     }
+    PyRegion_RemoveLocalRef(it);
     Py_DECREF(it);
     if (PyErr_Occurred())
         return NULL;
@@ -2036,6 +2052,7 @@ set_difference_multi_impl(PySetObject *so, PyObject * const *others,
         rv = set_difference_update_internal((PySetObject *)result, other);
         Py_END_CRITICAL_SECTION();
         if (rv) {
+            assert(PyRegion_IsLocal(result));
             Py_DECREF(result);
             return NULL;
         }
@@ -2071,7 +2088,7 @@ set_isub(PyObject *self, PyObject *other)
     if (rv < 0) {
         return NULL;
     }
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 static int
@@ -2084,18 +2101,24 @@ set_symmetric_difference_update_dict(PySetObject *so, PyObject *other)
     PyObject *key, *value;
     Py_hash_t hash;
     while (_PyDict_Next(other, &pos, &key, &value, &hash)) {
+        if(PyRegion_AddLocalRef(key)) {
+            return -1;
+        }
         Py_INCREF(key);
         int rv = set_discard_entry(so, key, hash);
         if (rv < 0) {
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
             return -1;
         }
         if (rv == DISCARD_NOTFOUND) {
             if (set_add_entry(so, key, hash)) {
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(key);
                 return -1;
             }
         }
+        PyRegion_RemoveLocalRef(key);
         Py_DECREF(key);
     }
     return 0;
@@ -2110,19 +2133,25 @@ set_symmetric_difference_update_set(PySetObject *so, PySetObject *other)
     Py_ssize_t pos = 0;
     setentry *entry;
     while (set_next(other, &pos, &entry)) {
-        PyObject *key = Py_NewRef(entry->key);
+        PyObject *key = PyRegion_NewRef(entry->key);
+        if(key == NULL) {
+            return -1;
+        }
         Py_hash_t hash = entry->hash;
         int rv = set_discard_entry(so, key, hash);
         if (rv < 0) {
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
             return -1;
         }
         if (rv == DISCARD_NOTFOUND) {
             if (set_add_entry(so, key, hash)) {
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(key);
                 return -1;
             }
         }
+        PyRegion_RemoveLocalRef(key);
         Py_DECREF(key);
     }
     return 0;
@@ -2167,6 +2196,7 @@ set_symmetric_difference_update_impl(PySetObject *so, PyObject *other)
         rv = set_symmetric_difference_update_set(so, otherset);
         Py_END_CRITICAL_SECTION();
 
+        PyRegion_RemoveLocalRef(otherset);
         Py_DECREF(otherset);
     }
     if (rv < 0) {
@@ -2194,10 +2224,12 @@ set_symmetric_difference_impl(PySetObject *so, PyObject *other)
         return NULL;
     }
     if (set_update_lock_held(result, other) < 0) {
+        PyRegion_RemoveLocalRef(result);
         Py_DECREF(result);
         return NULL;
     }
     if (set_symmetric_difference_update_set(result, so) < 0) {
+        PyRegion_RemoveLocalRef(result);
         Py_DECREF(result);
         return NULL;
     }
@@ -2225,8 +2257,9 @@ set_ixor(PyObject *self, PyObject *other)
     result = set_symmetric_difference_update((PyObject*)so, other);
     if (result == NULL)
         return NULL;
+    PyRegion_RemoveLocalRef(result);
     Py_DECREF(result);
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 /*[clinic input]
@@ -2253,6 +2286,7 @@ set_issubset_impl(PySetObject *so, PyObject *other)
             return NULL;
         }
         int result = (PySet_GET_SIZE(tmp) == PySet_GET_SIZE(so));
+        PyRegion_RemoveLocalRef(tmp);
         Py_DECREF(tmp);
         return PyBool_FromLong(result);
     }
@@ -2261,8 +2295,12 @@ set_issubset_impl(PySetObject *so, PyObject *other)
 
     while (set_next(so, &pos, &entry)) {
         PyObject *key = entry->key;
+        if(PyRegion_AddLocalRef(key)) {
+            return NULL;
+        }
         Py_INCREF(key);
         rv = set_contains_entry((PySetObject *)other, key, entry->hash);
+        PyRegion_RemoveLocalRef(key);
         Py_DECREF(key);
         if (rv < 0) {
             return NULL;
@@ -2298,16 +2336,20 @@ set_issuperset_impl(PySetObject *so, PyObject *other)
     }
     while ((key = PyIter_Next(it)) != NULL) {
         int rv = set_contains_key(so, key);
+        PyRegion_RemoveLocalRef(key);
         Py_DECREF(key);
         if (rv < 0) {
+            PyRegion_RemoveLocalRef(it);
             Py_DECREF(it);
             return NULL;
         }
         if (!rv) {
+            PyRegion_AddLocalRef(it);
             Py_DECREF(it);
             Py_RETURN_FALSE;
         }
     }
+    PyRegion_RemoveLocalRef(it);
     Py_DECREF(it);
     if (PyErr_Occurred()) {
         return NULL;
@@ -2578,6 +2620,9 @@ set___reduce___impl(PySetObject *so)
         goto done;
     result = PyTuple_Pack(3, Py_TYPE(so), args, state);
 done:
+    assert(PyRegion_IsLocal(args) || args == NULL);
+    assert(PyRegion_IsLocal(keys) || keys == NULL);
+    assert(PyRegion_IsLocal(state) || state == NULL);
     Py_XDECREF(args);
     Py_XDECREF(keys);
     Py_XDECREF(state);
@@ -2707,7 +2752,6 @@ static PyNumberMethods set_as_number = {
     0,                                  /*nb_lshift*/
     0,                                  /*nb_rshift*/
     set_and,                            /*nb_and*/
-    // TODO
     set_xor,                            /*nb_xor*/
     set_or,                             /*nb_or*/
     0,                                  /*nb_int*/
@@ -2745,7 +2789,7 @@ PyTypeObject PySet_Type = {
     set_repr,                           /* tp_repr */ // Done
     // TODO after set_iter: Seem to be a lot T^T
     &set_as_number,                     /* tp_as_number */
-    &set_as_sequence,                   /* tp_as_sequence */
+    &set_as_sequence,                   /* tp_as_sequence */ // Done
     0,                                  /* tp_as_mapping */
     PyObject_HashNotImplemented,        /* tp_hash */
     0,                                  /* tp_call */
@@ -2757,8 +2801,8 @@ PyTypeObject PySet_Type = {
         Py_TPFLAGS_BASETYPE |
         _Py_TPFLAGS_MATCH_SELF,         /* tp_flags */
     set_doc,                            /* tp_doc */
-    set_traverse,                       /* tp_traverse */
-    set_clear_internal,                 /* tp_clear */
+    set_traverse,                       /* tp_traverse */ // Done
+    set_clear_internal,                 /* tp_clear */ // Done
     set_richcompare,                    /* tp_richcompare */
     offsetof(PySetObject, weakreflist), /* tp_weaklistoffset */
     set_iter,                           /* tp_iter */ // Done, along with setiter_***.
@@ -2773,7 +2817,7 @@ PyTypeObject PySet_Type = {
     0,                                  /* tp_dictoffset */
     set_init,                           /* tp_init */
     PyType_GenericAlloc,                /* tp_alloc */
-    set_new,                            /* tp_new */ // Almost Done. ASK FRED on dict case.
+    set_new,                            /* tp_new */ // Done
     PyObject_GC_Del,                    /* tp_free */
     .tp_vectorcall = set_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_SET,
@@ -2812,7 +2856,6 @@ static PyNumberMethods frozenset_as_number = {
     0,                                  /*nb_invert*/
     0,                                  /*nb_lshift*/
     0,                                  /*nb_rshift*/
-    // TODO
     set_and,                            /*nb_and*/
     set_xor,                            /*nb_xor*/
     set_or,                             /*nb_or*/
