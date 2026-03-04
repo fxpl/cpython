@@ -136,6 +136,13 @@ cell_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
+cell_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(Py_TYPE(self));
+    return cell_traverse(self, visit, arg);
+}
+
+static int
 cell_clear(PyObject *self)
 {
     PyCellObject *op = _PyCell_CAST(self);
@@ -218,4 +225,5 @@ PyTypeObject PyCell_Type = {
     0,                                          /* tp_alloc */
     cell_new,                                   /* tp_new */
     0,                                          /* tp_free */
+    .tp_reachable = cell_reachable,
 };

@@ -714,6 +714,13 @@ descr_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+descr_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return descr_traverse(self, visit, arg);
+}
+
 PyTypeObject PyMethodDescr_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "method_descriptor",
@@ -751,6 +758,7 @@ PyTypeObject PyMethodDescr_Type = {
     0,                                          /* tp_dict */
     method_get,                                 /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = descr_reachable,
 };
 
 /* This is for METH_CLASS in C, not for "f = classmethod(f)" in Python! */
@@ -789,6 +797,7 @@ PyTypeObject PyClassMethodDescr_Type = {
     0,                                          /* tp_dict */
     classmethod_get,                            /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = descr_reachable,
 };
 
 PyTypeObject PyMemberDescr_Type = {
@@ -826,6 +835,7 @@ PyTypeObject PyMemberDescr_Type = {
     0,                                          /* tp_dict */
     member_get,                                 /* tp_descr_get */
     member_set,                                 /* tp_descr_set */
+    .tp_reachable = descr_reachable,
 };
 
 PyTypeObject PyGetSetDescr_Type = {
@@ -863,6 +873,7 @@ PyTypeObject PyGetSetDescr_Type = {
     0,                                          /* tp_dict */
     getset_get,                                 /* tp_descr_get */
     getset_set,                                 /* tp_descr_set */
+    .tp_reachable = descr_reachable,
 };
 
 PyTypeObject PyWrapperDescr_Type = {
@@ -901,6 +912,7 @@ PyTypeObject PyWrapperDescr_Type = {
     0,                                          /* tp_dict */
     wrapperdescr_get,                           /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = descr_reachable,
 };
 
 static PyDescrObject *
@@ -1229,6 +1241,13 @@ mappingproxy_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+mappingproxy_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return mappingproxy_traverse(self, visit, arg);
+}
+
 static PyObject *
 mappingproxy_richcompare(PyObject *self, PyObject *w, int op)
 {
@@ -1449,6 +1468,13 @@ wrapper_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+wrapper_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return wrapper_traverse(self, visit, arg);
+}
+
 PyTypeObject _PyMethodWrapper_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "method-wrapper",                           /* tp_name */
@@ -1485,6 +1511,7 @@ PyTypeObject _PyMethodWrapper_Type = {
     0,                                          /* tp_dict */
     0,                                          /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = wrapper_reachable,
 };
 
 PyObject *
@@ -1988,6 +2015,13 @@ property_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
+property_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return property_traverse(self, visit, arg);
+}
+
+static int
 property_clear(PyObject *self)
 {
     propertyobject *pp = (propertyobject *)self;
@@ -2038,6 +2072,7 @@ PyTypeObject PyDictProxy_Type = {
     0,                                          /* tp_init */
     0,                                          /* tp_alloc */
     mappingproxy_new,                           /* tp_new */
+    .tp_reachable = mappingproxy_reachable,
 };
 
 PyTypeObject PyProperty_Type = {
@@ -2082,4 +2117,5 @@ PyTypeObject PyProperty_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = property_reachable,
 };

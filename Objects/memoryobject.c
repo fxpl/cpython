@@ -144,6 +144,13 @@ mbuf_traverse(PyObject *_self, visitproc visit, void *arg)
 }
 
 static int
+mbuf_reachable(PyObject *_self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(_self)));
+    return mbuf_traverse(_self, visit, arg);
+}
+
+static int
 mbuf_clear(PyObject *_self)
 {
     _PyManagedBufferObject *self = (_PyManagedBufferObject *)_self;
@@ -175,7 +182,8 @@ PyTypeObject _PyManagedBuffer_Type = {
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, /* tp_flags */
     0,                                       /* tp_doc */
     mbuf_traverse,                           /* tp_traverse */
-    mbuf_clear                               /* tp_clear */
+    mbuf_clear,                              /* tp_clear */
+    .tp_reachable = mbuf_reachable,
 };
 
 
@@ -3554,6 +3562,20 @@ memory_iter(PyObject *seq)
     return (PyObject *)it;
 }
 
+static int
+memoryiter_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return memoryiter_traverse(self, visit, arg);
+}
+
+static int
+memory_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return memory_traverse(self, visit, arg);
+}
+
 PyTypeObject _PyMemoryIter_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     .tp_name = "memory_iterator",
@@ -3565,6 +3587,7 @@ PyTypeObject _PyMemoryIter_Type = {
     .tp_traverse = memoryiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = memoryiter_next,
+    .tp_reachable = memoryiter_reachable,
 };
 
 PyTypeObject PyMemoryView_Type = {
@@ -3607,4 +3630,5 @@ PyTypeObject PyMemoryView_Type = {
     0,                                        /* tp_init */
     0,                                        /* tp_alloc */
     memoryview,                               /* tp_new */
+    .tp_reachable = memory_reachable,
 };

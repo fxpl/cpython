@@ -666,6 +666,13 @@ slice_hash(PyObject *op)
     return acc;
 }
 
+static int
+slice_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return slice_traverse(self, visit, arg);
+}
+
 PyTypeObject PySlice_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "slice",                    /* Name of this type */
@@ -705,4 +712,5 @@ PyTypeObject PySlice_Type = {
     0,                                          /* tp_init */
     0,                                          /* tp_alloc */
     slice_new,                                  /* tp_new */
+    .tp_reachable = slice_reachable,
 };

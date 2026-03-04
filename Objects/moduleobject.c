@@ -1547,6 +1547,13 @@ static PyGetSetDef module_getsets[] = {
     {NULL}
 };
 
+static int
+module_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return module_traverse(self, visit, arg);
+}
+
 PyTypeObject PyModule_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "module",                                   /* tp_name */
@@ -1597,6 +1604,7 @@ PyTypeObject PyModule_Type = {
     0,                                          /* tp_alloc */
     new_module,                                 /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = module_reachable,
 };
 
 PyTypeObject PyImmModule_Type = {
@@ -1642,4 +1650,5 @@ PyTypeObject PyImmModule_Type = {
     // TODO: Custom new for direct immutable
     new_module,                                 /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = module_reachable,
 };

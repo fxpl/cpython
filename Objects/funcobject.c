@@ -1205,6 +1205,13 @@ func_descr_get(PyObject *func, PyObject *obj, PyObject *type)
     return PyMethod_New(func, obj);
 }
 
+static int
+func_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return func_traverse(self, visit, arg);
+}
+
 PyTypeObject PyFunction_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "function",
@@ -1246,6 +1253,7 @@ PyTypeObject PyFunction_Type = {
     0,                                          /* tp_init */
     0,                                          /* tp_alloc */
     func_new,                                   /* tp_new */
+    .tp_reachable = func_reachable,
 };
 
 
@@ -1688,6 +1696,13 @@ sm_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
+sm_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return sm_traverse(self, visit, arg);
+}
+
+static int
 sm_clear(PyObject *self)
 {
     staticmethod *sm = _PyStaticMethod_CAST(self);
@@ -1861,6 +1876,7 @@ PyTypeObject PyStaticMethod_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = sm_reachable,
 };
 
 PyObject *

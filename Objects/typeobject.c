@@ -214,6 +214,9 @@ slot_tp_setattro(PyObject *self, PyObject *name, PyObject *value);
 static PyObject *
 slot_tp_call(PyObject *self, PyObject *args, PyObject *kwds);
 
+static int
+type_reachable(PyObject *self, visitproc visit, void *arg);
+
 static inline PyTypeObject *
 type_from_ref(PyObject *ref)
 {
@@ -6976,6 +6979,41 @@ type_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
+type_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    PyTypeObject *type = PyTypeObject_CAST(self);
+
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+
+    Py_VISIT(lookup_tp_dict(type));
+    Py_VISIT(type->tp_cache);
+    Py_VISIT(lookup_tp_mro(type));
+    Py_VISIT(lookup_tp_bases(type));
+    Py_VISIT(type->tp_base);
+
+    /* Do NOT visit tp_subclasses or tp_weaklist here.
+     *
+     * tp_subclasses is a dict of weak references to subclasses — following
+     * it would pull every subclass into the freeze graph when freezing a
+     * base type, which is almost never desirable.
+     *
+     * tp_weaklist is the head of the weak-reference list *to* this type
+     * object; the type does not own those weak-reference holders, so they
+     * must not be dragged into the freeze graph either.
+     */
+
+    if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
+        PyHeapTypeObject *ht = (PyHeapTypeObject *)type;
+        Py_VISIT(ht->ht_module);
+        Py_VISIT(ht->ht_name);
+        Py_VISIT(ht->ht_qualname);
+        Py_VISIT(ht->ht_slots);
+    }
+
+    return 0;
+}
+
+static int
 type_clear(PyObject *self)
 {
     PyTypeObject *type = PyTypeObject_CAST(self);
@@ -7079,6 +7117,7 @@ PyTypeObject PyType_Type = {
     PyObject_GC_Del,                            /* tp_free */
     type_is_gc,                                 /* tp_is_gc */
     .tp_vectorcall = type_vectorcall,
+    .tp_reachable = type_reachable,
 };
 
 
@@ -8500,6 +8539,7 @@ inherit_special(PyTypeObject *type, PyTypeObject *base)
     COPYVAL(tp_itemsize);
     COPYVAL(tp_weaklistoffset);
     COPYVAL(tp_dictoffset);
+
 
 #undef COPYVAL
 
@@ -10956,6 +10996,13 @@ bufferwrapper_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
+static int
+bufferwrapper_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return bufferwrapper_traverse(self, visit, arg);
+}
+
 static void
 bufferwrapper_dealloc(PyObject *self)
 {
@@ -11006,6 +11053,7 @@ PyTypeObject _PyBufferWrapper_Type = {
     .tp_alloc = PyType_GenericAlloc,
     .tp_free = PyObject_GC_Del,
     .tp_traverse = bufferwrapper_traverse,
+    .tp_reachable = bufferwrapper_reachable,
     .tp_dealloc = bufferwrapper_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_as_buffer = &bufferwrapper_as_buffer,

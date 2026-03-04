@@ -2589,6 +2589,13 @@ PyDoc_STRVAR(set_doc,
 \n\
 Build an unordered collection of unique elements.");
 
+static int
+set_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return set_traverse(self, visit, arg);
+}
+
 PyTypeObject PySet_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "set",                              /* tp_name */
@@ -2633,6 +2640,7 @@ PyTypeObject PySet_Type = {
     set_new,                            /* tp_new */
     PyObject_GC_Del,                    /* tp_free */
     .tp_vectorcall = set_vectorcall,
+    .tp_reachable = set_reachable,
     .tp_version_tag = _Py_TYPE_VERSION_SET,
 };
 
@@ -2724,6 +2732,7 @@ PyTypeObject PyFrozenSet_Type = {
     frozenset_new,                      /* tp_new */
     PyObject_GC_Del,                    /* tp_free */
     .tp_vectorcall = frozenset_vectorcall,
+    .tp_reachable = set_reachable,
     .tp_version_tag = _Py_TYPE_VERSION_FROZEN_SET,
 };
 

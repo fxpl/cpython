@@ -4715,37 +4715,68 @@ dict_popitem_impl(PyDictObject *self)
 }
 
 static int
-dict_traverse(PyObject *op, visitproc visit, void *arg)
+dict_visit(PyObject *op, visitproc visit, void *arg, bool visit_all)
 {
     PyDictObject *mp = (PyDictObject *)op;
     PyDictKeysObject *keys = mp->ma_keys;
-    Py_ssize_t i, n = keys->dk_nentries;
+    Py_ssize_t n = keys->dk_nentries;
 
     if (DK_IS_UNICODE(keys)) {
+        PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
         if (_PyDict_HasSplitTable(mp)) {
-            if (!mp->ma_values->embedded) {
-                for (i = 0; i < n; i++) {
-                    Py_VISIT(mp->ma_values->values[i]);
+            if (!visit_all && mp->ma_values->embedded) {
+                return 0;
+            }
+            PyObject **values = mp->ma_values->values;
+            for (Py_ssize_t i = 0; i < n; i++) {
+                PyObject *value = values[i];
+                if (value == NULL) {
+                    continue;
                 }
+                if (visit_all) {
+                    Py_VISIT(entries[i].me_key);
+                }
+                Py_VISIT(value);
             }
         }
         else {
-            PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
-            for (i = 0; i < n; i++) {
-                Py_VISIT(entries[i].me_value);
+            for (Py_ssize_t i = 0; i < n; i++) {
+                PyObject *value = entries[i].me_value;
+                if (value == NULL) {
+                    continue;
+                }
+                if (visit_all) {
+                    Py_VISIT(entries[i].me_key);
+                }
+                Py_VISIT(value);
             }
         }
     }
     else {
         PyDictKeyEntry *entries = DK_ENTRIES(keys);
-        for (i = 0; i < n; i++) {
-            if (entries[i].me_value != NULL) {
-                Py_VISIT(entries[i].me_value);
-                Py_VISIT(entries[i].me_key);
+        for (Py_ssize_t i = 0; i < n; i++) {
+            PyObject *value = entries[i].me_value;
+            if (value == NULL) {
+                continue;
             }
+            Py_VISIT(value);
+            Py_VISIT(entries[i].me_key);
         }
     }
     return 0;
+}
+
+static int
+dict_traverse(PyObject *op, visitproc visit, void *arg)
+{
+    return dict_visit(op, visit, arg, false);
+}
+
+static int
+dict_reachable(PyObject *op, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
+    return dict_visit(op, visit, arg, true);
 }
 
 static int
@@ -5072,6 +5103,7 @@ PyTypeObject PyDict_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = dict_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_DICT,
+    .tp_reachable = dict_reachable,
 };
 
 /* For backward compatibility with old dictionary interface */
@@ -5224,6 +5256,13 @@ dictiter_traverse(PyObject *self, visitproc visit, void *arg)
     Py_VISIT(di->di_dict);
     Py_VISIT(di->di_result);
     return 0;
+}
+
+static int
+dictiter_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return dictiter_traverse(self, visit, arg);
 }
 
 static PyObject *
@@ -5381,6 +5420,7 @@ PyTypeObject PyDictIterKey_Type = {
     dictiter_iternextkey,                       /* tp_iternext */
     dictiter_methods,                           /* tp_methods */
     0,
+    .tp_reachable = dictiter_reachable,
 };
 
 #ifndef Py_GIL_DISABLED
@@ -5504,6 +5544,7 @@ PyTypeObject PyDictIterValue_Type = {
     dictiter_iternextvalue,                     /* tp_iternext */
     dictiter_methods,                           /* tp_methods */
     0,
+    .tp_reachable = dictiter_reachable,
 };
 
 static int
@@ -5813,6 +5854,7 @@ PyTypeObject PyDictIterItem_Type = {
     dictiter_iternextitem,                      /* tp_iternext */
     dictiter_methods,                           /* tp_methods */
     0,
+    .tp_reachable = dictiter_reachable,
 };
 
 
@@ -5939,7 +5981,8 @@ PyTypeObject PyDictRevIterKey_Type = {
     .tp_traverse = dictiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = dictreviter_iternext,
-    .tp_methods = dictiter_methods
+    .tp_methods = dictiter_methods,
+    .tp_reachable = dictiter_reachable,
 };
 
 
@@ -5981,7 +6024,8 @@ PyTypeObject PyDictRevIterItem_Type = {
     .tp_traverse = dictiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = dictreviter_iternext,
-    .tp_methods = dictiter_methods
+    .tp_methods = dictiter_methods,
+    .tp_reachable = dictiter_reachable,
 };
 
 PyTypeObject PyDictRevIterValue_Type = {
@@ -5993,7 +6037,8 @@ PyTypeObject PyDictRevIterValue_Type = {
     .tp_traverse = dictiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = dictreviter_iternext,
-    .tp_methods = dictiter_methods
+    .tp_methods = dictiter_methods,
+    .tp_reachable = dictiter_reachable,
 };
 
 /***********************************************/
@@ -6018,6 +6063,13 @@ dictview_traverse(PyObject *self, visitproc visit, void *arg)
     _PyDictViewObject *dv = (_PyDictViewObject *)self;
     Py_VISIT(dv->dv_dict);
     return 0;
+}
+
+static int
+dictview_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
+    return dictview_traverse(self, visit, arg);
 }
 
 static Py_ssize_t
@@ -6596,6 +6648,7 @@ PyTypeObject PyDictKeys_Type = {
     0,                                          /* tp_iternext */
     dictkeys_methods,                           /* tp_methods */
     .tp_getset = dictview_getset,
+    .tp_reachable = dictview_reachable,
 };
 
 /*[clinic input]
@@ -6708,6 +6761,7 @@ PyTypeObject PyDictItems_Type = {
     0,                                          /* tp_iternext */
     dictitems_methods,                          /* tp_methods */
     .tp_getset = dictview_getset,
+    .tp_reachable = dictview_reachable,
 };
 
 /*[clinic input]
@@ -6798,6 +6852,7 @@ PyTypeObject PyDictValues_Type = {
     0,                                          /* tp_iternext */
     dictvalues_methods,                         /* tp_methods */
     .tp_getset = dictview_getset,
+    .tp_reachable = dictview_reachable,
 };
 
 /*[clinic input]
