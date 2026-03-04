@@ -67,7 +67,7 @@ Objects/memoryobject.c	-	PyMemoryView_Type	-
 Objects/memoryobject.c	-	_PyManagedBuffer_Type	-
 Objects/methodobject.c	-	PyCFunction_Type	-
 Objects/methodobject.c	-	PyCMethod_Type	-
-Objects/moduleobject.c	-	PyImmModule_Type	-
+Objects/moduleobject.c	-	_PyImmModule_Type	-
 Objects/moduleobject.c	-	PyModuleDef_Type	-
 Objects/moduleobject.c	-	PyModule_Type	-
 Objects/namespaceobject.c	-	_PyNamespace_Type	-
