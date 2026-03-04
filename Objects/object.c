@@ -2251,7 +2251,7 @@ static Py_hash_t none_hash(PyObject *v)
 static int
 none_reachable(PyObject *self, visitproc visit, void *arg)
 {
-    visit(Py_TYPE(self), arg);
+    visit(_PyObject_CAST(Py_TYPE(self)), arg);
     return 0;
 }
 
