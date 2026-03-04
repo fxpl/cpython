@@ -796,6 +796,13 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
     Py_CLEAR(interp->immutability.blocking_on);
     Py_CLEAR(interp->immutability.freezable_types);
     Py_CLEAR(interp->immutability.destroy_cb);
+    if (interp->immutability.warned_types != NULL) {
+        _Py_hashtable_destroy(interp->immutability.warned_types);
+        interp->immutability.warned_types = NULL;
+    }
+#ifdef Py_DEBUG
+    Py_CLEAR(interp->immutability.traceback_func);
+#endif
 
     Py_CLEAR(interp->sysdict_copy);
     Py_CLEAR(interp->builtins_copy);
