@@ -111,8 +111,12 @@ set_lookkey(PySetObject *so, PyObject *key, Py_hash_t hash)
                         return NULL;
                 } else {
                     // incref startkey because it can be removed from the set by the compare
+                    if(PyRegion_AddLocalRef(startkey)) {
+                        return NULL;
+                    }
                     Py_INCREF(startkey);
                     cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+                    PyRegion_RemoveLocalRef(startkey);
                     Py_DECREF(startkey);
                     if (cmp < 0)
                         return NULL;
@@ -418,9 +422,12 @@ set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
     if (entry->key == NULL)
         return DISCARD_NOTFOUND;
     old_key = entry->key;
+    // I don't think barrier should be handled for dummy
     entry->key = dummy;
     entry->hash = -1;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
+    // Use RemoveRef since old_key refers to "entry", which refers to "so"
+    PyRegion_RemoveRef(so, old_key);
     Py_DECREF(old_key);
     return DISCARD_FOUND;
 }
@@ -516,6 +523,7 @@ set_clear_internal(PyObject *self)
     for (entry = table; used > 0; entry++) {
         if (entry->key && entry->key != dummy) {
             used--;
+            PyRegion_RemoveRef(so, entry->key);
             Py_DECREF(entry->key);
         }
     }
@@ -696,16 +704,39 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
     /* If our table is empty, and both tables have the same size, and
        there are no dummies to eliminate, then just copy the pointers. */
     if (so->fill == 0 && so->mask == other->mask && other->fill == other->used) {
+        /* Collect keys into a temporary array for PyRegion_AddRefsArray */
+        assert(other->table != NULL);
+        PyObject **keys_array = PyMem_New(PyObject*, other->used);
+        if (keys_array == NULL) {
+            PyErr_NoMemory();
+            return -1;
+        }
+        /* First pass: collect keys */
+        int keys_count = 0;
+        for (i = 0; i <= other->mask; i++) {
+            key = other->table[i].key;
+            if (key != NULL) {
+                keys_array[keys_count++] = key;
+            }
+        }
+
+        /* Barrier before any key assignments */
+        if (PyRegion_AddRefsArray(so, keys_count, keys_array)) {
+            PyMem_Free(keys_array);
+            return -1;
+        }
+
+        PyMem_Free(keys_array);
+
+        /* Reset pointers before second pass */
+        so_entry = so->table;
+        other_entry = other->table;
+
+        /* Second pass: copy pointers and hashes */
         for (i = 0; i <= other->mask; i++, so_entry++, other_entry++) {
             key = other_entry->key;
             if (key != NULL) {
                 assert(so_entry->key == NULL);
-                // Not completely correct for now
-                // Still correct for when "so" is in local
-                // TODO: Use the new barrier from Fred
-                if(PyRegion_AddRef(so, key)) {
-                    return -1;
-                }
                 so_entry->key = Py_NewRef(key);
                 so_entry->hash = other_entry->hash;
             }
@@ -1133,7 +1164,6 @@ set_update_local(PySetObject *so, PyObject *other)
     else if (PyDict_CheckExact(other)) {
         int rv;
         Py_BEGIN_CRITICAL_SECTION(other);
-        // TODO: ASK FRED: using test3.py: sth goes wrong here. LRC does not increase.
         rv = set_update_dict_lock_held(so, other);
         Py_END_CRITICAL_SECTION();
         return rv;
@@ -1506,20 +1536,30 @@ set_intersection(PySetObject *so, PyObject *other)
         while (set_next((PySetObject *)other, &pos, &entry)) {
             key = entry->key;
             hash = entry->hash;
+            if(PyRegion_AddLocalRef(key)) {
+                PyRegion_RemoveLocalRef(result);
+                Py_DECREF(result);
+                return NULL;
+            }
             Py_INCREF(key);
             rv = set_contains_entry(so, key, hash);
             if (rv < 0) {
+                PyRegion_RemoveLocalRef(result);
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(result);
                 Py_DECREF(key);
                 return NULL;
             }
             if (rv) {
                 if (set_add_entry(result, key, hash)) {
+                    PyRegion_RemoveLocalRef(result);
+                    PyRegion_RemoveLocalRef(key);
                     Py_DECREF(result);
                     Py_DECREF(key);
                     return NULL;
                 }
             }
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
         }
         return (PyObject *)result;
@@ -1527,6 +1567,7 @@ set_intersection(PySetObject *so, PyObject *other)
 
     it = PyObject_GetIter(other);
     if (it == NULL) {
+        PyRegion_RemoveLocalRef(result);
         Py_DECREF(result);
         return NULL;
     }
@@ -1542,19 +1583,26 @@ set_intersection(PySetObject *so, PyObject *other)
             if (set_add_entry(result, key, hash))
                 goto error;
             if (PySet_GET_SIZE(result) >= PySet_GET_SIZE(so)) {
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(key);
                 break;
             }
         }
+        PyRegion_RemoveLocalRef(key);
         Py_DECREF(key);
     }
+    PyRegion_RemoveLocalRef(it);
     Py_DECREF(it);
     if (PyErr_Occurred()) {
+        PyRegion_RemoveLocalRef(result);
         Py_DECREF(result);
         return NULL;
     }
     return (PyObject *)result;
   error:
+    PyRegion_RemoveLocalRef(it);
+    PyRegion_RemoveLocalRef(key);
+    PyRegion_RemoveLocalRef(result);
     Py_DECREF(it);
     Py_DECREF(result);
     Py_DECREF(key);
@@ -1760,20 +1808,32 @@ set_difference_update_internal(PySetObject *so, PyObject *other)
             if (other == NULL)
                 return -1;
         } else {
+            if(PyRegion_AddLocalRef(other)) {
+                return -1;
+            }
             Py_INCREF(other);
         }
 
         while (set_next((PySetObject *)other, &pos, &entry)) {
             PyObject *key = entry->key;
+            if(PyRegion_AddLocalRef(key)) {
+                PyRegion_RemoveLocalRef(other);
+                Py_DECREF(other);
+                return -1;
+            }
             Py_INCREF(key);
+            // DONE Migration: Maybe?
             if (set_discard_entry(so, key, entry->hash) < 0) {
+                PyRegion_RemoveLocalRef(other);
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(other);
                 Py_DECREF(key);
                 return -1;
             }
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
         }
-
+        PyRegion_RemoveLocalRef(other);
         Py_DECREF(other);
     } else {
         PyObject *key, *it;
@@ -1783,12 +1843,16 @@ set_difference_update_internal(PySetObject *so, PyObject *other)
 
         while ((key = PyIter_Next(it)) != NULL) {
             if (set_discard_key(so, key) < 0) {
+                PyRegion_RemoveLocalRef(it);
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(it);
                 Py_DECREF(key);
                 return -1;
             }
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
         }
+        PyRegion_RemoveLocalRef(it);
         Py_DECREF(it);
         if (PyErr_Occurred())
             return -1;
@@ -1837,6 +1901,7 @@ set_copy_and_difference(PySetObject *so, PyObject *other)
         return NULL;
     if (set_difference_update_internal((PySetObject *) result, other) == 0)
         return result;
+    assert(PyRegion_IsLocal(result));
     Py_DECREF(result);
     return NULL;
 }
@@ -1875,20 +1940,30 @@ set_difference(PySetObject *so, PyObject *other)
         while (set_next(so, &pos, &entry)) {
             key = entry->key;
             hash = entry->hash;
+            if(PyRegion_AddLocalRef(key)) {
+                PyRegion_RemoveLocalRef(result);
+                Py_DECREF(result);
+                return NULL;
+            }
             Py_INCREF(key);
             rv = _PyDict_Contains_KnownHash(other, key, hash);
             if (rv < 0) {
+                PyRegion_RemoveLocalRef(result);
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(result);
                 Py_DECREF(key);
                 return NULL;
             }
             if (!rv) {
                 if (set_add_entry((PySetObject *)result, key, hash)) {
+                    PyRegion_RemoveLocalRef(result);
+                    PyRegion_RemoveLocalRef(key);
                     Py_DECREF(result);
                     Py_DECREF(key);
                     return NULL;
                 }
             }
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
         }
         return result;
@@ -1898,20 +1973,30 @@ set_difference(PySetObject *so, PyObject *other)
     while (set_next(so, &pos, &entry)) {
         key = entry->key;
         hash = entry->hash;
+        if(PyRegion_AddLocalRef(key)) {
+            PyRegion_RemoveLocalRef(result);
+            Py_DECREF(result);
+            return NULL;
+        }
         Py_INCREF(key);
         rv = set_contains_entry((PySetObject *)other, key, hash);
         if (rv < 0) {
+            PyRegion_RemoveLocalRef(result);
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(result);
             Py_DECREF(key);
             return NULL;
         }
         if (!rv) {
             if (set_add_entry((PySetObject *)result, key, hash)) {
+                PyRegion_RemoveLocalRef(result);
+                PyRegion_RemoveLocalRef(key);
                 Py_DECREF(result);
                 Py_DECREF(key);
                 return NULL;
             }
         }
+        PyRegion_RemoveLocalRef(key);
         Py_DECREF(key);
     }
     return result;
@@ -2622,6 +2707,7 @@ static PyNumberMethods set_as_number = {
     0,                                  /*nb_lshift*/
     0,                                  /*nb_rshift*/
     set_and,                            /*nb_and*/
+    // TODO
     set_xor,                            /*nb_xor*/
     set_or,                             /*nb_or*/
     0,                                  /*nb_int*/
@@ -2726,6 +2812,7 @@ static PyNumberMethods frozenset_as_number = {
     0,                                  /*nb_invert*/
     0,                                  /*nb_lshift*/
     0,                                  /*nb_rshift*/
+    // TODO
     set_and,                            /*nb_and*/
     set_xor,                            /*nb_xor*/
     set_or,                             /*nb_or*/

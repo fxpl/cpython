@@ -2922,6 +2922,7 @@ PyObject_GetIter(PyObject *o)
             PyErr_Format(PyExc_TypeError,
                          "%T.__iter__() must return an iterator, not %T",
                          o, res);
+            // ASK FRED: NO BARRIER NEEDED here, right?
             Py_SETREF(res, NULL);
         }
         return res;
