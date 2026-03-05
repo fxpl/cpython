@@ -1725,10 +1725,7 @@ int _Py_DecRef_Immutable(PyObject *op)
 
 #if SIZEOF_VOID_P > 4
 
-    Py_ssize_t old = _Py_atomic_add_int64(&op->ob_refcnt_full, -1);
-    // The ssize_t might be too big, so mask to 32 bits as that is the size of
-    // ob_refcnt.
-    old = old & 0xFFFFFFFF;
+    uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
 #else
     // TODO(Immutable 32): Find SCC if required.
 
@@ -1788,7 +1785,7 @@ void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
     // Increment the reference count of an immutable object.
     assert(_Py_IsImmutable(op));
 #if SIZEOF_VOID_P > 4
-    _Py_atomic_add_int64(&op->ob_refcnt_full, increment);
+    _Py_atomic_add_uint32(&op->ob_refcnt, increment);
 #else
     _Py_atomic_add_ssize(&op->ob_refcnt, increment);
 #endif
