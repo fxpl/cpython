@@ -1282,7 +1282,7 @@ make_new_frozenset(PyTypeObject *type, PyObject *iterable)
 
     if (iterable != NULL && PyFrozenSet_CheckExact(iterable)) {
         /* frozenset(f) is idempotent */
-        return Py_NewRef(iterable);
+        return PyRegion_NewRef(iterable);
     }
     return make_new_set(type, iterable);
 }
@@ -1416,7 +1416,7 @@ frozenset_copy_impl(PySetObject *so)
 /*[clinic end generated code: output=b356263526af9e70 input=fbf5bef131268dd7]*/
 {
     if (PyFrozenSet_CheckExact(so)) {
-        return Py_NewRef(so);
+        return PyRegion_NewRef(so);
     }
     return set_copy_impl(so);
 }
@@ -2381,6 +2381,7 @@ set_richcompare(PyObject *self, PyObject *w, int op)
         if (r1 == NULL)
             return NULL;
         r2 = PyObject_IsTrue(r1);
+        PyRegion_RemoveLocalRef(r1);
         Py_DECREF(r1);
         if (r2 < 0)
             return NULL;
@@ -2787,8 +2788,7 @@ PyTypeObject PySet_Type = {
     0,                                  /* tp_setattr */
     0,                                  /* tp_as_async */
     set_repr,                           /* tp_repr */ // Done
-    // TODO after set_iter: Seem to be a lot T^T
-    &set_as_number,                     /* tp_as_number */
+    &set_as_number,                     /* tp_as_number */ // Done
     &set_as_sequence,                   /* tp_as_sequence */ // Done
     0,                                  /* tp_as_mapping */
     PyObject_HashNotImplemented,        /* tp_hash */
@@ -2803,7 +2803,7 @@ PyTypeObject PySet_Type = {
     set_doc,                            /* tp_doc */
     set_traverse,                       /* tp_traverse */ // Done
     set_clear_internal,                 /* tp_clear */ // Done
-    set_richcompare,                    /* tp_richcompare */
+    set_richcompare,                    /* tp_richcompare */ // Done
     offsetof(PySetObject, weakreflist), /* tp_weaklistoffset */
     set_iter,                           /* tp_iter */ // Done, along with setiter_***.
     0,                                  /* tp_iternext */
@@ -2815,7 +2815,7 @@ PyTypeObject PySet_Type = {
     0,                                  /* tp_descr_get */
     0,                                  /* tp_descr_set */
     0,                                  /* tp_dictoffset */
-    set_init,                           /* tp_init */
+    set_init,                           /* tp_init */ // Haven't tested yet, but it should be fine.
     PyType_GenericAlloc,                /* tp_alloc */
     set_new,                            /* tp_new */ // Done
     PyObject_GC_Del,                    /* tp_free */
@@ -2879,8 +2879,8 @@ PyTypeObject PyFrozenSet_Type = {
     0,                                  /* tp_setattr */
     0,                                  /* tp_as_async */
     set_repr,                           /* tp_repr */
-    &frozenset_as_number,               /* tp_as_number */
-    &set_as_sequence,                   /* tp_as_sequence */
+    &frozenset_as_number,               /* tp_as_number */ // Done
+    &set_as_sequence,                   /* tp_as_sequence */ // Done
     0,                                  /* tp_as_mapping */
     frozenset_hash,                     /* tp_hash */
     0,                                  /* tp_call */
@@ -2889,8 +2889,8 @@ PyTypeObject PyFrozenSet_Type = {
     0,                                  /* tp_setattro */
     0,                                  /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
-        Py_TPFLAGS_BASETYPE |
-        _Py_TPFLAGS_MATCH_SELF,         /* tp_flags */
+    Py_TPFLAGS_BASETYPE |
+    _Py_TPFLAGS_MATCH_SELF,         /* tp_flags */
     frozenset_doc,                      /* tp_doc */
     set_traverse,                       /* tp_traverse */
     set_clear_internal,                 /* tp_clear */
