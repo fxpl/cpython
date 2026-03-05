@@ -166,6 +166,77 @@ static PyTypeObject HasReachable_Type = {
 
 /* ---- Module ---------------------------------------------------------- */
 
+/* ---- ShallowImmutable ------------------------------------------------ */
+/*
+ * A C-level type registered as shallow immutable via
+ * _PyImmutability_RegisterShallowImmutable.  Instances hold a single
+ * PyObject* but are declared shallow-immutable, meaning the implicit
+ * check trusts that the instance itself won't be mutated.
+ */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *value;
+} ShallowImmutableObject;
+
+static int
+si_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    ShallowImmutableObject *obj = (ShallowImmutableObject *)self;
+    Py_VISIT(obj->value);
+    return 0;
+}
+
+static int
+si_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(Py_TYPE(self));
+    return si_traverse(self, visit, arg);
+}
+
+static int
+si_clear(PyObject *self)
+{
+    ShallowImmutableObject *obj = (ShallowImmutableObject *)self;
+    Py_CLEAR(obj->value);
+    return 0;
+}
+
+static void
+si_dealloc(PyObject *self)
+{
+    PyObject_GC_UnTrack(self);
+    si_clear(self);
+    Py_TYPE(self)->tp_free(self);
+}
+
+static int
+si_init(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    ShallowImmutableObject *obj = (ShallowImmutableObject *)self;
+    PyObject *value = Py_None;
+    if (!PyArg_ParseTuple(args, "|O", &value))
+        return -1;
+    Py_XSETREF(obj->value, Py_NewRef(value));
+    return 0;
+}
+
+static PyTypeObject ShallowImmutable_Type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "_test_reachable.ShallowImmutable",
+    .tp_basicsize = sizeof(ShallowImmutableObject),
+    .tp_dealloc = si_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE,
+    .tp_doc = "C-level type registered as shallow immutable.",
+    .tp_traverse = si_traverse,
+    .tp_clear = si_clear,
+    .tp_init = si_init,
+    .tp_alloc = PyType_GenericAlloc,
+    .tp_new = PyType_GenericNew,
+    .tp_free = PyObject_GC_Del,
+    .tp_reachable = si_reachable,
+};
+
 static int
 _test_reachable_exec(PyObject *module)
 {
@@ -193,6 +264,15 @@ _test_reachable_exec(PyObject *module)
     if (PyModule_AddType(module, &HasReachable_Type) != 0)
         return -1;
     if (_PyImmutability_RegisterFreezable(&HasReachable_Type) < 0)
+        return -1;
+
+    if (PyType_Ready(&ShallowImmutable_Type) < 0)
+        return -1;
+    if (PyModule_AddType(module, &ShallowImmutable_Type) != 0)
+        return -1;
+    if (_PyImmutability_RegisterFreezable(&ShallowImmutable_Type) < 0)
+        return -1;
+    if (_PyImmutability_RegisterShallowImmutable(&ShallowImmutable_Type) < 0)
         return -1;
 
     return 0;

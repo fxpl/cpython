@@ -14,6 +14,7 @@ struct _Py_immutability_state {
     PyObject *module_locks;
     PyObject *blocking_on;
     PyObject *freezable_types;
+    _Py_hashtable_t *shallow_immutable_types;
     PyObject *destroy_cb;
     _Py_hashtable_t *warned_types;
 #ifdef Py_DEBUG
