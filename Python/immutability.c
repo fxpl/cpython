@@ -157,6 +157,40 @@ int init_state(struct _Py_immutability_state *state)
         return -1;
     }
 
+    state->shallow_immutable_types = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+    if(state->shallow_immutable_types == NULL){
+        return -1;
+    }
+
+    // Register built-in shallow immutable types.
+    // These types produce objects that are individually immutable
+    // but may reference other objects (e.g. tuple elements).
+    PyTypeObject *shallow_types[] = {
+        &PyTuple_Type,
+        &PyFrozenSet_Type,
+        &PyCode_Type,
+        &PyRange_Type,
+        &PyBytes_Type,
+        &PyUnicode_Type,
+        &PyLong_Type,
+        &PyFloat_Type,
+        &PyComplex_Type,
+        &PyBool_Type,
+        &_PyNone_Type,
+        &PyEllipsis_Type,
+        &_PyNotImplemented_Type,
+        &PyCFunction_Type,
+        NULL
+    };
+    for (int i = 0; shallow_types[i] != NULL; i++) {
+        if (_Py_hashtable_set(state->shallow_immutable_types,
+                              shallow_types[i], (void *)1) < 0) {
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -1143,41 +1177,7 @@ static int freeze_visit(PyObject* obj, void* freeze_state_untyped)
     return 0;
 }
 
-// NEEDED FOR future PR that handles shallow immutable correctly.
-// static int is_shallow_immutable(PyObject* obj)
-// {
-//     if (obj == NULL)
-//         return 0;
-//     if (Py_IS_TYPE(obj, &PyBool_Type) ||
-//         Py_IS_TYPE(obj, &_PyNone_Type) ||
-//         Py_IS_TYPE(obj, &PyLong_Type) ||
-//         Py_IS_TYPE(obj, &PyFloat_Type) ||
-//         Py_IS_TYPE(obj, &PyComplex_Type) ||
-//         Py_IS_TYPE(obj, &PyBytes_Type) ||
-//         Py_IS_TYPE(obj, &PyUnicode_Type) ||
-//         Py_IS_TYPE(obj, &PyTuple_Type) ||
-//         Py_IS_TYPE(obj, &PyFrozenSet_Type) ||
-//         Py_IS_TYPE(obj, &PyRange_Type) ||
-//         Py_IS_TYPE(obj, &PyCode_Type) ||
-//         Py_IS_TYPE(obj, &PyCFunction_Type) ||
-//         Py_IS_TYPE(obj, &PyCMethod_Type)
-//     ) {
-//         return 1;
-//     }
 
-//     // Types may be immutable, check flag.
-//     if (PyType_Check(obj))
-//     {
-//         PyTypeObject* type = (PyTypeObject*)obj;
-//         // Assume immutable types are safe to freeze.
-//         if (type->tp_flags & Py_TPFLAGS_IMMUTABLETYPE) {
-//             return 1;
-//         }
-//     }
-
-//     // TODO: Add user defined shallow immutable property
-//     return 0;
-// }
 
 static bool
 is_freezable_builtin(PyTypeObject *type)
@@ -1301,6 +1301,195 @@ int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
     result = PySet_Add(state->freezable_types, ref);
     Py_DECREF(ref);
     return result;
+}
+
+static int
+is_shallow_immutable_type(struct _Py_immutability_state *state, PyTypeObject *tp)
+{
+    return _Py_hashtable_get(state->shallow_immutable_types, (void *)tp) != NULL;
+}
+
+int _PyImmutability_RegisterShallowImmutable(PyTypeObject* tp)
+{
+    struct _Py_immutability_state *state = get_immutable_state();
+    if (state == NULL) {
+        return -1;
+    }
+
+    // Idempotent — already registered is fine.
+    if (is_shallow_immutable_type(state, tp)) {
+        return 0;
+    }
+
+    if (_Py_hashtable_set(state->shallow_immutable_types,
+                          (void *)tp, (void *)1) < 0) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    return 0;
+}
+
+// Check if a specific object is shallow immutable.
+// (a) Its type is registered as shallow immutable (e.g. tuple instances,
+//     float instances), OR
+// (b) It is itself a type object with Py_TPFLAGS_IMMUTABLETYPE set
+//     (e.g. the float type object — but not a mutable heap type).
+static int
+is_shallow_immutable(struct _Py_immutability_state *state, PyObject *obj)
+{
+    if (is_shallow_immutable_type(state, Py_TYPE(obj))) {
+        return 1;
+    }
+    if (PyType_Check(obj)) {
+        PyTypeObject *tp = (PyTypeObject *)obj;
+        if (tp->tp_flags & Py_TPFLAGS_IMMUTABLETYPE) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+struct ImplicitCheckState {
+    _Py_hashtable_t *visited;
+    struct _Py_immutability_state *imm_state;
+    PyObject *worklist;  // PyListObject used as a stack
+};
+
+// Visitor callback that adds objects to the worklist for iterative processing.
+// Returns 0 if the object can be viewed as immutable and was added to the
+// worklist, 1 if a mutable object was found, -1 on error.
+static int
+can_view_as_immutable_visit(PyObject *obj, void *arg)
+{
+    struct ImplicitCheckState *state = (struct ImplicitCheckState *)arg;
+    if (obj == NULL) {
+        return 0;
+    }
+
+    // Already visited — skip.
+    if (_Py_hashtable_get(state->visited, obj) != NULL) {
+        return 0;
+    }
+
+    // Already frozen — skip.
+    if (_Py_IsImmutable(obj)) {
+        return 0;
+    }
+
+    // Check if the object can be viewed as immutable.
+    if (!is_shallow_immutable(state->imm_state, obj)) {
+        // Found a mutable object — graph cannot be viewed as immutable.
+        return 1;
+    }
+
+    // Mark visited.
+    if (_Py_hashtable_set(state->visited, obj, (void *)1) < 0) {
+        return -1;
+    }
+
+    // Add to worklist for traversal of referents.
+    if (PyList_Append(state->worklist, obj) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int _PyImmutability_CanViewAsImmutable(PyObject *obj)
+{
+    // Check if the object graph rooted at obj can be viewed as immutable.
+    // An object graph can be viewed as immutable if every reachable object
+    // is either already frozen, or is shallow immutable (its own state
+    // cannot be mutated, though it may reference other objects).
+    //
+    // If the graph can be viewed as immutable, it is frozen (to set up
+    // proper refcount management) and 1 is returned.
+    // Returns 0 if the graph cannot be viewed as immutable, -1 on error.
+
+    // Already frozen — trivially yes.
+    if (_Py_IsImmutable(obj)) {
+        return 1;
+    }
+
+    struct _Py_immutability_state *imm_state = get_immutable_state();
+    if (imm_state == NULL) {
+        return -1;
+    }
+
+    // The root must itself be shallow immutable to be viewed as immutable.
+    if (!is_shallow_immutable(imm_state, obj))
+    {
+        return 0;
+    }
+
+    struct ImplicitCheckState state;
+    state.imm_state = imm_state;
+    state.visited = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+    if (state.visited == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    state.worklist = PyList_New(0);
+    if (state.worklist == NULL) {
+        _Py_hashtable_destroy(state.visited);
+        return -1;
+    }
+
+    // Mark root visited and seed the worklist.
+    if (_Py_hashtable_set(state.visited, obj, (void *)1) < 0) {
+        _Py_hashtable_destroy(state.visited);
+        Py_DECREF(state.worklist);
+        PyErr_NoMemory();
+        return -1;
+    }
+    if (PyList_Append(state.worklist, obj) < 0) {
+        _Py_hashtable_destroy(state.visited);
+        Py_DECREF(state.worklist);
+        return -1;
+    }
+
+    // Iterative DFS: pop from worklist, traverse referents.
+    int result = 0;
+    while (PyList_GET_SIZE(state.worklist) > 0) {
+        PyObject *item = PyList_GET_ITEM(
+            state.worklist, PyList_GET_SIZE(state.worklist) - 1);
+        Py_INCREF(item);
+        if (PyList_SetSlice(state.worklist,
+                            PyList_GET_SIZE(state.worklist) - 1,
+                            PyList_GET_SIZE(state.worklist), NULL) < 0) {
+            Py_DECREF(item);
+            result = -1;
+            break;
+        }
+
+        traverseproc reachable = get_reachable_proc(Py_TYPE(item));
+        result = reachable(item, can_view_as_immutable_visit, &state);
+        Py_DECREF(item);
+        if (result != 0) {
+            break;
+        }
+    }
+
+    _Py_hashtable_destroy(state.visited);
+    Py_DECREF(state.worklist);
+
+    if (result < 0) {
+        return -1;
+    }
+    if (result > 0) {
+        return 0;
+    }
+
+    // The graph can be viewed as immutable. Freeze to set up proper
+    // refcount management.
+    if (_PyImmutability_Freeze(obj) < 0) {
+        return -1;
+    }
+
+    return 1;
 }
 
 // Perform a decref on an immutable object

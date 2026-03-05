@@ -800,6 +800,10 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
         _Py_hashtable_destroy(interp->immutability.warned_types);
         interp->immutability.warned_types = NULL;
     }
+    if (interp->immutability.shallow_immutable_types != NULL) {
+        _Py_hashtable_destroy(interp->immutability.shallow_immutable_types);
+        interp->immutability.shallow_immutable_types = NULL;
+    }
 #ifdef Py_DEBUG
     Py_CLEAR(interp->immutability.traceback_func);
 #endif

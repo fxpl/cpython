@@ -6985,7 +6985,13 @@ type_reachable(PyObject *self, visitproc visit, void *arg)
 
     Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
 
-    Py_VISIT(lookup_tp_dict(type));
+    // Use tp_dict directly rather than lookup_tp_dict().
+    // For static builtin types, tp_dict is NULL here (the real dict is
+    // stored in per-interpreter state). This means freeze/implicit-immutability
+    // checks won't traverse into the type's method dict for builtins,
+    // which is the desired behavior — those dicts are structural internals
+    // of immutable types.
+    Py_VISIT(type->tp_dict);
     Py_VISIT(type->tp_cache);
     Py_VISIT(lookup_tp_mro(type));
     Py_VISIT(lookup_tp_bases(type));

@@ -101,17 +101,23 @@ _immutable.isfrozen
     obj: object
     /
 
-Check if an object is frozen.
+Check if an object is frozen (or can be viewed as immutable).
+
+If the object graph can be viewed as immutable, it will be frozen as a
+side effect and True is returned.
 [clinic start generated code]*/
 
 static PyObject *
 _immutable_isfrozen(PyObject *module, PyObject *obj)
 /*[clinic end generated code: output=5857a038e2a68ed7 input=8dc5ebd880c4c8b2]*/
 {
-    if(_Py_IsImmutable(obj)){
+    int result = _PyImmutability_CanViewAsImmutable(obj);
+    if (result < 0) {
+        return NULL;
+    }
+    if (result) {
         Py_RETURN_TRUE;
     }
-
     Py_RETURN_FALSE;
 }
 
