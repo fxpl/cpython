@@ -600,6 +600,16 @@ static void scc_init(PyObject* obj)
         _PyObject_GC_UNTRACK(obj);
     }
 
+    // The GC uses the collecting flag to identify objects part of the
+    // current collection set. This flag remains while the finalizer
+    // of unreachable objects is being called.
+    //
+    // If something calls `freeze(obj)` as part of their finalizer we
+    // might receive an object with the flag set. This removes the flag
+    // to prevent future GC collections to assume this object is currently
+    // being collected.
+    _PyGC_CLEAR_COLLECTING(obj);
+
     // Mark as pending so we can detect back edges in the traversal.
 
     IMMUTABLE_FLAG_FIELD(obj) |= _Py_IMMUTABLE_PENDING;
@@ -766,7 +776,7 @@ static void scc_reset_root_refcount(PyObject* obj)
 }
 
 // This will restore the reference counts for the interior edges of the SCC.
-// It calculates some properites of the SCC, to decide how it might be
+// It calculates some properties of the SCC, to decide how it might be
 // finalised.  Adds an RC to every element in the SCC.
 static void scc_add_internal_refcounts(PyObject* obj, struct SCCDetails* details)
 {
