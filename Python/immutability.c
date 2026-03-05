@@ -1791,6 +1791,48 @@ void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 #endif
 }
 
+/* Tries to incref op and returns 1 if successful or 0 otherwise.
+ * Used when creating a strong reference from a weak reference.
+ * Needs to hold the weakref list lock (LOCK_WEAKREFS).
+ */
+int _Py_TryIncref_Immutable(PyObject *op)
+{
+    assert(_Py_IsImmutable(op));
+    op = scc_root(op);
+    assert(_Py_IsImmutable(op));
+
+#if SIZEOF_VOID_P > 4
+    uint32_t old = _Py_atomic_load_uint32_relaxed(&op->ob_refcnt);
+    while (old > 0) {
+        if (_Py_atomic_compare_exchange_uint32(&op->ob_refcnt, &old, old + 1)) {
+            return 1;
+        }
+    }
+#else
+    Py_ssize_t old = _Py_atomic_load_ssize_relaxed(&op->ob_refcnt);
+    while (_Py_IMMUTABLE_FLAG_CLEAR(old) != 0) {
+        if (_Py_atomic_compare_exchange_ssize(&op->ob_refcnt, &old, old + 1)) {
+            return 1;
+        }
+    }
+#endif
+    return 0;
+}
+
+/* Returns 1 if there are no references to the object's SCC. */
+int _Py_IsDead_Immutable(PyObject *op)
+{
+    assert(_Py_IsImmutable(op));
+    op = scc_root(op);
+    assert(_Py_IsImmutable(op));
+
+#if SIZEOF_VOID_P > 4
+    return _Py_atomic_load_uint32_relaxed(&op->ob_refcnt) == 0;
+#else
+    return _Py_IMMUTABLE_FLAG_CLEAR(_Py_atomic_load_ssize_relaxed(&op->ob_refcnt)) == 0;
+#endif
+}
+
 
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
