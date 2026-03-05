@@ -24,8 +24,11 @@ PyDoc_STRVAR(_immutable_isfrozen__doc__,
 "isfrozen($module, obj, /)\n"
 "--\n"
 "\n"
-"Check if an object is frozen.");
+"Check if an object is frozen (or can be viewed as immutable).\n"
+"\n"
+"If the object graph can be viewed as immutable, it will be frozen as a\n"
+"side effect and True is returned.");
 
 #define _IMMUTABLE_ISFROZEN_METHODDEF    \
     {"isfrozen", (PyCFunction)_immutable_isfrozen, METH_O, _immutable_isfrozen__doc__},
-/*[clinic end generated code: output=95f703fa7ad82910 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=b08aeb9c23cc30c8 input=a9049054013a1b77]*/

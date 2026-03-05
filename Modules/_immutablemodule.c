@@ -109,7 +109,7 @@ side effect and True is returned.
 
 static PyObject *
 _immutable_isfrozen(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=5857a038e2a68ed7 input=8dc5ebd880c4c8b2]*/
+/*[clinic end generated code: output=5857a038e2a68ed7 input=f60302e01ab45c4d]*/
 {
     int result = _PyImmutability_CanViewAsImmutable(obj);
     if (result < 0) {
