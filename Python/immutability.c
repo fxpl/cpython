@@ -1433,122 +1433,6 @@ static void mark_all_frozen(struct FreezeState *state)
 #endif
 }
 
-/**
- * Special function for replacing globals and builtins with a copy of just what they use.
- *
- * This is necessary because the function object has a pointer to the global
- * dictionary, and this is problematic because freezing any function directly
- * (as we do with other objects) would make all globals immutable.
- *
- * Instead, we walk the function and find any places where it references
- * global variables or builtins, and then freeze just those objects. The globals
- * and builtins dictionaries for the function are then replaced with
- * copies containing just those globals and builtins we were able to determine
- * the function uses.
- */
-static int shadow_function_globals(PyObject* op)
-{
-    _PyObject_ASSERT(op, PyFunction_Check(op));
-
-    PyObject* shadow_builtins = NULL;
-    PyObject* shadow_globals = NULL;
-    PyObject* shadow_closure = NULL;
-    Py_ssize_t size;
-
-    PyFunctionObject* f = _PyFunction_CAST(op);
-    PyObject* globals = f->func_globals;
-    PyObject* builtins = f->func_builtins;
-
-    shadow_builtins = PyDict_New();
-    if(shadow_builtins == NULL){
-        goto nomemory;
-    }
-
-    debug("Shadowing builtins for function %s (%p)\n", f->func_name, f);
-    debug(" Original builtins: %p\n", builtins);
-    debug(" Shadow builtins:   %p\n", shadow_builtins);
-
-    shadow_globals = PyDict_New();
-    if(shadow_globals == NULL){
-        goto nomemory;
-    }
-    debug("Shadowing globals for function %s (%p)\n", f->func_name, f);
-    debug(" Original globals: %p\n", globals);
-    debug(" Shadow globals:   %p\n", shadow_globals);
-
-    if (PyDict_SetItemString(shadow_globals, "__builtins__", Py_NewRef(shadow_builtins))) {
-        goto error;
-    }
-
-    _PyObject_ASSERT(f->func_code, PyCode_Check(f->func_code));
-    PyCodeObject* f_code = (PyCodeObject*)f->func_code;
-
-    size = 0;
-    if (f_code->co_names != NULL)
-        size = PySequence_Fast_GET_SIZE(f_code->co_names);
-    for (Py_ssize_t i = 0; i < size; i++) {
-        PyObject* name = PySequence_Fast_GET_ITEM(f_code->co_names, i);
-
-        if( PyDict_Contains(globals, name)){
-            PyObject* value = PyDict_GetItem(globals, name);
-            if (PyDict_SetItem(shadow_globals, Py_NewRef(name), Py_NewRef(value))) {
-                goto error;
-            }
-        } else if (PyDict_Contains(builtins, name)) {
-            PyObject* value = PyDict_GetItem(builtins, name);
-            if (PyDict_SetItem(shadow_builtins, Py_NewRef(name), Py_NewRef(value))) {
-                goto error;
-            }
-        }
-    }
-
-    // Shadow cells with a new frozen cell to warn on reassignments in the
-    // capturing function.
-    size = 0;
-    if(f->func_closure != NULL) {
-        size = PyTuple_Size(f->func_closure);
-        if (size == -1) {
-            goto error;
-        }
-        shadow_closure = PyTuple_New(size);
-        if (shadow_closure == NULL) {
-            goto error;
-        }
-    }
-    for(Py_ssize_t i=0; i < size; ++i){
-        PyObject* cellvar = PyTuple_GET_ITEM(f->func_closure, i);
-        PyObject* value = PyCell_GET(cellvar);
-
-        PyObject* shadow_cellvar = PyCell_New(value);
-        if(PyTuple_SetItem(shadow_closure, i, shadow_cellvar) == -1){
-            goto error;
-        }
-    }
-
-    if (f->func_annotations == NULL) {
-        PyObject* new_annotations = PyDict_New();
-        if (new_annotations == NULL) {
-            goto nomemory;
-        }
-        f->func_annotations = new_annotations;
-    }
-
-    // Only assign them at the end when everything succeeded
-    Py_XSETREF(f->func_closure, shadow_closure);
-    Py_SETREF(f->func_globals, shadow_globals);
-    Py_SETREF(f->func_builtins, shadow_builtins);
-
-    return 0;
-
-nomemory:
-    PyErr_NoMemory();
-error:
-    Py_XDECREF(shadow_builtins);
-    Py_XDECREF(shadow_globals);
-    Py_XDECREF(shadow_closure);
-    return -1;
-}
-
 static int freeze_visit(PyObject* obj, void* freeze_state_untyped)
 {
     struct FreezeState* freeze_state = (struct FreezeState *)freeze_state_untyped;
@@ -2189,6 +2073,53 @@ static void make_weakrefs_safe(struct FreezeState* freeze_state)
 
 }
 
+static int run_pre_freeze_hook(PyObject* obj) {
+    PyObject *attr = NULL;
+
+    // Skip Python-level hook lookup for type objects. For classes,
+    // `__pre_freeze__` resolves to an unbound function and calling it as a
+    // normal bound method would fail with a missing 'self' argument.
+    if (PyType_Check(obj)) {
+        return 0;
+    }
+
+    // 0. Check if the pre-freeze hook already ran for this object
+    // TODO(immutable): Remember called hooks and return early
+
+    // 1. Pre-freeze hooks are never called for shallow immutable objects
+    // TODO(immutable): Return early for shallow immutable.
+
+    // 1. Check for the `__pre_freeze__` name
+    int res = PyObject_GetOptionalAttr(obj, &_Py_ID(__pre_freeze__), &attr);
+    if (res == -1) {
+        return -1;
+    } else if (res == 1) {
+        if (!PyCallable_Check(attr)) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "'%.200s.__pre_freeze__' is not callable",
+                Py_TYPE(obj)->tp_name);
+            Py_DECREF(attr);
+            return -1;
+        }
+        PyObject *result = PyObject_CallNoArgs(attr);
+        Py_DECREF(attr);
+        if (result == NULL) {
+            return -1;
+        }
+        Py_DECREF(result);
+    }
+
+    // 2. Check the type for `tp_prefreeze`
+    prefreezeproc prefreeze = Py_TYPE(obj)->tp_prefreeze;
+    if (prefreeze != NULL) {
+        return prefreeze(obj);
+    }
+
+    // No pre-freeze hook, so we're good to go.
+    return 0;
+}
+
 static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
 {
     //  WARNING
@@ -2208,26 +2139,6 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
         return 0;
     }
 
-    PyObject *attr = NULL;
-    if (PyObject_GetOptionalAttr(obj, &_Py_ID(__pre_freeze__), &attr) == 1)
-    {
-        PyErr_SetString(PyExc_TypeError, "Pre-freeze hocks are currently WIP");
-        Py_XDECREF(attr);
-        return -1;
-    }
-    Py_XDECREF(attr);
-
-    // Function require some work to freeze, so we do not freeze the
-    // world as they mention globals and builtins.  This will shadow what they
-    // use, and then we can freeze the those components.
-    if(PyFunction_Check(obj)){
-        SUCCEEDS(shadow_function_globals(obj));
-    }
-
-    if (PyModule_Check(obj)) {
-        SUCCEEDS(_Py_module_freeze_hook(obj));
-    }
-
     SUCCEEDS(get_reachable_proc(Py_TYPE(obj))(obj, (visitproc)freeze_visit, freeze_state));
 
     // Weak references are not followed by the GC, but should be
@@ -2236,6 +2147,10 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     if (PyWeakref_Check(obj)) {
         // Make the weak reference strong.
         // Get Ref increments the refcount.
+        //
+        // This could be done via a pre-freeze hook, but we only want to keep
+        // the strong reference if freezing succeeds. Having this as a special
+        // case makes this easier to handle.
         PyObject* wr;
         int res = PyWeakref_GetRef(obj, &wr);
         if (res == -1) {
@@ -2418,6 +2333,14 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
 
         // New object, check if freezable
         SUCCEEDS(check_freezable(imm_state, item, &freeze_state));
+
+        // Call the pre-freeze hook if one is present
+        SUCCEEDS(run_pre_freeze_hook(item));
+
+        // If the pre-freeze hook turned the object immutable, we want to skip it.
+        if (_Py_IsImmutable(item)) {
+            continue;
+        }
 
         // Add to visited before putting in internal datastructures, so don't have
         // to account of internal RC manipulations.

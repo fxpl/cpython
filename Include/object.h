@@ -358,6 +358,7 @@ typedef int(*objobjargproc)(PyObject *, PyObject *, PyObject *);
 typedef int (*objobjproc)(PyObject *, PyObject *);
 typedef int (*visitproc)(PyObject *, void *);
 typedef int (*traverseproc)(PyObject *, visitproc, void *);
+typedef int (*prefreezeproc)(PyObject *);
 
 
 typedef void (*freefunc)(void *);

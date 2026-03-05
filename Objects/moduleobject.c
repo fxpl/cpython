@@ -864,54 +864,6 @@ _PyModule_ClearDict(PyObject *d)
 
 }
 
-int _Py_module_freeze_hook(PyObject *self) {
-    // Use cast, since we want this exact object
-    PyModuleObject *m = _PyModule_CAST(self);
-
-    if (m->md_frozen) {
-        return 0;
-    }
-
-    // Get the interpreter state early to make error handling easy
-    PyInterpreterState* ip = PyInterpreterState_Get();
-    if (ip == NULL) {
-        PyErr_Format(PyExc_RuntimeError, "Well, this is a problem", Py_None);
-        return -1;
-    }
-
-    // Create a new module module
-    PyModuleObject *mut_state = new_module_notrack(&PyModule_Type);
-    if (mut_state == NULL) {
-        PyErr_NoMemory();
-        return -1;
-    }
-    track_module(mut_state);
-
-    // Insert our mutable module into `sys.mut_modules`
-    if (PyDict_SetItem(ip->mutable_modules, m->md_name, _PyObject_CAST(mut_state))) {
-        // Make sure failure keeps self intact
-        Py_DECREF(mut_state);
-        return -1;
-    }
-
-    // Copy mutable state
-    mut_state->md_name = Py_NewRef(m->md_name);
-    mut_state->md_dict = m->md_dict;
-    mut_state->md_def = m->md_def;
-    mut_state->md_state = m->md_state;
-    mut_state->md_weaklist = m->md_weaklist;
-
-    // Clear the state to freeze the module
-    m->md_dict = NULL;
-    m->md_def = NULL;
-    m->md_state = NULL;
-    m->md_weaklist = NULL;
-    m->md_frozen = true;
-    m->ob_base.ob_type = &_PyImmModule_Type;
-
-    return 0;
-}
-
 /*[clinic input]
 class module "PyModuleObject *" "&PyModule_Type"
 [clinic start generated code]*/
@@ -1553,6 +1505,61 @@ module_reachable(PyObject *self, visitproc visit, void *arg)
     return module_traverse(self, visit, arg);
 }
 
+int module_make_immutable_proxy(PyObject *self) {
+    // Use cast, since we want this exact object
+    PyModuleObject *m = _PyModule_CAST(self);
+
+    if (m->md_frozen) {
+        return 0;
+    }
+
+    // Get the interpreter state early to make error handling easy
+    PyInterpreterState* ip = PyInterpreterState_Get();
+    if (ip == NULL) {
+        PyErr_Format(PyExc_RuntimeError, "Well, this is a problem", Py_None);
+        return -1;
+    }
+
+    // Create a new module module
+    PyModuleObject *mut_state = new_module_notrack(&PyModule_Type);
+    if (mut_state == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    track_module(mut_state);
+
+    // Insert our mutable module into `sys.mut_modules`
+    if (PyDict_SetItem(ip->mutable_modules, m->md_name, _PyObject_CAST(mut_state))) {
+        // Make sure failure keeps self intact
+        Py_DECREF(mut_state);
+        return -1;
+    }
+
+    // Copy mutable state
+    mut_state->md_name = Py_NewRef(m->md_name);
+    mut_state->md_dict = m->md_dict;
+    mut_state->md_def = m->md_def;
+    mut_state->md_state = m->md_state;
+    mut_state->md_weaklist = m->md_weaklist;
+
+    // Clear the state to freeze the module
+    m->md_dict = NULL;
+    m->md_def = NULL;
+    m->md_state = NULL;
+    m->md_weaklist = NULL;
+    m->md_frozen = true;
+    m->ob_base.ob_type = &_PyImmModule_Type;
+
+    return 0;
+}
+
+int module_prefreeze(PyObject *self) {
+    // TODO(immutable): Check if the module defines a custom pre-freeze hook:
+
+    // TODO(immutable): Check if the module wants to be a proxy first:
+    return module_make_immutable_proxy(self);
+}
+
 PyTypeObject PyModule_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "module",                                   /* tp_name */
@@ -1595,6 +1602,7 @@ PyTypeObject PyModule_Type = {
     new_module,                                 /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
     .tp_reachable = module_reachable,
+    .tp_prefreeze = module_prefreeze,
 };
 
 PyTypeObject _PyImmModule_Type = {

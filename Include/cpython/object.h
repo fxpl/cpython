@@ -242,6 +242,9 @@ struct _typeobject {
 
     /* call function for all referenced objects (includes non-cyclic refs) */
     traverseproc tp_reachable;
+
+    /* A callback called before a type is frozen. */
+    prefreezeproc tp_prefreeze;
 };
 
 #define _Py_ATTR_CACHE_UNUSED (30000)  // (see tp_versions_used)
