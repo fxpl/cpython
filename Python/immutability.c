@@ -1388,7 +1388,7 @@ can_view_as_immutable_visit(PyObject *obj, void *arg)
     }
 
     // Add to worklist for traversal of referents.
-    if (PyList_Append(state->worklist, obj) < 0) {
+    if (push(state->worklist, obj) < 0) {
         return -1;
     }
 
@@ -1445,7 +1445,7 @@ int _PyImmutability_CanViewAsImmutable(PyObject *obj)
         PyErr_NoMemory();
         return -1;
     }
-    if (PyList_Append(state.worklist, obj) < 0) {
+    if (push(state.worklist, obj) < 0) {
         _Py_hashtable_destroy(state.visited);
         Py_DECREF(state.worklist);
         return -1;
@@ -1454,20 +1454,9 @@ int _PyImmutability_CanViewAsImmutable(PyObject *obj)
     // Iterative DFS: pop from worklist, traverse referents.
     int result = 0;
     while (PyList_GET_SIZE(state.worklist) > 0) {
-        PyObject *item = PyList_GET_ITEM(
-            state.worklist, PyList_GET_SIZE(state.worklist) - 1);
-        Py_INCREF(item);
-        if (PyList_SetSlice(state.worklist,
-                            PyList_GET_SIZE(state.worklist) - 1,
-                            PyList_GET_SIZE(state.worklist), NULL) < 0) {
-            Py_DECREF(item);
-            result = -1;
-            break;
-        }
-
+        PyObject *item = pop(state.worklist);
         traverseproc reachable = get_reachable_proc(Py_TYPE(item));
         result = reachable(item, can_view_as_immutable_visit, &state);
-        Py_DECREF(item);
         if (result != 0) {
             break;
         }
