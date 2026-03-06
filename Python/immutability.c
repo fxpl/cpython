@@ -123,28 +123,6 @@ type_weakref(struct _Py_immutability_state *state, PyObject *obj)
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    // TODO(Immutable): Should we have the following code given the updates to the PEP?
-    // PyObject* frozen_importlib = NULL;
-
-    // frozen_importlib = PyImport_ImportModule("_frozen_importlib");
-    // if(frozen_importlib == NULL){
-    //     return -1;
-    // }
-
-    // state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
-    // if(state->module_locks == NULL){
-    //     Py_DECREF(frozen_importlib);
-    //     return -1;
-    // }
-
-    // state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
-    // if(state->blocking_on == NULL){
-    //     Py_DECREF(frozen_importlib);
-    //     return -1;
-    // }
-
-    // Py_DECREF(frozen_importlib);
-
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
         return -1;
@@ -193,21 +171,6 @@ int init_state(struct _Py_immutability_state *state)
 
     return 0;
 }
-
-// This is separate to the previous init as it depends on the traceback
-// module being available, and can cause a circular import if it is
-// called during register freezable.
-#ifdef Py_DEBUG
-static
-void init_traceback_state(struct _Py_immutability_state *state)
-{
-    PyObject *traceback_module = PyImport_ImportModule("traceback");
-    if (traceback_module != NULL) {
-        state->traceback_func = PyObject_GetAttrString(traceback_module, "format_stack");
-        Py_DECREF(traceback_module);
-    }
-}
-#endif
 
 static struct _Py_immutability_state* get_immutable_state(void)
 {
@@ -371,6 +334,9 @@ struct FreezeState {
     // This is required to be able to backtrack a failed freeze.
     // It is also used to track nodes in GIL_DISABLED builds.
     _Py_hashtable_t *visited;
+
+    // The object that freeze() was called directly on.
+    PyObject *root;
 
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
@@ -1243,9 +1209,29 @@ is_explicitly_freezable(struct _Py_immutability_state *state, PyObject *obj)
 }
 
 
-static int check_freezable(struct _Py_immutability_state *state, PyObject* obj)
+static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
+                           struct FreezeState *freeze_state)
 {
     debug_obj("check_freezable  %s (%p)\n", obj);
+
+    // Check per-object freezable status set via set_freezable().
+    int obj_status = _PyImmutability_GetFreezable(obj);
+    if (obj_status >= 0) {
+        switch (obj_status) {
+        case _Py_FREEZABLE_YES:
+            return 0;
+        case _Py_FREEZABLE_NO:
+            goto error;
+        case _Py_FREEZABLE_EXPLICIT:
+            if (freeze_state != NULL && obj == freeze_state->root) {
+                return 0;
+            }
+            goto error;
+        case _Py_FREEZABLE_PROXY:
+            // Reserved for future use — fall through to existing checks.
+            break;
+        }
+    }
 
     // Check is object is subclass of NotFreezable
     // TODO: Would be nice for this to be faster.
@@ -1302,6 +1288,123 @@ int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
     Py_DECREF(ref);
     return result;
 }
+
+
+int _PyImmutability_SetFreezable(PyObject *obj, int status)
+{
+    if (status < _Py_FREEZABLE_YES || status > _Py_FREEZABLE_PROXY) {
+        PyErr_Format(PyExc_ValueError,
+                     "Invalid freezable status: %d", status);
+        return -1;
+    }
+
+    if (status == _Py_FREEZABLE_PROXY && !PyModule_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "FREEZABLE_PROXY can only be set on module objects");
+        return -1;
+    }
+
+    // Try setting __freezable__ attribute on the object.
+    PyObject *value = PyLong_FromLong(status);
+    if (value == NULL) {
+        return -1;
+    }
+
+    int rc = PyObject_SetAttr(obj, &_Py_ID(__freezable__), value);
+    Py_DECREF(value);
+    if (rc == 0) {
+        return 0;
+    }
+    // If the object doesn't support attribute setting, fall back
+    // to ob_flags (64-bit only).
+    if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
+        return -1;
+    }
+    PyErr_Clear();
+
+#if SIZEOF_VOID_P > 4
+    // Store the freezable status in ob_flags bits 5-7.
+    uint16_t flags = obj->ob_flags;
+    flags &= ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
+    flags |= _Py_FREEZABLE_SET_FLAG |
+             ((status << _Py_FREEZABLE_STATUS_SHIFT) & _Py_FREEZABLE_STATUS_MASK);
+    obj->ob_flags = flags;
+    return 0;
+#else
+    // 32-bit builds do not have ob_flags for freezable status.
+    assert(0 && "set_freezable ob_flags fallback not supported on 32-bit");
+    PyErr_SetString(PyExc_TypeError,
+                    "Cannot set freezable status: object has no attribute "
+                    "support and ob_flags fallback is not available on 32-bit");
+    return -1;
+#endif
+}
+
+
+// Read the freezable status from ob_flags (64-bit only).
+// Returns the status if set, or -1 if not set.
+static inline int
+_get_freezable_from_flags(PyObject *obj)
+{
+#if SIZEOF_VOID_P > 4
+    uint16_t flags = obj->ob_flags;
+    if (flags & _Py_FREEZABLE_SET_FLAG) {
+        return (flags & _Py_FREEZABLE_STATUS_MASK) >> _Py_FREEZABLE_STATUS_SHIFT;
+    }
+#endif
+    return -1;
+}
+
+int _PyImmutability_GetFreezable(PyObject *obj)
+{
+    // First, check for a __freezable__ attribute on the object.
+    PyObject *attr = NULL;
+    int found = PyObject_GetOptionalAttr(obj, &_Py_ID(__freezable__), &attr);
+    if (found == 1) {
+        int status = (int)PyLong_AsLong(attr);
+        Py_DECREF(attr);
+        if (status == -1 && PyErr_Occurred()) {
+            return -2;
+        }
+        return status;
+    }
+    if (found == -1) {
+        return -2;
+    }
+
+    // Check ob_flags for the object.
+    int flags_status = _get_freezable_from_flags(obj);
+    if (flags_status >= 0) {
+        return flags_status;
+    }
+
+    // Not found for the object itself — check the object's type.
+    PyObject *type_obj = (PyObject *)Py_TYPE(obj);
+    PyObject *type_attr = NULL;
+    int type_found = PyObject_GetOptionalAttr(type_obj,
+                                              &_Py_ID(__freezable__),
+                                              &type_attr);
+    if (type_found == 1) {
+        int status = (int)PyLong_AsLong(type_attr);
+        Py_DECREF(type_attr);
+        if (status == -1 && PyErr_Occurred()) {
+            return -2;
+        }
+        return status;
+    }
+    if (type_found == -1) {
+        return -2;
+    }
+
+    // Check ob_flags for the type.
+    flags_status = _get_freezable_from_flags(type_obj);
+    if (flags_status >= 0) {
+        return flags_status;
+    }
+
+    return -1;  // Not found.
+}
+
 
 static int
 is_shallow_immutable_type(struct _Py_immutability_state *state, PyTypeObject *tp)
@@ -1593,19 +1696,6 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     }
 
     PyObject *attr = NULL;
-    if (PyObject_GetOptionalAttr(obj, &_Py_ID(__freezable__), &attr) == 1
-        && Py_IsFalse(attr))
-    {
-        PyErr_Format(
-            PyExc_TypeError,
-            "A object of type %s is marked as unfreezable",
-            Py_TYPE(obj)->tp_name);
-        Py_XDECREF(attr);
-        return -1;
-    }
-    Py_XDECREF(attr);
-
-    attr = NULL;
     if (PyObject_GetOptionalAttr(obj, &_Py_ID(__pre_freeze__), &attr) == 1)
     {
         PyErr_SetString(PyExc_TypeError, "Pre-freeze hocks are currently WIP");
@@ -1651,6 +1741,58 @@ error:
     return -1;
 }
 
+// Mark importlib's mutable state as not freezable.
+// Separated from init_state because _frozen_importlib is not
+// available during early interpreter startup.
+static void
+late_init(struct _Py_immutability_state *state)
+{
+    state->late_init_done = true;
+
+    PyObject *frozen_importlib = PyImport_ImportModule("_frozen_importlib");
+    if (frozen_importlib == NULL) {
+        PyErr_Clear();
+        return;
+    }
+
+    PyObject *module_locks = PyObject_GetAttrString(frozen_importlib,
+                                                    "_module_locks");
+    if (module_locks != NULL) {
+        if (_PyImmutability_SetFreezable(module_locks,
+                                         _Py_FREEZABLE_NO) < 0) {
+            PyErr_Clear();
+        }
+        Py_DECREF(module_locks);
+    } else {
+        PyErr_Clear();
+    }
+
+    PyObject *blocking_on = PyObject_GetAttrString(frozen_importlib,
+                                                   "_blocking_on");
+    if (blocking_on != NULL) {
+        if (_PyImmutability_SetFreezable(blocking_on,
+                                         _Py_FREEZABLE_NO) < 0) {
+            PyErr_Clear();
+        }
+        Py_DECREF(blocking_on);
+    } else {
+        PyErr_Clear();
+    }
+
+    Py_DECREF(frozen_importlib);
+
+#ifdef Py_DEBUG
+    PyObject *traceback_module = PyImport_ImportModule("traceback");
+    if (traceback_module != NULL) {
+        state->traceback_func = PyObject_GetAttrString(traceback_module,
+                                                       "format_stack");
+        Py_DECREF(traceback_module);
+    } else {
+        PyErr_Clear();
+    }
+#endif
+}
+
 // Main entry point to freeze an object and everything it can reach.
 int _PyImmutability_Freeze(PyObject* obj)
 {
@@ -1663,18 +1805,20 @@ int _PyImmutability_Freeze(PyObject* obj)
     struct FreezeState freeze_state;
     // Initialize the freeze state
     SUCCEEDS(init_freeze_state(&freeze_state));
+    freeze_state.root = obj;
     struct _Py_immutability_state* imm_state = get_immutable_state();
     if(imm_state == NULL){
         goto error;
     }
 
+    // Late-init: mark importlib mutable state as not freezable.
+    if (!imm_state->late_init_done) {
+        late_init(imm_state);
+    }
+
 #ifdef Py_DEBUG
     // In debug mode, we can set a freeze location for debugging purposes.
     // Get a traceback object to use as the freeze location.
-    if (imm_state->traceback_func == NULL) {
-        init_traceback_state(imm_state);
-    }
-
     if (imm_state->traceback_func != NULL) {
         PyObject *stack = PyObject_CallFunctionObjArgs(imm_state->traceback_func, NULL);
         if (stack != NULL) {
@@ -1724,7 +1868,7 @@ int _PyImmutability_Freeze(PyObject* obj)
         }
 
         // New object, check if freezable
-        SUCCEEDS(check_freezable(imm_state, item));
+        SUCCEEDS(check_freezable(imm_state, item, &freeze_state));
 
         // Add to visited before putting in internal datastructures, so don't have
         // to account of internal RC manipulations.

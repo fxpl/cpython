@@ -10,9 +10,15 @@ extern "C" {
 
 typedef struct _Py_hashtable_t _Py_hashtable_t;
 
+typedef enum {
+    _Py_FREEZABLE_YES = 0,
+    _Py_FREEZABLE_NO = 1,
+    _Py_FREEZABLE_EXPLICIT = 2,
+    _Py_FREEZABLE_PROXY = 3,
+} _Py_freezable_status;
+
 struct _Py_immutability_state {
-    PyObject *module_locks;
-    PyObject *blocking_on;
+    int late_init_done;
     PyObject *freezable_types;
     _Py_hashtable_t *shallow_immutable_types;
     PyObject *destroy_cb;

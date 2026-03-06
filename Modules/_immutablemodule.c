@@ -9,6 +9,7 @@
 #include "Python.h"
 #include <stdbool.h>
 #include "pycore_object.h"
+#include "pycore_immutability.h"
 
 /*[clinic input]
 module _immutable
@@ -121,6 +122,31 @@ _immutable_isfrozen(PyObject *module, PyObject *obj)
     Py_RETURN_FALSE;
 }
 
+/*[clinic input]
+_immutable.set_freezable
+    obj: object
+    status: int
+    /
+
+Set the freezable status of an object.
+
+Status values:
+  FREEZABLE_YES (0): always freezable
+  FREEZABLE_NO (1): never freezable
+  FREEZABLE_EXPLICIT (2): freezable only when freeze() is called directly on it
+  FREEZABLE_PROXY (3): reserved for future use
+[clinic start generated code]*/
+
+static PyObject *
+_immutable_set_freezable_impl(PyObject *module, PyObject *obj, int status)
+/*[clinic end generated code: output=73cad0b4df9a46f9 input=63df024c940ba301]*/
+{
+    if (_PyImmutability_SetFreezable(obj, status) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyType_Slot not_freezable_error_slots[] = {
     {0, NULL},
 };
@@ -149,6 +175,7 @@ static struct PyMethodDef immutable_methods[] = {
     _IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
     _IMMUTABLE_FREEZE_METHODDEF
     _IMMUTABLE_ISFROZEN_METHODDEF
+    _IMMUTABLE_SET_FREEZABLE_METHODDEF
     { NULL, NULL }
 };
 
@@ -183,6 +210,23 @@ immutable_exec(PyObject *module) {
     }
 
     if (PyModule_AddType(module, &_PyImmModule_Type) != 0) {
+        return -1;
+    }
+
+    if (PyModule_AddIntConstant(module, "FREEZABLE_YES",
+                                _Py_FREEZABLE_YES) != 0) {
+        return -1;
+    }
+    if (PyModule_AddIntConstant(module, "FREEZABLE_NO",
+                                _Py_FREEZABLE_NO) != 0) {
+        return -1;
+    }
+    if (PyModule_AddIntConstant(module, "FREEZABLE_EXPLICIT",
+                                _Py_FREEZABLE_EXPLICIT) != 0) {
+        return -1;
+    }
+    if (PyModule_AddIntConstant(module, "FREEZABLE_PROXY",
+                                _Py_FREEZABLE_PROXY) != 0) {
         return -1;
     }
 

@@ -792,8 +792,6 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
     assert(interp->imports.importlib == NULL);
     assert(interp->imports.import_func == NULL);
 
-    Py_CLEAR(interp->immutability.module_locks);
-    Py_CLEAR(interp->immutability.blocking_on);
     Py_CLEAR(interp->immutability.freezable_types);
     Py_CLEAR(interp->immutability.destroy_cb);
     if (interp->immutability.warned_types != NULL) {
