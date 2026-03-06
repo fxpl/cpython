@@ -1344,6 +1344,12 @@ int _PyImmutability_SetFreezable(PyObject *obj, int status)
         return -1;
     }
 
+    if (status == _Py_FREEZABLE_PROXY && !PyModule_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "FREEZABLE_PROXY can only be set on module objects");
+        return -1;
+    }
+
     PyObject *value = PyLong_FromLong(status);
     if (value == NULL) {
         return -1;

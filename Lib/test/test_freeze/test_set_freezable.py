@@ -80,15 +80,18 @@ class TestSetFreezableExplicit(unittest.TestCase):
 
 
 class TestSetFreezableProxy(unittest.TestCase):
-    """FREEZABLE_PROXY: reserved — currently falls through to default behaviour."""
+    """FREEZABLE_PROXY: only allowed on module objects."""
 
-    def test_proxy_allows_freeze(self):
+    def test_proxy_rejected_on_non_module(self):
         C = make_freezable_class()
         obj = C()
-        set_freezable(obj, FREEZABLE_PROXY)
-        # PROXY is a no-op for now; object should freeze normally.
-        freeze(obj)
-        self.assertTrue(isfrozen(obj))
+        with self.assertRaises(TypeError):
+            set_freezable(obj, FREEZABLE_PROXY)
+
+    def test_proxy_allowed_on_module(self):
+        import types
+        mod = types.ModuleType('test_proxy_mod')
+        set_freezable(mod, FREEZABLE_PROXY)
 
 
 class TestSetFreezableEdgeCases(unittest.TestCase):
@@ -148,7 +151,7 @@ class TestSetFreezableStorage(unittest.TestCase):
     def test_attr_stores_each_status(self):
         C = make_freezable_class()
         for status in (FREEZABLE_YES, FREEZABLE_NO,
-                       FREEZABLE_EXPLICIT, FREEZABLE_PROXY):
+                       FREEZABLE_EXPLICIT):
             obj = C()
             set_freezable(obj, status)
             self.assertEqual(obj.__freezable__, status,
@@ -216,7 +219,7 @@ class TestSetFreezableLifetime(unittest.TestCase):
         # Verify for every status value that the object is collected.
         C = make_freezable_class()
         for status in (FREEZABLE_YES, FREEZABLE_NO,
-                       FREEZABLE_EXPLICIT, FREEZABLE_PROXY):
+                       FREEZABLE_EXPLICIT):
             obj = C()
             ref = weakref.ref(obj)
             set_freezable(obj, status)
