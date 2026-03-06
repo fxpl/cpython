@@ -99,7 +99,7 @@ _immutable_freeze(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
         return NULL;
     }
 
-    Py_RETURN_NONE;
+    return Py_NewRef(args[0]);
 }
 
 /*[clinic input]
