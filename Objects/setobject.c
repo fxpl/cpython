@@ -811,10 +811,14 @@ set_pop_impl(PySetObject *so)
             entry = so->table;
     }
     key = entry->key;
+    if(PyRegion_AddLocalRef(key)) { // Bc key has to be returned, it is still there, maybe in or not in the region. (The reference the function returns)
+        return NULL;
+    }
     entry->key = dummy;
     entry->hash = -1;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
     so->finger = entry - so->table + 1;   /* next place to start */
+    PyRegion_RemoveRef(so, key);
     return key;
 }
 
@@ -1339,7 +1343,7 @@ set_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
    result to be swapped into one of the original inputs).
 */
 
-static void
+static int
 set_swap_bodies(PySetObject *a, PySetObject *b)
 {
     Py_ssize_t t;
@@ -1347,6 +1351,7 @@ set_swap_bodies(PySetObject *a, PySetObject *b)
     setentry tab[PySet_MINSIZE];
     Py_hash_t h;
 
+    // if a and b are in the same region, no problem. use this
     t = a->fill;     a->fill   = b->fill;        b->fill  = t;
     t = a->used;
     FT_ATOMIC_STORE_SSIZE_RELAXED(a->used, b->used);
@@ -1376,6 +1381,7 @@ set_swap_bodies(PySetObject *a, PySetObject *b)
         FT_ATOMIC_STORE_SSIZE_RELAXED(a->hash, -1);
         FT_ATOMIC_STORE_SSIZE_RELAXED(b->hash, -1);
     }
+    // else, use 4 barriers before swapping
 }
 
 /*[clinic input]
@@ -1631,6 +1637,9 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
         return set_copy((PyObject *)so, NULL);
     }
 
+    if(PyRegion_AddLocalRef(so)) {
+        return NULL;
+    }
     PyObject *result = Py_NewRef(so);
     for (i = 0; i < others_length; i++) {
         PyObject *other = others[i];
@@ -1838,7 +1847,7 @@ set_difference_update_internal(PySetObject *so, PyObject *other)
                 return -1;
             }
             Py_INCREF(key);
-            // DONE Migration: Maybe?
+            // DONE Migration
             if (set_discard_entry(so, key, entry->hash) < 0) {
                 PyRegion_RemoveLocalRef(other);
                 PyRegion_RemoveLocalRef(key);
