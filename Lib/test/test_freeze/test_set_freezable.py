@@ -54,6 +54,8 @@ class TestSetFreezableNo(unittest.TestCase):
         set_freezable(child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
             freeze(parent)
+        self.assertFalse(isfrozen(child))
+        self.assertFalse(isfrozen(parent))
 
 
 class TestSetFreezableExplicit(unittest.TestCase):
