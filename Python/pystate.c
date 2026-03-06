@@ -794,8 +794,6 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
 
     Py_CLEAR(interp->immutability.freezable_types);
     Py_CLEAR(interp->immutability.destroy_cb);
-    Py_CLEAR(interp->immutability.freezable_objects);
-    Py_CLEAR(interp->immutability.destroy_objects_cb);
     if (interp->immutability.warned_types != NULL) {
         _Py_hashtable_destroy(interp->immutability.warned_types);
         interp->immutability.warned_types = NULL;

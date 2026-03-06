@@ -108,27 +108,6 @@ static PyMethodDef _destroy_def = {
 };
 
 static PyObject *
-_destroy_dict(PyObject* dict, PyObject *objweakref)
-{
-    Py_INCREF(dict);
-    if (PyDict_DelItem(dict, objweakref) < 0) {
-        // Key may already be gone; ignore KeyError.
-        if (PyErr_ExceptionMatches(PyExc_KeyError)) {
-            PyErr_Clear();
-        } else {
-            Py_DECREF(dict);
-            return NULL;
-        }
-    }
-    Py_DECREF(dict);
-    Py_RETURN_NONE;
-}
-
-static PyMethodDef _destroy_dict_def = {
-    "_destroy_dict", (PyCFunction) _destroy_dict, METH_O
-};
-
-static PyObject *
 type_weakref(struct _Py_immutability_state *state, PyObject *obj)
 {
     if(state->destroy_cb == NULL){
@@ -146,11 +125,6 @@ int init_state(struct _Py_immutability_state *state)
 {
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
-        return -1;
-    }
-
-    state->freezable_objects = PyDict_New();
-    if(state->freezable_objects == NULL){
         return -1;
     }
 
@@ -1316,28 +1290,8 @@ int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
 }
 
 
-static PyObject *
-_obj_weakref(struct _Py_immutability_state *state, PyObject *obj)
-{
-    if (state->destroy_objects_cb == NULL) {
-        state->destroy_objects_cb = PyCFunction_NewEx(
-            &_destroy_dict_def, state->freezable_objects, NULL);
-        if (state->destroy_objects_cb == NULL) {
-            return NULL;
-        }
-    }
-
-    return PyWeakref_NewRef(obj, state->destroy_objects_cb);
-}
-
-
 int _PyImmutability_SetFreezable(PyObject *obj, int status)
 {
-    struct _Py_immutability_state *state = get_immutable_state();
-    if (state == NULL) {
-        return -1;
-    }
-
     if (status < _Py_FREEZABLE_YES || status > _Py_FREEZABLE_PROXY) {
         PyErr_Format(PyExc_ValueError,
                      "Invalid freezable status: %d", status);
@@ -1350,6 +1304,7 @@ int _PyImmutability_SetFreezable(PyObject *obj, int status)
         return -1;
     }
 
+    // Try setting __freezable__ attribute on the object.
     PyObject *value = PyLong_FromLong(status);
     if (value == NULL) {
         return -1;
@@ -1361,35 +1316,44 @@ int _PyImmutability_SetFreezable(PyObject *obj, int status)
         return 0;
     }
     // If the object doesn't support attribute setting, fall back
-    // to the weakref dictionary.
+    // to ob_flags (64-bit only).
     if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
         return -1;
     }
     PyErr_Clear();
 
-    // Fall back to the weakref dictionary.
-    PyObject *ref = _obj_weakref(state, obj);
-    if (ref == NULL) {
-        // Neither attribute nor weakref works.
-        PyErr_Format(PyExc_TypeError,
-                     "Cannot set freezable status on '%.200s' object: "
-                     "no attribute support and no weakref support",
-                     Py_TYPE(obj)->tp_name);
-        return -1;
-    }
-
-    value = PyLong_FromLong(status);
-    if (value == NULL) {
-        Py_DECREF(ref);
-        return -1;
-    }
-
-    int result = PyDict_SetItem(state->freezable_objects, ref, value);
-    Py_DECREF(ref);
-    Py_DECREF(value);
-    return result;
+#if SIZEOF_VOID_P > 4
+    // Store the freezable status in ob_flags bits 5-7.
+    uint16_t flags = obj->ob_flags;
+    flags &= ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
+    flags |= _Py_FREEZABLE_SET_FLAG |
+             ((status << _Py_FREEZABLE_STATUS_SHIFT) & _Py_FREEZABLE_STATUS_MASK);
+    obj->ob_flags = flags;
+    return 0;
+#else
+    // 32-bit builds do not have ob_flags for freezable status.
+    assert(0 && "set_freezable ob_flags fallback not supported on 32-bit");
+    PyErr_SetString(PyExc_TypeError,
+                    "Cannot set freezable status: object has no attribute "
+                    "support and ob_flags fallback is not available on 32-bit");
+    return -1;
+#endif
 }
 
+
+// Read the freezable status from ob_flags (64-bit only).
+// Returns the status if set, or -1 if not set.
+static inline int
+_get_freezable_from_flags(PyObject *obj)
+{
+#if SIZEOF_VOID_P > 4
+    uint16_t flags = obj->ob_flags;
+    if (flags & _Py_FREEZABLE_SET_FLAG) {
+        return (flags & _Py_FREEZABLE_STATUS_MASK) >> _Py_FREEZABLE_STATUS_SHIFT;
+    }
+#endif
+    return -1;
+}
 
 int _PyImmutability_GetFreezable(PyObject *obj)
 {
@@ -1408,36 +1372,37 @@ int _PyImmutability_GetFreezable(PyObject *obj)
         return -2;
     }
 
-    // Fall back to the weakref dictionary.
-    struct _Py_immutability_state *state = get_immutable_state();
-    if (state == NULL) {
+    // Check ob_flags for the object.
+    int flags_status = _get_freezable_from_flags(obj);
+    if (flags_status >= 0) {
+        return flags_status;
+    }
+
+    // Not found for the object itself — check the object's type.
+    PyObject *type_obj = (PyObject *)Py_TYPE(obj);
+    PyObject *type_attr = NULL;
+    int type_found = PyObject_GetOptionalAttr(type_obj,
+                                              &_Py_ID(__freezable__),
+                                              &type_attr);
+    if (type_found == 1) {
+        int status = (int)PyLong_AsLong(type_attr);
+        Py_DECREF(type_attr);
+        if (status == -1 && PyErr_Occurred()) {
+            return -2;
+        }
+        return status;
+    }
+    if (type_found == -1) {
         return -2;
     }
 
-    if (state->freezable_objects == NULL ||
-        PyDict_GET_SIZE(state->freezable_objects) == 0)
-    {
-        return -1;
+    // Check ob_flags for the type.
+    flags_status = _get_freezable_from_flags(type_obj);
+    if (flags_status >= 0) {
+        return flags_status;
     }
 
-    // Create a temporary weakref (no callback) for lookup.
-    PyObject *ref = PyWeakref_NewRef(obj, NULL);
-    if (ref == NULL) {
-        // Object doesn't support weakrefs — not in the dict.
-        PyErr_Clear();
-        return -1;
-    }
-
-    PyObject *value = PyDict_GetItemWithError(state->freezable_objects, ref);
-    Py_DECREF(ref);
-    if (value == NULL) {
-        if (PyErr_Occurred()) {
-            return -2;
-        }
-        return -1;  // Not found.
-    }
-
-    return (int)PyLong_AsLong(value);
+    return -1;  // Not found.
 }
 
 

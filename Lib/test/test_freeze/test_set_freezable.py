@@ -105,10 +105,14 @@ class TestSetFreezableEdgeCases(unittest.TestCase):
         with self.assertRaises(ValueError):
             set_freezable(obj, -1)
 
-    def test_object_without_weakref_support_raises(self):
-        # Built-in ints don't support weak references or attribute setting.
-        with self.assertRaises(TypeError):
-            set_freezable(42, FREEZABLE_NO)
+    def test_object_without_dict_uses_ob_flags(self):
+        # Built-in ints don't support attributes, but ob_flags fallback
+        # should work on 64-bit.
+        import sys
+        if sys.maxsize <= 2**31:
+            self.skipTest("ob_flags fallback not available on 32-bit")
+        set_freezable(42, FREEZABLE_NO)
+        # Can't easily verify the flags directly, but it shouldn't raise.
 
     def test_gc_collects_tracked_object(self):
         C = make_freezable_class()
@@ -165,9 +169,12 @@ class TestSetFreezableStorage(unittest.TestCase):
         set_freezable(obj, FREEZABLE_YES)
         self.assertEqual(obj.__freezable__, FREEZABLE_YES)
 
-    def test_weakref_fallback_for_slots_only(self):
-        # Objects with __slots__ and __weakref__ but no __dict__
-        # should fall back to the weakref dictionary.
+    def test_ob_flags_fallback_for_slots_only(self):
+        # Objects with __slots__ but no __dict__ should fall back
+        # to ob_flags on 64-bit.
+        import sys
+        if sys.maxsize <= 2**31:
+            self.skipTest("ob_flags fallback not available on 32-bit")
         class S:
             __slots__ = ('__weakref__', 'x')
         register_freezable(S)
@@ -202,8 +209,8 @@ class TestSetFreezableLifetime(unittest.TestCase):
         gc.collect()
         self.assertIsNone(ref())
 
-    def test_weakref_path_no_prevent_gc(self):
-        # Objects with __slots__ + __weakref__ use the weakref dict.
+    def test_ob_flags_path_no_prevent_gc(self):
+        # Objects with __slots__ use ob_flags storage.
         # set_freezable should not prevent collection.
         class S:
             __slots__ = ('__weakref__', 'x')

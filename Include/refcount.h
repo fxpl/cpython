@@ -67,6 +67,13 @@ increase over time until it reaches _Py_IMMORTAL_INITIAL_REFCNT.
 #define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
 #define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
+
+// Per-object freezable status stored in ob_flags (64-bit only).
+// Bit 5-6: 2-bit enum value (_Py_freezable_status)
+// Bit 7: set flag (1 = freezable status has been explicitly set)
+#define _Py_FREEZABLE_SET_FLAG  (1 << 7)
+#define _Py_FREEZABLE_STATUS_SHIFT 5
+#define _Py_FREEZABLE_STATUS_MASK (0x3 << _Py_FREEZABLE_STATUS_SHIFT)
 #else
 /*
 In 32 bit systems, an object will be treated as immortal if its reference

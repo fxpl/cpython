@@ -23,8 +23,6 @@ struct _Py_immutability_state {
     _Py_hashtable_t *shallow_immutable_types;
     PyObject *destroy_cb;
     _Py_hashtable_t *warned_types;
-    PyObject *freezable_objects;      // dict: weakref(obj) -> int status
-    PyObject *destroy_objects_cb;     // weak-ref callback for freezable_objects
 #ifdef Py_DEBUG
     PyObject *traceback_func;  // For debugging purposes, can be NULL
 #endif
