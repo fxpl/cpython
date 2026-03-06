@@ -3,7 +3,7 @@
 import unittest
 from immutable import (
     freeze, isfrozen, register_freezable, set_freezable,
-    FREEZABLE_EXPLICIT, FREEZABLE_NO, FREEZABLE_YES,
+    FREEZABLE_EXPLICIT, FREEZABLE_NO,
 )
 
 
