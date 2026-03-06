@@ -1804,6 +1804,10 @@ int _PyRegion_IsLocal(PyObject *obj) {
     return _PyRegion_Get(obj) == _Py_LOCAL_REGION;
 }
 
+int _PyRegion_ShareRegion(PyObject *a, PyObject *b) {
+    return _PyRegion_Get(a) == _PyRegion_Get(b);
+}
+
 /* Creates a new region and moves the bridge object into it. The new region
  * will be returned.
  */
