@@ -1,0 +1,197 @@
+import gc
+import unittest
+import weakref
+from immutable import (
+    freeze, isfrozen, register_freezable, set_freezable,
+    FREEZABLE_YES, FREEZABLE_NO, FREEZABLE_EXPLICIT, FREEZABLE_PROXY,
+)
+
+
+def make_freezable_class():
+    """Create a fresh class registered as freezable."""
+    class C:
+        pass
+    register_freezable(C)
+    return C
+
+
+class TestSetFreezableYes(unittest.TestCase):
+    """FREEZABLE_YES: object is always freezable."""
+
+    def test_freeze_succeeds(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_YES)
+        freeze(obj)
+        self.assertTrue(isfrozen(obj))
+
+    def test_freeze_as_child_succeeds(self):
+        C = make_freezable_class()
+        parent = C()
+        child = C()
+        parent.child = child
+        set_freezable(child, FREEZABLE_YES)
+        freeze(parent)
+        self.assertTrue(isfrozen(child))
+
+
+class TestSetFreezableNo(unittest.TestCase):
+    """FREEZABLE_NO: object can never be frozen."""
+
+    def test_freeze_raises(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_NO)
+        with self.assertRaises(TypeError):
+            freeze(obj)
+        self.assertFalse(isfrozen(obj))
+
+    def test_freeze_as_child_raises(self):
+        C = make_freezable_class()
+        parent = C()
+        child = C()
+        parent.child = child
+        set_freezable(child, FREEZABLE_NO)
+        with self.assertRaises(TypeError):
+            freeze(parent)
+
+
+class TestSetFreezableExplicit(unittest.TestCase):
+    """FREEZABLE_EXPLICIT: freezable only when freeze() is called directly on it."""
+
+    def test_direct_freeze_succeeds(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_EXPLICIT)
+        freeze(obj)
+        self.assertTrue(isfrozen(obj))
+
+    def test_child_freeze_raises(self):
+        C = make_freezable_class()
+        parent = C()
+        child = C()
+        parent.child = child
+        set_freezable(child, FREEZABLE_EXPLICIT)
+        with self.assertRaises(TypeError):
+            freeze(parent)
+        self.assertFalse(isfrozen(child))
+
+
+class TestSetFreezableProxy(unittest.TestCase):
+    """FREEZABLE_PROXY: reserved — currently falls through to default behaviour."""
+
+    def test_proxy_allows_freeze(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_PROXY)
+        # PROXY is a no-op for now; object should freeze normally.
+        freeze(obj)
+        self.assertTrue(isfrozen(obj))
+
+
+class TestSetFreezableEdgeCases(unittest.TestCase):
+    """Edge cases and error handling."""
+
+    def test_invalid_status_raises(self):
+        C = make_freezable_class()
+        obj = C()
+        with self.assertRaises(ValueError):
+            set_freezable(obj, 99)
+        with self.assertRaises(ValueError):
+            set_freezable(obj, -1)
+
+    def test_object_without_weakref_support_raises(self):
+        # Built-in ints don't support weak references or attribute setting.
+        with self.assertRaises(TypeError):
+            set_freezable(42, FREEZABLE_NO)
+
+    def test_gc_collects_tracked_object(self):
+        C = make_freezable_class()
+        obj = C()
+        ref = weakref.ref(obj)
+        set_freezable(obj, FREEZABLE_NO)
+        del obj
+        gc.collect()
+        self.assertIsNone(ref())
+
+    def test_override_status(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_NO)
+        with self.assertRaises(TypeError):
+            freeze(obj)
+        # Override to YES
+        set_freezable(obj, FREEZABLE_YES)
+        freeze(obj)
+        self.assertTrue(isfrozen(obj))
+
+    def test_unset_object_uses_default(self):
+        # An object with no set_freezable should use existing freeze logic.
+        C = make_freezable_class()
+        obj = C()
+        freeze(obj)
+        self.assertTrue(isfrozen(obj))
+
+
+class TestSetFreezableStorage(unittest.TestCase):
+    """Test the attribute-first, weakref-fallback storage strategy."""
+
+    def test_attr_storage_for_normal_objects(self):
+        # Objects with __dict__ should get __freezable__ attribute set.
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_NO)
+        self.assertEqual(obj.__freezable__, FREEZABLE_NO)
+
+    def test_attr_stores_each_status(self):
+        C = make_freezable_class()
+        for status in (FREEZABLE_YES, FREEZABLE_NO,
+                       FREEZABLE_EXPLICIT, FREEZABLE_PROXY):
+            obj = C()
+            set_freezable(obj, status)
+            self.assertEqual(obj.__freezable__, status,
+                             f"__freezable__ should be {status}")
+
+    def test_attr_storage_updates_on_override(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_NO)
+        self.assertEqual(obj.__freezable__, FREEZABLE_NO)
+        set_freezable(obj, FREEZABLE_YES)
+        self.assertEqual(obj.__freezable__, FREEZABLE_YES)
+
+    def test_weakref_fallback_for_slots_only(self):
+        # Objects with __slots__ and __weakref__ but no __dict__
+        # should fall back to the weakref dictionary.
+        class S:
+            __slots__ = ('__weakref__', 'x')
+        register_freezable(S)
+        obj = S()
+        set_freezable(obj, FREEZABLE_NO)
+        # No __freezable__ attribute should be set.
+        self.assertFalse(hasattr(obj, '__freezable__'))
+        # But the status should still be queryable during freeze.
+        with self.assertRaises(TypeError):
+            freeze(obj)
+
+    def test_manual_freezable_attr_respected(self):
+        # Manually setting __freezable__ on an object should be respected.
+        C = make_freezable_class()
+        obj = C()
+        obj.__freezable__ = FREEZABLE_NO
+        with self.assertRaises(TypeError):
+            freeze(obj)
+
+
+class TestConstants(unittest.TestCase):
+    """Verify the constant values are exposed correctly."""
+
+    def test_constant_values(self):
+        self.assertEqual(FREEZABLE_YES, 0)
+        self.assertEqual(FREEZABLE_NO, 1)
+        self.assertEqual(FREEZABLE_EXPLICIT, 2)
+        self.assertEqual(FREEZABLE_PROXY, 3)
+
+
+if __name__ == '__main__':
+    unittest.main()

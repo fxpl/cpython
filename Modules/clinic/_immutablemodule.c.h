@@ -2,6 +2,8 @@
 preserve
 [clinic start generated code]*/
 
+#include "pycore_modsupport.h"    // _PyArg_CheckPositional()
+
 PyDoc_STRVAR(_immutable_register_freezable__doc__,
 "register_freezable($module, obj, /)\n"
 "--\n"
@@ -31,4 +33,43 @@ PyDoc_STRVAR(_immutable_isfrozen__doc__,
 
 #define _IMMUTABLE_ISFROZEN_METHODDEF    \
     {"isfrozen", (PyCFunction)_immutable_isfrozen, METH_O, _immutable_isfrozen__doc__},
-/*[clinic end generated code: output=b08aeb9c23cc30c8 input=a9049054013a1b77]*/
+
+PyDoc_STRVAR(_immutable_set_freezable__doc__,
+"set_freezable($module, obj, status, /)\n"
+"--\n"
+"\n"
+"Set the freezable status of an object.\n"
+"\n"
+"Status values:\n"
+"  FREEZABLE_YES (0): always freezable\n"
+"  FREEZABLE_NO (1): never freezable\n"
+"  FREEZABLE_EXPLICIT (2): freezable only when freeze() is called directly on it\n"
+"  FREEZABLE_PROXY (3): reserved for future use");
+
+#define _IMMUTABLE_SET_FREEZABLE_METHODDEF    \
+    {"set_freezable", _PyCFunction_CAST(_immutable_set_freezable), METH_FASTCALL, _immutable_set_freezable__doc__},
+
+static PyObject *
+_immutable_set_freezable_impl(PyObject *module, PyObject *obj, int status);
+
+static PyObject *
+_immutable_set_freezable(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
+{
+    PyObject *return_value = NULL;
+    PyObject *obj;
+    int status;
+
+    if (!_PyArg_CheckPositional("set_freezable", nargs, 2, 2)) {
+        goto exit;
+    }
+    obj = args[0];
+    status = PyLong_AsInt(args[1]);
+    if (status == -1 && PyErr_Occurred()) {
+        goto exit;
+    }
+    return_value = _immutable_set_freezable_impl(module, obj, status);
+
+exit:
+    return return_value;
+}
+/*[clinic end generated code: output=6ccbbe8cca58c3bb input=a9049054013a1b77]*/

@@ -8,3 +8,5 @@ PyAPI_FUNC(int) _PyImmutability_Freeze(PyObject*);
 PyAPI_FUNC(int) _PyImmutability_RegisterFreezable(PyTypeObject*);
 PyAPI_FUNC(int) _PyImmutability_RegisterShallowImmutable(PyTypeObject*);
 PyAPI_FUNC(int) _PyImmutability_CanViewAsImmutable(PyObject*);
+PyAPI_FUNC(int) _PyImmutability_SetFreezable(PyObject *, int);
+PyAPI_FUNC(int) _PyImmutability_GetFreezable(PyObject *);

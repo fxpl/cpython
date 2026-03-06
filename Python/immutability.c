@@ -108,6 +108,27 @@ static PyMethodDef _destroy_def = {
 };
 
 static PyObject *
+_destroy_dict(PyObject* dict, PyObject *objweakref)
+{
+    Py_INCREF(dict);
+    if (PyDict_DelItem(dict, objweakref) < 0) {
+        // Key may already be gone; ignore KeyError.
+        if (PyErr_ExceptionMatches(PyExc_KeyError)) {
+            PyErr_Clear();
+        } else {
+            Py_DECREF(dict);
+            return NULL;
+        }
+    }
+    Py_DECREF(dict);
+    Py_RETURN_NONE;
+}
+
+static PyMethodDef _destroy_dict_def = {
+    "_destroy_dict", (PyCFunction) _destroy_dict, METH_O
+};
+
+static PyObject *
 type_weakref(struct _Py_immutability_state *state, PyObject *obj)
 {
     if(state->destroy_cb == NULL){
@@ -147,6 +168,11 @@ int init_state(struct _Py_immutability_state *state)
 
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
+        return -1;
+    }
+
+    state->freezable_objects = PyDict_New();
+    if(state->freezable_objects == NULL){
         return -1;
     }
 
@@ -371,6 +397,9 @@ struct FreezeState {
     // This is required to be able to backtrack a failed freeze.
     // It is also used to track nodes in GIL_DISABLED builds.
     _Py_hashtable_t *visited;
+
+    // The object that freeze() was called directly on.
+    PyObject *root;
 
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
@@ -1243,9 +1272,29 @@ is_explicitly_freezable(struct _Py_immutability_state *state, PyObject *obj)
 }
 
 
-static int check_freezable(struct _Py_immutability_state *state, PyObject* obj)
+static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
+                           struct FreezeState *freeze_state)
 {
     debug_obj("check_freezable  %s (%p)\n", obj);
+
+    // Check per-object freezable status set via set_freezable().
+    int obj_status = _PyImmutability_GetFreezable(obj);
+    if (obj_status >= 0) {
+        switch (obj_status) {
+        case _Py_FREEZABLE_YES:
+            return 0;
+        case _Py_FREEZABLE_NO:
+            goto error;
+        case _Py_FREEZABLE_EXPLICIT:
+            if (freeze_state != NULL && obj == freeze_state->root) {
+                return 0;
+            }
+            goto error;
+        case _Py_FREEZABLE_PROXY:
+            // Reserved for future use — fall through to existing checks.
+            break;
+        }
+    }
 
     // Check is object is subclass of NotFreezable
     // TODO: Would be nice for this to be faster.
@@ -1302,6 +1351,126 @@ int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
     Py_DECREF(ref);
     return result;
 }
+
+
+static PyObject *
+_obj_weakref(struct _Py_immutability_state *state, PyObject *obj)
+{
+    if (state->destroy_objects_cb == NULL) {
+        state->destroy_objects_cb = PyCFunction_NewEx(
+            &_destroy_dict_def, state->freezable_objects, NULL);
+        if (state->destroy_objects_cb == NULL) {
+            return NULL;
+        }
+    }
+
+    return PyWeakref_NewRef(obj, state->destroy_objects_cb);
+}
+
+
+int _PyImmutability_SetFreezable(PyObject *obj, int status)
+{
+    struct _Py_immutability_state *state = get_immutable_state();
+    if (state == NULL) {
+        return -1;
+    }
+
+    if (status < _Py_FREEZABLE_YES || status > _Py_FREEZABLE_PROXY) {
+        PyErr_Format(PyExc_ValueError,
+                     "Invalid freezable status: %d", status);
+        return -1;
+    }
+
+    PyObject *value = PyLong_FromLong(status);
+    if (value == NULL) {
+        return -1;
+    }
+
+    int rc = PyObject_SetAttr(obj, &_Py_ID(__freezable__), value);
+    Py_DECREF(value);
+    if (rc == 0) {
+        return 0;
+    }
+    // If the object doesn't support attribute setting, fall back
+    // to the weakref dictionary.
+    if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
+        return -1;
+    }
+    PyErr_Clear();
+
+    // Fall back to the weakref dictionary.
+    PyObject *ref = _obj_weakref(state, obj);
+    if (ref == NULL) {
+        // Neither attribute nor weakref works.
+        PyErr_Format(PyExc_TypeError,
+                     "Cannot set freezable status on '%.200s' object: "
+                     "no attribute support and no weakref support",
+                     Py_TYPE(obj)->tp_name);
+        return -1;
+    }
+
+    value = PyLong_FromLong(status);
+    if (value == NULL) {
+        Py_DECREF(ref);
+        return -1;
+    }
+
+    int result = PyDict_SetItem(state->freezable_objects, ref, value);
+    Py_DECREF(ref);
+    Py_DECREF(value);
+    return result;
+}
+
+
+int _PyImmutability_GetFreezable(PyObject *obj)
+{
+    // First, check for a __freezable__ attribute on the object.
+    PyObject *attr = NULL;
+    int found = PyObject_GetOptionalAttr(obj, &_Py_ID(__freezable__), &attr);
+    if (found == 1) {
+        int status = (int)PyLong_AsLong(attr);
+        Py_DECREF(attr);
+        if (status == -1 && PyErr_Occurred()) {
+            return -2;
+        }
+        return status;
+    }
+    if (found == -1) {
+        return -2;
+    }
+
+    // Fall back to the weakref dictionary.
+    struct _Py_immutability_state *state = get_immutable_state();
+    if (state == NULL) {
+        return -2;
+    }
+
+    if (state->freezable_objects == NULL ||
+        PyDict_GET_SIZE(state->freezable_objects) == 0)
+    {
+        return -1;
+    }
+
+    // Create a temporary weakref (no callback) for lookup.
+    PyObject *ref = PyWeakref_NewRef(obj, NULL);
+    if (ref == NULL) {
+        // Object doesn't support weakrefs — not in the dict.
+        PyErr_Clear();
+        return -1;
+    }
+
+    PyObject *value = PyDict_GetItemWithError(state->freezable_objects, ref);
+    Py_DECREF(ref);
+    if (value == NULL) {
+        if (PyErr_Occurred()) {
+            return -2;
+        }
+        return -1;  // Not found.
+    }
+
+    return (int)PyLong_AsLong(value);
+}
+
 
 static int
 is_shallow_immutable_type(struct _Py_immutability_state *state, PyTypeObject *tp)
@@ -1593,19 +1762,6 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     }
 
     PyObject *attr = NULL;
-    if (PyObject_GetOptionalAttr(obj, &_Py_ID(__freezable__), &attr) == 1
-        && Py_IsFalse(attr))
-    {
-        PyErr_Format(
-            PyExc_TypeError,
-            "A object of type %s is marked as unfreezable",
-            Py_TYPE(obj)->tp_name);
-        Py_XDECREF(attr);
-        return -1;
-    }
-    Py_XDECREF(attr);
-
-    attr = NULL;
     if (PyObject_GetOptionalAttr(obj, &_Py_ID(__pre_freeze__), &attr) == 1)
     {
         PyErr_SetString(PyExc_TypeError, "Pre-freeze hocks are currently WIP");
@@ -1663,6 +1819,7 @@ int _PyImmutability_Freeze(PyObject* obj)
     struct FreezeState freeze_state;
     // Initialize the freeze state
     SUCCEEDS(init_freeze_state(&freeze_state));
+    freeze_state.root = obj;
     struct _Py_immutability_state* imm_state = get_immutable_state();
     if(imm_state == NULL){
         goto error;
@@ -1724,7 +1881,7 @@ int _PyImmutability_Freeze(PyObject* obj)
         }
 
         // New object, check if freezable
-        SUCCEEDS(check_freezable(imm_state, item));
+        SUCCEEDS(check_freezable(imm_state, item, &freeze_state));
 
         // Add to visited before putting in internal datastructures, so don't have
         // to account of internal RC manipulations.
