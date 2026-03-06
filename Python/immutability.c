@@ -338,6 +338,11 @@ struct FreezeState {
     // The object that freeze() was called directly on.
     PyObject *root;
 
+    // Intrusive linked list of completed SCC representatives
+    // (threaded through _gc_prev / scc_parent), for rollback on error.
+    // NULL-terminated; NULL means empty.
+    PyObject *completed_sccs;
+
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
     PyObject* freeze_location;
@@ -374,6 +379,7 @@ static int init_freeze_state(struct FreezeState *state)
     state->visited = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
+    state->completed_sccs = NULL;
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
 #endif
@@ -944,7 +950,9 @@ complete_scc(PyObject* obj, struct FreezeState *state)
     if (c == NULL) {
         debug_obj("Completing SCC %s (%p) with single member rc = %zd\n", obj, Py_REFCNT(obj));
         // This is not part of a cycle, just make it immutable.
-        set_scc_parent(obj, NULL);
+        // Link into the completed SCCs list for rollback.
+        set_scc_parent(obj, state->completed_sccs);
+        state->completed_sccs = obj;
         set_direct_rc(obj);
         return;
     }
@@ -964,9 +972,9 @@ complete_scc(PyObject* obj, struct FreezeState *state)
     // we need to remove that from the SCCs refcount.
     obj->ob_refcnt = rc - (count - 1);
     set_direct_rc(obj);
-    // Clear the rank information as we don't need it anymore.
-    // TODO use this for backtracking purposes?
-    set_scc_parent(obj, NULL);
+    // Link into the completed SCCs list for rollback.
+    set_scc_parent(obj, state->completed_sccs);
+    state->completed_sccs = obj;
     debug_obj("Completed SCC %s (%p) with %zu members with rc %zu \n", obj, count, rc - (count - 1));
 }
 
@@ -975,6 +983,110 @@ static void add_internal_reference(PyObject* obj, struct FreezeState *state)
     obj->ob_refcnt--;
     debug_obj("Decrementing rc of %s (%p) to %zd\n", obj, _Py_REFCNT(obj));
     assert(_Py_REFCNT(obj) > 0);
+}
+
+/*
+  Visitor for rollback_completed_scc walk 2.
+  Re-adds internal reference counts that were subtracted by
+  add_internal_reference during the freeze traversal.
+  The arg is a _Py_hashtable_t* of ring members.
+*/
+static int rollback_refcount_visit(PyObject* obj, void* ring_ht)
+{
+    if (obj == NULL)
+        return 0;
+
+    // Only increment for edges pointing to objects in this SCC ring.
+    if (_Py_hashtable_get((_Py_hashtable_t*)ring_ht, obj) == NULL)
+        return 0;
+
+    obj->ob_refcnt++;
+    return 0;
+}
+
+/*
+  Reverse the effects of complete_scc on a multi-member SCC,
+  restoring each object's original reference count.
+
+  Three walks of the ring:
+    Walk 1: Build ring membership hashtable + compute root's external RC
+    Walk 2: Re-add internal reference counts via tp_reachable
+    Walk 3: Clear immutability flags + return objects to GC
+*/
+static void rollback_completed_scc(PyObject* obj)
+{
+    debug_obj("Rolling back SCC starting at %s @ %p\n", obj);
+
+    _Py_hashtable_t *ring = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+
+    // Walk 1: Build ring membership set and compute root's external RC.
+    //
+    // After complete_scc:
+    //   root.ob_refcnt = total_ext - (count - 1)
+    //   Mi.ob_refcnt = external_refs_to_Mi (preserved by set_indirect_rc)
+    //
+    // We subtract each non-root member's RC from root and add (count-1)
+    // to recover: root.ob_refcnt = external_refs_to_root
+    size_t count = 0;
+    PyObject* n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        _Py_hashtable_set(ring, c, c);
+        if (c != obj) {
+            obj->ob_refcnt -= _Py_REFCNT(c);
+        }
+        count++;
+    } while (n != obj);
+    obj->ob_refcnt += (count - 1);
+
+    // Walk 2: Re-add internal reference counts.
+    // For each edge X->Y where Y is in the ring, increment Y.ob_refcnt.
+    // This reverses the add_internal_reference decrements from freeze.
+    n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        get_reachable_proc(Py_TYPE(c))(c, (visitproc)rollback_refcount_visit, ring);
+
+        // Handle weak references the same way as scc_add_internal_refcounts
+        // TODO(Immutable): David and Fred this change will impact you weak reference work.
+        if (PyWeakref_Check(c)) {
+            PyObject* wr = NULL;
+            PyWeakref_GetRef(c, &wr);
+            if (wr != NULL) {
+                rollback_refcount_visit(wr, ring);
+                Py_DECREF(wr);
+            }
+        }
+    } while (n != obj);
+
+    _Py_hashtable_destroy(ring);
+
+    // Walk 3: Clear immutability flags and return to GC.
+    n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        _Py_CLEAR_IMMUTABLE(c);
+        return_to_gc(c);  // clears scc_next and scc_parent, re-tracks in GC
+    } while (n != obj);
+}
+
+/*
+  Callback for _Py_hashtable_foreach to clear immutability flags
+  on visited objects (handles non-GC objects not in any SCC ring).
+*/
+static int clear_immutable_visitor(
+    _Py_hashtable_t* tbl, const void* key, const void* value, void* unused)
+{
+    (void)tbl;
+    (void)value;
+    (void)unused;
+    _Py_CLEAR_IMMUTABLE((PyObject*)key);
+    return 0;
 }
 
 #ifdef GIL_DISABLED
@@ -1900,11 +2012,27 @@ error:
         }
         unfreeze(item);
     }
+    // Unfreeze completed SCCs via intrusive linked list.
+    {
+        PyObject *scc = freeze_state.completed_sccs;
+        while (scc != NULL) {
+            // Read next link before rollback clears _gc_prev.
+            PyObject *next = scc_parent(scc);
+            if (scc_next(scc) == NULL) {
+                // Single-member SCC: just clear flags and return to GC.
+                _Py_CLEAR_IMMUTABLE(scc);
+                return_to_gc(scc);
+            } else {
+                rollback_completed_scc(scc);
+            }
+            scc = next;
+        }
+        freeze_state.completed_sccs = NULL;
+    }
+    // Clear immutability flags on non-GC visited objects.
+    _Py_hashtable_foreach(freeze_state.visited,
+                          clear_immutable_visitor, NULL);
     result = -1;
-
-    // TODO(Immutable): In error case, we should unfreeze the completed SCCs too.
-    // This requires we create the linked list of all SCCs completed during the same
-    // freeze operation.
 
 finally:
     deallocate_FreezeState(&freeze_state);
