@@ -2073,23 +2073,9 @@ static void make_weakrefs_safe(struct FreezeState* freeze_state)
 
 }
 
-static int run_pre_freeze_hook(PyObject* obj) {
-    PyObject *attr = NULL;
-
-    // Skip Python-level hook lookup for type objects. For classes,
-    // `__pre_freeze__` resolves to an unbound function and calling it as a
-    // normal bound method would fail with a missing 'self' argument.
-    if (PyType_Check(obj)) {
-        return 0;
-    }
-
-    // 0. Check if the pre-freeze hook already ran for this object
-    // TODO(immutable): Remember called hooks and return early
-
-    // 1. Pre-freeze hooks are never called for shallow immutable objects
-    // TODO(immutable): Return early for shallow immutable.
-
+static int _run_pre_freeze_hook(struct _Py_immutability_state *imm_state, PyObject* obj) {
     // 1. Check for the `__pre_freeze__` name
+    PyObject *attr = NULL;
     int res = PyObject_GetOptionalAttr(obj, &_Py_ID(__pre_freeze__), &attr);
     if (res == -1) {
         return -1;
@@ -2118,6 +2104,37 @@ static int run_pre_freeze_hook(PyObject* obj) {
 
     // No pre-freeze hook, so we're good to go.
     return 0;
+}
+
+static int check_pre_freeze_hook(struct _Py_immutability_state *imm_state, PyObject* obj) {
+    // Skip Python-level hook lookup for type objects. For classes,
+    // `__pre_freeze__` resolves to an unbound function and calling it as a
+    // normal bound method would fail with a missing 'self' argument.
+    if (PyType_Check(obj)) {
+        return 0;
+    }
+
+    // Pre-freeze hooks are never called for shallow immutable objects
+    if (is_shallow_immutable(imm_state, obj)) {
+        return 0;
+    }
+
+    // Check if the pre-freeze hook already ran for this object
+#if SIZEOF_VOID_P > 4
+    if ((obj->ob_flags & _Py_PREFREEZE_RAN_FLAG) != 0) {
+        return 0;
+    }
+#else
+#error "Immutability currently only works on 64bit platforms"
+#endif
+
+    // Mark pre-freeze hook as completed. This has to be set before calling
+    // the pre-freeze hook in case the pre-freeze hook reenters to prevent
+    // an infinite loop.
+    obj->ob_flags |= _Py_PREFREEZE_RAN_FLAG;
+
+    // Run the pre-freeze hook if it's present.
+    return _run_pre_freeze_hook(imm_state, obj);
 }
 
 static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
@@ -2335,7 +2352,7 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
         SUCCEEDS(check_freezable(imm_state, item, &freeze_state));
 
         // Call the pre-freeze hook if one is present
-        SUCCEEDS(run_pre_freeze_hook(item));
+        SUCCEEDS(check_pre_freeze_hook(imm_state, item));
 
         // If the pre-freeze hook turned the object immutable, we want to skip it.
         if (_Py_IsImmutable(item)) {
