@@ -350,5 +350,27 @@ class TestMultiFreezeExplicitNested(unittest.TestCase):
         self.assertFalse(isfrozen(c))
 
 
+class TestFreezeReturnValue(unittest.TestCase):
+    """freeze() returns its first argument."""
+
+    def test_single_arg_returns_it(self):
+        C = make_freezable_class()
+        obj = C()
+        result = freeze(obj)
+        self.assertIs(result, obj)
+
+    def test_multi_arg_returns_first(self):
+        C = make_freezable_class()
+        a, b, c = C(), C(), C()
+        result = freeze(a, b, c)
+        self.assertIs(result, a)
+
+    def test_two_arg_returns_first(self):
+        C = make_freezable_class()
+        a, b = C(), C()
+        result = freeze(a, b)
+        self.assertIs(result, a)
+
+
 if __name__ == '__main__':
     unittest.main()
