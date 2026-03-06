@@ -335,8 +335,8 @@ struct FreezeState {
     // It is also used to track nodes in GIL_DISABLED builds.
     _Py_hashtable_t *visited;
 
-    // The object that freeze() was called directly on.
-    PyObject *root;
+    // The objects that freeze() was called directly on.
+    _Py_hashtable_t *roots;
 
     // Intrusive linked list of completed SCC representatives
     // (threaded through _gc_prev / scc_parent), for rollback on error.
@@ -370,6 +370,12 @@ struct FreezeState {
 */
 #define SCC_RANK_FLAG _PyGC_PREV_MASK_COLLECTING
 
+static int
+is_root(struct FreezeState *state, PyObject *obj)
+{
+    return _Py_hashtable_get(state->roots, obj) != NULL;
+}
+
 static int init_freeze_state(struct FreezeState *state)
 {
 #ifndef GIL_DISABLED
@@ -380,6 +386,9 @@ static int init_freeze_state(struct FreezeState *state)
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
     state->completed_sccs = NULL;
+    state->roots = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
 #endif
@@ -391,6 +400,7 @@ static int init_freeze_state(struct FreezeState *state)
 static void deallocate_FreezeState(struct FreezeState *state)
 {
     _Py_hashtable_destroy(state->visited);
+    _Py_hashtable_destroy(state->roots);
 
 #ifndef GIL_DISABLED
     // We can't call the destructor directly as we didn't newref the objects
@@ -1335,7 +1345,7 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
         case _Py_FREEZABLE_NO:
             goto error;
         case _Py_FREEZABLE_EXPLICIT:
-            if (freeze_state != NULL && obj == freeze_state->root) {
+            if (freeze_state != NULL && is_root(freeze_state, obj)) {
                 return 0;
             }
             goto error;
@@ -1905,22 +1915,37 @@ late_init(struct _Py_immutability_state *state)
 #endif
 }
 
-// Main entry point to freeze an object and everything it can reach.
-int _PyImmutability_Freeze(PyObject* obj)
+// Core freeze implementation that supports multiple root objects.
+// All root objects are treated as directly-frozen for EXPLICIT freezable checks.
+static int
+freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
 {
-    if(_Py_IsImmutable(obj)){
-        return 0;
-    }
     int result = 0;
     TRACE_MERMAID_START();
 
     struct FreezeState freeze_state;
     // Initialize the freeze state
     SUCCEEDS(init_freeze_state(&freeze_state));
-    freeze_state.root = obj;
     struct _Py_immutability_state* imm_state = get_immutable_state();
     if(imm_state == NULL){
         goto error;
+    }
+
+    // Register all roots and push onto the DFS stack
+    for (Py_ssize_t i = 0; i < nobjs; i++) {
+        if (_Py_IsImmutable(objs[i])) {
+            continue;
+        }
+        if (_Py_hashtable_set(freeze_state.roots, objs[i], objs[i]) < 0) {
+            PyErr_NoMemory();
+            goto error;
+        }
+        SUCCEEDS(push(freeze_state.dfs, objs[i]));
+    }
+
+    // If all objects are already immutable, nothing to do.
+    if (_Py_hashtable_len(freeze_state.roots) == 0) {
+        goto finally;
     }
 
     // Late-init: mark importlib mutable state as not freezable.
@@ -1935,14 +1960,12 @@ int _PyImmutability_Freeze(PyObject* obj)
         PyObject *stack = PyObject_CallFunctionObjArgs(imm_state->traceback_func, NULL);
         if (stack != NULL) {
             // Add the type name to the top of the stack, can be useful.
-            PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(obj)), "__name__");
+            PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(objs[0])), "__name__");
             push(stack, typename);
             freeze_state.freeze_location = stack;
         }
     }
 #endif
-
-    SUCCEEDS(push(freeze_state.dfs, obj));
 
     while (PyList_Size(freeze_state.dfs) != 0) {
         PyObject* item = pop(freeze_state.dfs);
@@ -2038,4 +2061,20 @@ finally:
     deallocate_FreezeState(&freeze_state);
     TRACE_MERMAID_END();
     return result;
+}
+
+// Main entry point to freeze an object and everything it can reach.
+int _PyImmutability_Freeze(PyObject* obj)
+{
+    if(_Py_IsImmutable(obj)){
+        return 0;
+    }
+    return freeze_impl(&obj, 1);
+}
+
+// Freeze multiple root objects and their reachable graphs together.
+// All provided objects are treated as roots for EXPLICIT freezable checks.
+int _PyImmutability_FreezeMany(PyObject *const *objs, Py_ssize_t nobjs)
+{
+    return freeze_impl(objs, nobjs);
 }
