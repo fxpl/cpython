@@ -183,6 +183,76 @@ class TestSetFreezableStorage(unittest.TestCase):
             freeze(obj)
 
 
+class TestSetFreezableLifetime(unittest.TestCase):
+    """Ensure set_freezable does not keep objects alive longer than expected."""
+
+    def test_attr_path_no_prevent_gc(self):
+        # Objects with __dict__ use attribute storage.
+        # set_freezable should not prevent collection.
+        C = make_freezable_class()
+        obj = C()
+        ref = weakref.ref(obj)
+        set_freezable(obj, FREEZABLE_YES)
+        del obj
+        gc.collect()
+        self.assertIsNone(ref())
+
+    def test_weakref_path_no_prevent_gc(self):
+        # Objects with __slots__ + __weakref__ use the weakref dict.
+        # set_freezable should not prevent collection.
+        class S:
+            __slots__ = ('__weakref__', 'x')
+        register_freezable(S)
+        obj = S()
+        ref = weakref.ref(obj)
+        set_freezable(obj, FREEZABLE_NO)
+        del obj
+        gc.collect()
+        self.assertIsNone(ref())
+
+    def test_each_status_no_prevent_gc(self):
+        # Verify for every status value that the object is collected.
+        C = make_freezable_class()
+        for status in (FREEZABLE_YES, FREEZABLE_NO,
+                       FREEZABLE_EXPLICIT, FREEZABLE_PROXY):
+            obj = C()
+            ref = weakref.ref(obj)
+            set_freezable(obj, status)
+            del obj
+            gc.collect()
+            self.assertIsNone(ref(),
+                              f"Object with status {status} was kept alive")
+
+    def test_overwritten_status_no_prevent_gc(self):
+        # Override status multiple times, then delete.
+        C = make_freezable_class()
+        obj = C()
+        ref = weakref.ref(obj)
+        set_freezable(obj, FREEZABLE_NO)
+        set_freezable(obj, FREEZABLE_YES)
+        set_freezable(obj, FREEZABLE_EXPLICIT)
+        del obj
+        gc.collect()
+        self.assertIsNone(ref())
+
+    def test_cyclic_reference_with_set_freezable(self):
+        # Objects in a reference cycle with set_freezable should
+        # still be collected by the cycle detector.
+        C = make_freezable_class()
+        a = C()
+        b = C()
+        a.other = b
+        b.other = a
+        ref_a = weakref.ref(a)
+        ref_b = weakref.ref(b)
+        set_freezable(a, FREEZABLE_NO)
+        set_freezable(b, FREEZABLE_NO)
+        del a, b
+        gc.collect()
+        self.assertIsNone(ref_a())
+        self.assertIsNone(ref_b())
+
+
 class TestConstants(unittest.TestCase):
     """Verify the constant values are exposed correctly."""
 
