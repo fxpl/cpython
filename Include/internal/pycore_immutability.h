@@ -18,8 +18,7 @@ enum _Py_freezable_status {
 };
 
 struct _Py_immutability_state {
-    PyObject *module_locks;
-    PyObject *blocking_on;
+    bool late_init_done;
     PyObject *freezable_types;
     _Py_hashtable_t *shallow_immutable_types;
     PyObject *destroy_cb;

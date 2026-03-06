@@ -144,28 +144,6 @@ type_weakref(struct _Py_immutability_state *state, PyObject *obj)
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    // TODO(Immutable): Should we have the following code given the updates to the PEP?
-    // PyObject* frozen_importlib = NULL;
-
-    // frozen_importlib = PyImport_ImportModule("_frozen_importlib");
-    // if(frozen_importlib == NULL){
-    //     return -1;
-    // }
-
-    // state->module_locks = PyObject_GetAttrString(frozen_importlib, "_module_locks");
-    // if(state->module_locks == NULL){
-    //     Py_DECREF(frozen_importlib);
-    //     return -1;
-    // }
-
-    // state->blocking_on = PyObject_GetAttrString(frozen_importlib, "_blocking_on");
-    // if(state->blocking_on == NULL){
-    //     Py_DECREF(frozen_importlib);
-    //     return -1;
-    // }
-
-    // Py_DECREF(frozen_importlib);
-
     state->freezable_types = PySet_New(NULL);
     if(state->freezable_types == NULL){
         return -1;
@@ -219,21 +197,6 @@ int init_state(struct _Py_immutability_state *state)
 
     return 0;
 }
-
-// This is separate to the previous init as it depends on the traceback
-// module being available, and can cause a circular import if it is
-// called during register freezable.
-#ifdef Py_DEBUG
-static
-void init_traceback_state(struct _Py_immutability_state *state)
-{
-    PyObject *traceback_module = PyImport_ImportModule("traceback");
-    if (traceback_module != NULL) {
-        state->traceback_func = PyObject_GetAttrString(traceback_module, "format_stack");
-        Py_DECREF(traceback_module);
-    }
-}
-#endif
 
 static struct _Py_immutability_state* get_immutable_state(void)
 {
@@ -1807,6 +1770,58 @@ error:
     return -1;
 }
 
+// Mark importlib's mutable state as not freezable.
+// Separated from init_state because _frozen_importlib is not
+// available during early interpreter startup.
+static void
+late_init(struct _Py_immutability_state *state)
+{
+    state->late_init_done = true;
+
+    PyObject *frozen_importlib = PyImport_ImportModule("_frozen_importlib");
+    if (frozen_importlib == NULL) {
+        PyErr_Clear();
+        return;
+    }
+
+    PyObject *module_locks = PyObject_GetAttrString(frozen_importlib,
+                                                    "_module_locks");
+    if (module_locks != NULL) {
+        if (_PyImmutability_SetFreezable(module_locks,
+                                         _Py_FREEZABLE_NO) < 0) {
+            PyErr_Clear();
+        }
+        Py_DECREF(module_locks);
+    } else {
+        PyErr_Clear();
+    }
+
+    PyObject *blocking_on = PyObject_GetAttrString(frozen_importlib,
+                                                   "_blocking_on");
+    if (blocking_on != NULL) {
+        if (_PyImmutability_SetFreezable(blocking_on,
+                                         _Py_FREEZABLE_NO) < 0) {
+            PyErr_Clear();
+        }
+        Py_DECREF(blocking_on);
+    } else {
+        PyErr_Clear();
+    }
+
+    Py_DECREF(frozen_importlib);
+
+#ifdef Py_DEBUG
+    PyObject *traceback_module = PyImport_ImportModule("traceback");
+    if (traceback_module != NULL) {
+        state->traceback_func = PyObject_GetAttrString(traceback_module,
+                                                       "format_stack");
+        Py_DECREF(traceback_module);
+    } else {
+        PyErr_Clear();
+    }
+#endif
+}
+
 // Main entry point to freeze an object and everything it can reach.
 int _PyImmutability_Freeze(PyObject* obj)
 {
@@ -1825,13 +1840,14 @@ int _PyImmutability_Freeze(PyObject* obj)
         goto error;
     }
 
+    // Late-init: mark importlib mutable state as not freezable.
+    if (!imm_state->late_init_done) {
+        late_init(imm_state);
+    }
+
 #ifdef Py_DEBUG
     // In debug mode, we can set a freeze location for debugging purposes.
     // Get a traceback object to use as the freeze location.
-    if (imm_state->traceback_func == NULL) {
-        init_traceback_state(imm_state);
-    }
-
     if (imm_state->traceback_func != NULL) {
         PyObject *stack = PyObject_CallFunctionObjArgs(imm_state->traceback_func, NULL);
         if (stack != NULL) {
