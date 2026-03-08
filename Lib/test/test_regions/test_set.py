@@ -625,6 +625,27 @@ class TestRegionSetIntersectionUpdate(unittest.TestCase):
         s1.intersection_update(s2)  # s1 becomes {b, c}, drops ref to a
         # s1 now holds 2 refs (b, c), s2 holds 3 refs (b, c, f)
         self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for dropping a b c, +2 for retaining b and c
+    
+    def test_intersection_update_removes_non_common_refs_2(self):
+        """
+        intersection_update should release references to elements removed
+        from s1 and retain only those in the intersection. Using &= instead.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.b, r.c, r.f]   # {b, c, f}
+
+        s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        s1 &= s2  # s1 becomes {b, c}, drops ref to a
+        # s1 now holds 2 refs (b, c), s2 holds 3 refs (b, c, f)
+        self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for dropping a b c, +2 for retaining b and c
 
     def test_intersection_update_operator_matches_method(self):
         """
@@ -667,6 +688,32 @@ class TestRegionSetIntersectionUpdate(unittest.TestCase):
 
         r.s1.intersection_update(s2)
         self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for dropping a b c, +2 for retaining b and c
+    
+    def test_intersection_update_multi_swap_bodies_different_region(self):
+        """
+        the first and thirdset is in the region, but the second set (tmp) is local.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.d = self.A()
+        r.e = self.A()
+        r.f = self.A()
+        original_lrc = r._lrc
+        r.arr1 = [r.a, r.b, r.c]
+        arr2 = [r.b, r.c, r.f]
+        r.arr3 = [r.b, r.d, r.e]
+        self.assertEqual(r._lrc, original_lrc + 3) 
+
+        r.s1 = set(r.arr1)
+        s2 = set(arr2)
+        r.s3 = set(r.arr3)
+        self.assertEqual(r._lrc, original_lrc + 3 + 3) 
+        base_lrc = r._lrc
+
+        r.s1.intersection_update(s2, r.s3)
+        self.assertEqual(r._lrc, base_lrc - 3 + 1) # -3 for dropping a b c, +1 for retaining b and c
 
 
 class TestRegionSetUnion(unittest.TestCase):
