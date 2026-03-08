@@ -568,6 +568,34 @@ class TestRegionSetIntersection(unittest.TestCase):
         result = None
         self.assertEqual(r._lrc, base_lrc)
 
+    def test_intersection_multiple_sets_2(self):
+        """
+        Intersection across three sets should only retain elements
+        common to all three. Some sets are now in the region, and some are in local.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.d = self.A()
+        r.e = self.A()
+        r.f = self.A()
+        r.arr1 = [r.a, r.b, r.c]
+        r.arr2 = [r.b, r.c, r.f]
+        r.arr3 = [r.b, r.e, r.f]
+
+        original_lrc = r._lrc
+        r.s1 = set(r.arr1)
+        self.assertEqual(r._lrc, original_lrc)
+        s2 = set(r.arr2)
+        self.assertEqual(r._lrc, original_lrc + 3)
+        r.s3 = set(r.arr3)
+        self.assertEqual(r._lrc, original_lrc + 3)
+        base_lrc = r._lrc
+
+        result = r.s1.intersection(s2, r.s3)
+        self.assertEqual(r._lrc, base_lrc + 1)
+
 
 class TestRegionSetIntersectionUpdate(unittest.TestCase):
     """Tests for in-place intersection (intersection_update / &=) and LRC."""
@@ -617,6 +645,28 @@ class TestRegionSetIntersectionUpdate(unittest.TestCase):
         s1_method.intersection_update(s2)
         s1_operator &= s2
         self.assertEqual(s1_method, s1_operator)
+    
+    def test_intersection_update_swap_bodies_different_region(self):
+        """
+        the first set is in the region, but the second set (tmp) is local.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        original_lrc = r._lrc
+        r.arr1 = [r.a, r.b, r.c]
+        arr2 = [r.b, r.c, r.f]
+        self.assertEqual(r._lrc, original_lrc + 3) 
+
+        r.s1 = set(r.arr1)
+        s2 = set(arr2)
+        self.assertEqual(r._lrc, original_lrc + 3 + 3) 
+        base_lrc = r._lrc
+
+        r.s1.intersection_update(s2)
+        self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for dropping a b c, +2 for retaining b and c
 
 
 class TestRegionSetUnion(unittest.TestCase):
