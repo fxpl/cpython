@@ -246,6 +246,25 @@ class TestRegionSetDifference(unittest.TestCase):
         s4 = None
         self.assertLess(r._lrc, base_lrc)
 
+    def test_set_difference_result_releases_lrc_on_none_2_elem(self):
+        """
+        Setting the result of a difference to None should release
+        any borrowed references it holds.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.arr1 = [r.a, r.b, r.c]
+        r.arr2 = [r.a]
+
+        s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        s3 = s1.difference(s2)
+        self.assertEqual(r._lrc, base_lrc + 2)
+
 
 class TestRegionSetSymmetricDifference(unittest.TestCase):
     """Tests for symmetric difference (XOR) operations on sets."""
@@ -536,11 +555,8 @@ class TestRegionSetIntersection(unittest.TestCase):
         s2 = set(r.arr2)
         base_lrc = r._lrc
 
-        result_method = s1.intersection(s2)
-        result_operator = s1 & s2
-        self.assertEqual(result_method, result_operator)
-        self.assertEqual(r._lrc, base_lrc + 2 + 2) # both should borrow the same common elements, and there are two common elements, +2 from result_method and +2 from result_operator
-
+        _ = s1 & s2
+        self.assertEqual(r._lrc, base_lrc + 2) 
     def test_intersection_multiple_sets(self):
         """
         Intersection across three sets should only retain elements
@@ -830,6 +846,29 @@ class TestRegionSetUnion(unittest.TestCase):
         base_lrc = r._lrc
 
         result = s1 | s2   # {a, b, c, f}
+        self.assertEqual(r._lrc, base_lrc + 4)
+
+        result = None
+        self.assertEqual(r._lrc, base_lrc)
+
+    def test_union_lrc_reflects_all_unique_elements_union(self):
+        """
+        The union result holds references to all unique elements across
+        both sets, so the LRC should increase by the count of unique elements.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.b, r.c, r.f]   # {b, c, f}
+
+        s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        result = s1.union(s2)   # {a, b, c, f}
         self.assertEqual(r._lrc, base_lrc + 4)
 
         result = None

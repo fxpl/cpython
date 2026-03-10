@@ -16,14 +16,27 @@ r.e = A()
 r.f = A()
 r.arr1 = [r.a, r.b, r.c]
 r.arr2 = [r.b, r.c, r.f]
-s1 = set(r.arr1)
+
+# s1 = set(r.arr1)
+# print(f"Region after creating set1: {r}")
+# print(f"{s1}")
+# s2 = set(r.arr2)
+# print(f"Region after creating set2: {r}")
+# print(f"{s2}")
+# input("Press Enter to create set or...")
+# # result = s1 | s2
+# result = s1.union(s2)
+# print(f"Region after creating set or: {r}")
+# print(f"Or result: {result}")
+
+r.s1 = set(r.arr1)
 print(f"Region after creating set1: {r}")
-print(f"{s1}")
+print(f"{r.s1}")
 s2 = set(r.arr2)
 print(f"Region after creating set2: {r}")
 print(f"{s2}")
 input("Press Enter to create set or...")
-result = s1 | s2
-# result = s1.union(s2)
+result = r.s1 | s2
+# result = r.s1.union(s2)
 print(f"Region after creating set or: {r}")
 print(f"Or result: {result}")

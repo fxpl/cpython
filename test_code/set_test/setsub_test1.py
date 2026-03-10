@@ -29,7 +29,7 @@ s3 = set(r.arr3)
 print(f"Region after creating set3: {r}")
 print(f"{s3}")
 input("Press Enter to create set difference...")
-s4 = s1.difference(s2, s3)
+s4 = s1.difference(s2)
 print(f"Region after creating set difference: {r}")
 print(f"{s4}")
 
