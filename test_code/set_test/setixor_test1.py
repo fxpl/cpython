@@ -36,8 +36,8 @@ s2 = set(r.arr2)
 print(f"Region after creating set2: {r}") # +3
 print(f"{s2}")
 input("Press Enter to create set xor...")
-# s1 ^= s2
-r.s1.symmetric_difference_update(s2) # -4 for derefs r.a, r.b, r.c, r.f, then +1 for r.c
+# r.s1 ^= s2
+r.s1.symmetric_difference_update(s2)
 print(f"Region after creating set xor: {r}")
 print(f"Xor result: {r.s1}")
 

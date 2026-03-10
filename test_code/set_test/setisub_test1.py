@@ -16,18 +16,32 @@ r2.e = A()
 f = A()
 g = A()
 
+# r.arr1 = [r.a, r.b, r.c]
+# r.arr2 = [r.a]
+# s1 = set(r.arr1)
+# print(f"Region after creating set1: {r}")
+# print(f"{s1}")
+# s2 = set(r.arr2)
+# print(f"Region after creating set2: {r}")
+# print(f"{s2}")
+# input("Press Enter to create set difference...")
+# s1 -= s2
+# print(f"Region after creating set difference: {r}")
+# print(f"{s1}")
+
 r.arr1 = [r.a, r.b, r.c]
 r.arr2 = [r.a]
-s1 = set(r.arr1)
+r.s1 = set(r.arr1)
 print(f"Region after creating set1: {r}")
-print(f"{s1}")
+print(f"{r.s1}")
 s2 = set(r.arr2)
 print(f"Region after creating set2: {r}")
 print(f"{s2}")
 input("Press Enter to create set difference...")
-s1 -= s2
+# r.s1 -= s2
+r.s1.difference_update(s2)
 print(f"Region after creating set difference: {r}")
-print(f"{s1}")
+print(f"{r.s1}")
 
 # s1 = set(r.arr1)
 # print(f"Region after creating set1: {r}")

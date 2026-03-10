@@ -713,10 +713,9 @@ class TestRegionSetIntersectionUpdate(unittest.TestCase):
         s1.intersection_update(r.s2)
         self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for dropping a b c, +2 for retaining b and c
 
-    @unittest.expectedFailure
-    def test_intersection_update_swap_bodies_different_region_2(self):
+    def test_intersection_update_swap_bodies_different_region_2_intersection_update(self):
         """
-        the first set is in the region, but the second set is in the local.
+        the first set is in the region, but the second set is in the local. Using intersection_update().
         """
         r = Region()
         r.a = self.A()
@@ -735,8 +734,30 @@ class TestRegionSetIntersectionUpdate(unittest.TestCase):
 
         r.s1.intersection_update(s2)
         self.assertEqual(r._lrc, base_lrc) # should not change since s1 is in the region. LRC should not be updated since s1 is in the region.
-    
+
     @unittest.expectedFailure
+    def test_intersection_update_swap_bodies_different_region_2_iand(self):
+        """
+        the first set is in the region, but the second set is in the local. Using &=.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        original_lrc = r._lrc
+        r.arr1 = [r.a, r.b, r.c]
+        arr2 = [r.b, r.c, r.f]
+        self.assertEqual(r._lrc, original_lrc + 3) 
+
+        r.s1 = set(r.arr1)
+        s2 = set(arr2)
+        self.assertEqual(r._lrc, original_lrc + 3 + 3) 
+        base_lrc = r._lrc
+
+        r.s1 &= s2
+        self.assertEqual(r._lrc, base_lrc) # should not change since s1 is in the region. LRC should not be updated since s1 is in the region.
+    
     def test_intersection_update_multi_swap_bodies_different_region(self):
         """
         the first and third set is in the region, but the second set is local.
@@ -844,6 +865,7 @@ class TestRegionSetUnionUpdate(unittest.TestCase):
         """
         |= should add references to new elements from s2 that
         weren't already in s1, increasing the LRC accordingly.
+        Using |=.
         """
         r = Region()
         r.a = self.A()
@@ -859,6 +881,71 @@ class TestRegionSetUnionUpdate(unittest.TestCase):
 
         s1 |= s2   # s1 becomes {a, b, c, f}, gains ref to f
         self.assertEqual(r._lrc, base_lrc - 3 + 4) # -3 for original a b c, +4 for new a b c f (but a b c are still borrowed, so net +1 for f)
+    
+    def test_union_update_adds_new_refs_update(self):
+        """
+        |= should add references to new elements from s2 that
+        weren't already in s1, increasing the LRC accordingly.
+        Using update instead of |=.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.b, r.c, r.f]   # {b, c, f}
+
+        s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        s1.update(s2)   # s1 becomes {a, b, c, f}, gains ref to f
+        self.assertEqual(r._lrc, base_lrc - 3 + 4) # -3 for original a b c, +4 for new a b c f (but a b c are still borrowed, so net +1 for f)
+
+    @unittest.expectedFailure
+    def test_union_update_adds_new_refs_2(self):
+        """
+        |= should add references to new elements from s2 that
+        weren't already in s1, increasing the LRC accordingly.
+        Using |=. First set is in the region, second set is in local.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.b, r.c, r.f]   # {b, c, f}
+
+        r.s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        r.s1 |= s2 
+        self.assertEqual(r._lrc, base_lrc)
+    
+    @unittest.expectedFailure
+    def test_union_update_adds_new_refs_2_update(self):
+        """
+        |= should add references to new elements from s2 that
+        weren't already in s1, increasing the LRC accordingly.
+        Using update instead of |=. First set is in the region, second set is in local.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.b, r.c, r.f]   # {b, c, f}
+
+        r.s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        r.s1.update(s2)
+        self.assertEqual(r._lrc, base_lrc)
 
     def test_union_update_released_decreases_lrc(self):
         """
@@ -908,6 +995,64 @@ class TestRegionSetDifferenceUpdate(unittest.TestCase):
 
         s1 -= s2   # s1 becomes {b, c}, drops ref to a
         self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for original a b c, +2 for remaining b and c
+
+    def test_difference_update_removes_refs_difference_update(self):
+        """
+        -= should release references to elements removed from s1,
+        decreasing the LRC by the number of elements subtracted.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.a]              # {a}
+
+        s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        s1.difference_update(s2)   # s1 becomes {b, c}, drops ref to a
+        self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for original a b c, +2 for remaining b and c
+
+    @unittest.expectedFailure
+    def test_difference_update_removes_refs_2(self):
+        """
+        -= should release references to elements removed from s1,
+        decreasing the LRC by the number of elements subtracted.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.a]              # {a}
+
+        r.s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        r.s1 -= s2   # s1 becomes {b, c}, drops ref to a
+        self.assertEqual(r._lrc, base_lrc) # -3 for original a b c, +2 for remaining b and c
+
+    def test_difference_update_removes_refs_difference_2_update(self):
+        """
+        -= should release references to elements removed from s1,
+        decreasing the LRC by the number of elements subtracted.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.a]              # {a}
+
+        r.s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        r.s1.difference_update(s2)   # s1 becomes {b, c}, drops ref to a
+        self.assertEqual(r._lrc, base_lrc) 
 
     def test_difference_update_result_released(self):
         """
@@ -979,6 +1124,45 @@ class TestRegionSetSymmetricDifferenceUpdate(unittest.TestCase):
         s1_method.symmetric_difference_update(s2)
         s1_operator ^= s2
         self.assertEqual(s1_method, s1_operator)
+    
+    @unittest.expectedFailure
+    def test_symmetric_difference_update_removes_refs_2(self):
+        """
+        ^= should release references to elements removed from s1,
+        decreasing the LRC by the number of elements subtracted.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.a]              # {a}
+
+        r.s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        r.s1 ^= s2
+        self.assertEqual(r._lrc, base_lrc)
+
+    def test_symmetric_difference_update_removes_refs_difference_2_update(self):
+        """
+        ^= should release references to elements removed from s1,
+        decreasing the LRC by the number of elements subtracted.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.arr1 = [r.a, r.b, r.c]   # {a, b, c}
+        r.arr2 = [r.a]              # {a}
+
+        r.s1 = set(r.arr1)
+        s2 = set(r.arr2)
+        base_lrc = r._lrc
+
+        r.s1.symmetric_difference_update(s2)
+        self.assertEqual(r._lrc, base_lrc) 
 
 
 class TestRegionSetSubsetSuperset(unittest.TestCase):
