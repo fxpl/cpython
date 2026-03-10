@@ -16,17 +16,30 @@ r.e = A()
 r.f = A()
 r.arr1 = [r.a, r.b, r.c, r.f]
 r.arr2 = [r.a, r.b, r.f]
-s1 = set(r.arr1)
+
+# s1 = set(r.arr1)
+# print(f"Region after creating set1: {r}") # +4
+# print(f"{s1}")
+# s2 = set(r.arr2)
+# print(f"Region after creating set2: {r}") # +3
+# print(f"{s2}")
+# input("Press Enter to create set xor...")
+# # s1 ^= s2
+# s1.symmetric_difference_update(s2) # -4 for derefs r.a, r.b, r.c, r.f, then +1 for r.c
+# print(f"Region after creating set xor: {r}")
+# print(f"Xor result: {s1}")
+
+r.s1 = set(r.arr1)
 print(f"Region after creating set1: {r}") # +4
-print(f"{s1}")
+print(f"{r.s1}")
 s2 = set(r.arr2)
 print(f"Region after creating set2: {r}") # +3
 print(f"{s2}")
 input("Press Enter to create set xor...")
 # s1 ^= s2
-s1.symmetric_difference_update(s2) # -4 for derefs r.a, r.b, r.c, r.f, then +1 for r.c
+r.s1.symmetric_difference_update(s2) # -4 for derefs r.a, r.b, r.c, r.f, then +1 for r.c
 print(f"Region after creating set xor: {r}")
-print(f"Xor result: {s1}")
+print(f"Xor result: {r.s1}")
 
 # r.a = A()
 # r.b = A()

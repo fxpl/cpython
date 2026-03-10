@@ -568,7 +568,31 @@ class TestRegionSetIntersection(unittest.TestCase):
         result = None
         self.assertEqual(r._lrc, base_lrc)
 
-    def test_intersection_multiple_sets_2(self):
+    def test_intersection_multiple_sets_2_1(self):
+        """
+        Intersection across two sets should only retain elements
+        common to all two. The first set is in the region, and the second set
+        is in local.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        r.arr1 = [r.a, r.b, r.c]
+        r.arr2 = [r.b, r.c, r.f]
+
+        original_lrc = r._lrc
+        r.s1 = set(r.arr1)
+        self.assertEqual(r._lrc, original_lrc)
+        s2 = set(r.arr2)
+        self.assertEqual(r._lrc, original_lrc + 3)
+        base_lrc = r._lrc
+
+        result = r.s1.intersection(s2)
+        self.assertEqual(r._lrc, base_lrc + 2)
+
+    def test_intersection_multiple_sets_2_2(self):
         """
         Intersection across three sets should only retain elements
         common to all three. Some sets are now in the region, and some are in local.
@@ -688,6 +712,29 @@ class TestRegionSetIntersectionUpdate(unittest.TestCase):
 
         s1.intersection_update(r.s2)
         self.assertEqual(r._lrc, base_lrc - 3 + 2) # -3 for dropping a b c, +2 for retaining b and c
+
+    @unittest.expectedFailure
+    def test_intersection_update_swap_bodies_different_region_2(self):
+        """
+        the first set is in the region, but the second set is in the local.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.f = self.A()
+        original_lrc = r._lrc
+        r.arr1 = [r.a, r.b, r.c]
+        arr2 = [r.b, r.c, r.f]
+        self.assertEqual(r._lrc, original_lrc + 3) 
+
+        r.s1 = set(r.arr1)
+        s2 = set(arr2)
+        self.assertEqual(r._lrc, original_lrc + 3 + 3) 
+        base_lrc = r._lrc
+
+        r.s1.intersection_update(s2)
+        self.assertEqual(r._lrc, base_lrc) # should not change since s1 is in the region. LRC should not be updated since s1 is in the region.
     
     @unittest.expectedFailure
     def test_intersection_update_multi_swap_bodies_different_region(self):
