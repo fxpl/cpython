@@ -7,6 +7,7 @@
 #include "pycore_gc.h"
 #include "pycore_object.h"
 #include "pycore_immutability.h"
+#include "pycore_interp.h"
 #include "pycore_list.h"
 #include "pycore_weakref.h"
 
@@ -800,6 +801,242 @@ static void unfreeze(PyObject* obj)
     scc_return_to_gc(obj, true);
 }
 
+// Copy-pasted from weakrefobject.c
+static void weakref_handle_callback(PyWeakReference* ref, PyObject* callback)
+{
+    PyObject* cbresult = PyObject_CallOneArg(callback, (PyObject*)ref);
+
+    if (cbresult == NULL) {
+        PyErr_FormatUnraisable("Exception ignored while "
+                               "calling weakref callback %R", callback);
+    }
+    else {
+        Py_DECREF(cbresult);
+    }
+}
+
+// Copy-pasted from weakrefobject.c
+static void weakref_insert_head(PyWeakReference* newref, PyWeakReference** list)
+{
+    PyWeakReference* next = *list;
+
+    newref->wr_prev = NULL;
+    newref->wr_next = next;
+    if (next != NULL)
+        next->wr_prev = newref;
+    *list = newref;
+}
+
+static void weakref_remove(PyWeakReference* self, PyWeakReference** list)
+{
+    if (*list == self) {
+        *list = self->wr_next;
+    }
+    if (self->wr_prev != NULL) {
+        self->wr_prev->wr_next = self->wr_next;
+    }
+    if (self->wr_next != NULL) {
+        self->wr_next->wr_prev = self->wr_prev;
+    }
+    self->wr_prev = NULL;
+    self->wr_next = NULL;
+}
+
+static void weakref_decref_weakrefs(PyWeakReference* head)
+{
+    while (head != NULL) {
+        PyWeakReference* weakref = head;
+        head = weakref->wr_next;
+        weakref->wr_next = NULL;
+        weakref->wr_prev = NULL;
+        Py_DECREF(weakref);
+    }
+}
+
+typedef struct {
+    int32_t interpreters_remaining;
+    PyObject* to_dealloc;
+} callback_progress;
+
+typedef struct {
+    PyWeakReference* head;
+    callback_progress* progress;
+} pending_callbacks;
+
+/* Signal that the current interpreter handled the callbacks.
+ * If all interpreters have handled the callbacks, deallocate the object.
+ */
+static void weakref_signal_handled(callback_progress* progress)
+{
+    int32_t old = _Py_atomic_add_int32(
+        &progress->interpreters_remaining, -1);
+    if (old == 1) {
+        // All callbacks handled, trigger deallocation again.
+        Py_INCREF(progress->to_dealloc);
+        Py_DECREF(progress->to_dealloc);
+        PyMem_Free(progress);
+    }
+}
+
+/* Call the pending callbacks.
+ * This function can be executed asynchronously using Py_AddPendingCall.
+ */
+static int weakref_call_callbacks(void* arg)
+{
+    pending_callbacks* pending = (pending_callbacks*)arg;
+    PyWeakReference* head = pending->head;
+    debug("Interpreter %zd handling callbacks for dying object %p\n",
+        PyInterpreterState_GetID(PyInterpreterState_Get()),
+        pending->progress->to_dealloc);
+
+    while (head != NULL) {
+        PyWeakReference* weakref = head;
+        PyObject* callback = weakref->wr_callback;
+        assert(callback != NULL);
+        weakref->wr_callback = NULL;
+        weakref_handle_callback(weakref, callback);
+        Py_DECREF(callback);
+        head = weakref->wr_next;
+        weakref->wr_next = NULL;
+        weakref->wr_prev = NULL;
+        Py_DECREF(weakref);
+    }
+
+    weakref_signal_handled(pending->progress);
+    PyMem_Free(pending);
+    // Report success as per Py_AddPendingCall contract
+    return 0;
+}
+
+/* Schedule the callbacks on the given interpreter. */
+static void weakref_schedule_callbacks(int64_t ipid, pending_callbacks* pending)
+{
+    // FIXME(Immutable): Can the interpreter go away in the middle of scheduling?
+    PyInterpreterState* target_is = _PyInterpreterState_LookUpID(ipid);
+    if (target_is == NULL) {
+        // Interpreter is already gone.
+        goto abort;
+    }
+    // We just need to get any thread state to schedule the call.
+    PyThreadState* tstate_target = PyInterpreterState_ThreadHead(target_is);
+    if (tstate_target == NULL) {
+        goto abort;
+    }
+    PyThreadState* tstate_old = PyThreadState_Swap(tstate_target);
+    int schedule_res = Py_AddPendingCall(weakref_call_callbacks, (void*)pending);
+    PyThreadState_Swap(tstate_old);
+    if (schedule_res != 0) {
+        goto abort;
+    }
+    return;
+
+abort:
+    PyMem_Free(pending);
+    weakref_decref_weakrefs(pending->head);
+    return;
+}
+
+/* Remove callbacks with the given ipid from the list.
+ * Return them as a new list.
+ */
+static PyWeakReference* weakref_separate_ipid(PyWeakReference** list, int64_t ipid)
+{
+    PyWeakReference* result = NULL;
+    PyWeakReference* next = *list;
+    while (next != NULL) {
+        PyWeakReference* current = next;
+        next = next->wr_next;
+        if (current->callback_ipid == ipid) {
+            weakref_remove(current, list);
+            weakref_insert_head(current, &result);
+        }
+    }
+    return result;
+}
+
+/* Clear the weakrefs in the list.
+ * Returns:
+ * (true) The caller can proceed with deallocating 'to_dealloc'.
+ * (false) Callbacks were scheduled, deallocation will be triggered again.
+ */
+static int clear_weakrefs(PyWeakReference* head, PyObject* to_dealloc)
+{
+    if (head == NULL) {
+        return true;
+    }
+
+    debug("Clearing weakrefs of %p.\n", to_dealloc);
+    // We want to continue with deallocation after calling all the callbacks.
+    callback_progress* progress = PyMem_Malloc(sizeof(callback_progress));
+    if (progress == NULL) {
+        // Give up calling callbacks.
+        weakref_decref_weakrefs(head);
+        return true;
+    }
+    // Start with 1, decremented at the end of this function.
+    // This way, we prevent hitting zero before all callbacks are scheduled.
+    progress->interpreters_remaining = 1;
+    progress->to_dealloc = to_dealloc;
+
+    // Schedule the callbacks on their original interpreters.
+    while (head != NULL) {
+        int64_t ipid = head->callback_ipid;
+        PyWeakReference* ip_callbacks = weakref_separate_ipid(&head, ipid);
+        // Create a data structure to hold arguments for the async call.
+        pending_callbacks* pending = PyMem_Malloc(sizeof(pending_callbacks));
+        if (pending == NULL) {
+            // Give up calling callbacks.
+            weakref_decref_weakrefs(ip_callbacks);
+        }
+        else {
+            _Py_atomic_add_int32(&progress->interpreters_remaining, 1);
+            pending->head = ip_callbacks;
+            pending->progress = progress;
+            // TODO(Immutable): run immediately if ipid is the current interpreter
+            weakref_schedule_callbacks(ipid, pending);
+        }
+    }
+
+    weakref_signal_handled(progress);
+    return false;
+}
+
+/* Clear the weakrefs for an SCC.
+ * Returns:
+ * (true) Deallocation can continue.
+ * (false) Callbacks were scheduled, deallocation will be triggered again.
+ */
+static int clear_weakrefs_scc(PyObject* obj)
+{
+    // Collect weakrefs with callbacks into a list.
+    PyWeakReference* head = NULL;
+    PyObject* n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(c))) {
+            _PyImmutability_ClearWeakRefs(c, &head);
+        }
+    } while (n != obj);
+
+    return clear_weakrefs(head, obj);
+}
+
+/* Clear the weakrefs for a single object.
+ * Returns:
+ * (true) Deallocation can continue.
+ * (false) Callbacks were scheduled, deallocation will be triggered again.
+ */
+static int clear_weakrefs_single(PyObject* obj)
+{
+    if (!_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
+        return true;
+    }
+    // Collect weakrefs with callbacks into a list.
+    PyWeakReference* head = NULL;
+    _PyImmutability_ClearWeakRefs(obj, &head);
+    return clear_weakrefs(head, obj);
+}
 
 static void unfreeze_and_finalize_scc(PyObject* obj)
 {
@@ -809,12 +1046,11 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
     scc_set_refcounts_to_one(obj);
     scc_add_internal_refcounts(obj, &scc_details);
 
-    // These are cases that we don't handle.  Return the state as mutable to the
-    // cycle detector to handle.
-    // TODO(Immutable): Lift the weak references to be handled here.
-    if (scc_details.has_weakreferences > 0 || scc_details.has_legacy_finalizers > 0) {
-        debug("There are weak references or legacy finalizers in the SCC.  Let cycle detector handle this case.\n");
-        debug("Weak references: %d, Legacy finalizers: %d\n", scc_details.has_weakreferences, scc_details.has_legacy_finalizers);
+    // We don't handle legacy finalizers.
+    // Return the state as mutable to the cycle detector to handle.
+    if (scc_details.has_legacy_finalizers > 0) {
+        debug("There are legacy finalizers in the SCC.  Let cycle detector handle this case.\n");
+        debug("Legacy finalizers: %d\n", scc_details.has_legacy_finalizers);
         scc_make_mutable(obj);
         scc_return_to_gc(obj, true);
         return;
@@ -1745,13 +1981,22 @@ int _Py_DecRef_Immutable(PyObject *op)
 
     assert(_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) == 0);
 
-    if (PyObject_IS_GC(op)) {
-        if (scc_next(op) != NULL) {
-            // This is part of an SCC, so we need to turn it back into mutable state,
-            // and correctly re-establish RCs.
-            unfreeze_and_finalize_scc(op);
+    if (PyObject_IS_GC(op) && scc_next(op) != NULL) {
+        // This object is the root of an SCC.
+        if (!clear_weakrefs_scc(op)) {
+            // Callbacks were scheduled, deallocation will be triggered again.
             return false;
         }
+        // We need to turn the SCC back into mutable state
+        // and correctly re-establish RCs.
+        unfreeze_and_finalize_scc(op);
+        return false;
+    }
+    if (!clear_weakrefs_single(op)) {
+        // Callbacks were scheduled, deallocation will be triggered again.
+        return false;
+    }
+    if (PyObject_IS_GC(op)) {
         // This is a GC object, so we need to put it back on the GC list.
         debug("Returning to GC simple case %p\n", op);
         return_to_gc(op);

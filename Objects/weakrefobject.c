@@ -71,6 +71,13 @@
  * - We keep the callback in the weakref object until it is about to be called.
  *   That keeps it alive, so we don't need to increment its refcount.
  *
+ * Calling the callback is tricky because it can reside on a different
+ * interpreter than the interpreter that triggered deallocation.
+ * Therefore, we keep track of the original interpreter of the callback.
+ * When the immutable object is being deallocated, we schedule the callbacks
+ * to be called on their original interpreters using an asynchronous call.
+ * Once all callbacks have been called, we continue deallocating the object.
+ *
  * Immutable objects are never GC-collected.
  */
 #endif
@@ -109,6 +116,12 @@ init_weakref(PyWeakReference *self, PyObject *ob, PyObject *callback)
     self->wr_prev = NULL;
     self->wr_next = NULL;
     self->wr_callback = Py_XNewRef(callback);
+    if (callback == NULL) {
+        self->callback_ipid = -1;
+    }
+    else {
+        self->callback_ipid = PyInterpreterState_GetID(PyInterpreterState_Get());
+    }
     self->vectorcall = weakref_vectorcall;
 #ifdef Py_GIL_DISABLED
     self->weakrefs_lock = &WEAKREF_LIST_LOCK(ob);
@@ -1076,6 +1089,7 @@ PyWeakref_GetObject(PyObject *ref)
 
 /* Note that there's an inlined copy-paste of handle_callback() in gcmodule.c's
  * handle_weakrefs().
+ * There is also a copy-paste in immutability.c.
  */
 static void
 handle_callback(PyWeakReference *ref, PyObject *callback)
@@ -1104,6 +1118,7 @@ PyObject_ClearWeakRefs(PyObject *object)
 
     if (object == NULL
         || !_PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))
+        || _Py_IsImmutable(object)
         || Py_REFCNT(object) != 0)
     {
         PyErr_BadInternalCall();
@@ -1179,6 +1194,44 @@ PyObject_ClearWeakRefs(PyObject *object)
 
     assert(!PyErr_Occurred());
     PyErr_SetRaisedException(exc);
+}
+
+/* Clear weak references of an immutable object.
+ * For weakrefs with callbacks, add them to the callbacks list
+ * to be handled later.
+ */
+void
+_PyImmutability_ClearWeakRefs(PyObject *object, PyWeakReference **callbacks)
+{
+    if (object == NULL
+        || !_PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))
+        || !_Py_IsImmutable(object))
+    {
+        PyErr_BadInternalCall();
+        return;
+    }
+
+    PyWeakReference **list = GET_WEAKREFS_LISTPTR(object);
+    if (_Py_atomic_load_ptr(list) == NULL) {
+        // Fast path for the common case
+        return;
+    }
+
+    // Weakrefs without callbacks are just cleared.
+    // Weakrefs with callbacks are cleared and added to the list.
+    for (int done = 0; !done;) {
+        LOCK_WEAKREFS(object);
+        PyWeakReference *cur = *list;
+        if (cur != NULL) {
+            clear_weakref_lock_held(cur, NULL); // keeps wr_callback
+            if (cur->wr_callback != NULL) {
+                // We need to store the callback to be able to call it later.
+                insert_head(cur, callbacks);
+            }
+        }
+        done = (*list == NULL);
+        UNLOCK_WEAKREFS(object);
+    }
 }
 
 void
