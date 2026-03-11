@@ -1346,132 +1346,58 @@ set_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
    Useful for operations that update in-place (by allowing an intermediate
    result to be swapped into one of the original inputs).
 */
+static PyObject *set_difference(PySetObject *, PyObject *);  // add this
 
 static void
 set_swap_bodies(PySetObject *a, PySetObject *b)
 {
-    
-    // if a and b are in the same region, no problem. use this
-    if(PyRegion_ShareRegion(a,b)){
-        Py_ssize_t t;
-        setentry *u;
-        setentry tab[PySet_MINSIZE];
-        Py_hash_t h;
-        t = a->fill;     a->fill   = b->fill;        b->fill  = t;
-        t = a->used;
-        FT_ATOMIC_STORE_SSIZE_RELAXED(a->used, b->used);
-        FT_ATOMIC_STORE_SSIZE_RELAXED(b->used, t);
-        t = a->mask;     a->mask   = b->mask;        b->mask  = t;
-        
-        u = a->table;
-        if (a->table == a->smalltable)
-        u = b->smalltable;
-        a->table  = b->table;
-        if (b->table == b->smalltable)
-        a->table = a->smalltable;
-        b->table = u;
-        
-        if (a->table == a->smalltable || b->table == b->smalltable) {
-            memcpy(tab, a->smalltable, sizeof(tab));
-            memcpy(a->smalltable, b->smalltable, sizeof(tab));
-            memcpy(b->smalltable, tab, sizeof(tab));
-        }
-        
-        if (PyType_IsSubtype(Py_TYPE(a), &PyFrozenSet_Type)  &&
-        PyType_IsSubtype(Py_TYPE(b), &PyFrozenSet_Type)) {
-            h = FT_ATOMIC_LOAD_SSIZE_RELAXED(a->hash);
-            FT_ATOMIC_STORE_SSIZE_RELAXED(a->hash, FT_ATOMIC_LOAD_SSIZE_RELAXED(b->hash));
-            FT_ATOMIC_STORE_SSIZE_RELAXED(b->hash, h);
-        } else {
-            FT_ATOMIC_STORE_SSIZE_RELAXED(a->hash, -1);
-            FT_ATOMIC_STORE_SSIZE_RELAXED(b->hash, -1);
-        }
-    } 
-    else {
+    if(!PyRegion_IsLocal(a)) {
+        Py_ssize_t pos = 0;
         setentry *entry;
-        Py_ssize_t pos;
-        Py_ssize_t i;
+        PyObject *c = set_difference(a, b);
 
-        Py_ssize_t a_snapped = 0;
-        Py_ssize_t b_snapped = 0;
-        Py_ssize_t a_inserted = 0;
-        Py_ssize_t b_inserted = 0;
-
-        // 1. Allocate flat arrays to hold keys and hashes from 'a' and 'b'
-        Py_ssize_t a_size = a->used;
-        Py_ssize_t b_size = b->used;
-
-        PyObject **a_keys = PyMem_New(PyObject *, a_size);
-        Py_hash_t *a_hashes = PyMem_New(Py_hash_t, a_size);
-        PyObject **b_keys = PyMem_New(PyObject *, b_size);
-        Py_hash_t *b_hashes = PyMem_New(Py_hash_t, b_size);
-
-        if (!a_keys || !a_hashes || !b_keys || !b_hashes)
-            goto error;
-
-        // 2. Snapshot 'a' keys
-        pos = 0; i = 0;
-        while (set_next(a, &pos, &entry)) {
-            a_keys[i] = PyRegion_NewRef(entry->key);
-            a_hashes[i] = entry->hash;
-            i++;
-            a_snapped++;
+        while (set_next(c, &pos, &entry)) {
+            PyObject *key = entry->key;
+            int rv = PyRegion_AddLocalRef(key); // b now points to "key" because of the swap, and b is guaranteed to be in the local region, so we can add a local reference to key for b. 
+            assert(rv==0); // assure that AddLocalRef cannot fail since key is already in the region.
+            PyRegion_RemoveRef(a, key);
         }
+        assert(PyRegion_IsLocal(c));
+        Py_DECREF(c); // set_dealloc will remove all references from c to the objects in the set, and set_dealloc also handles LRC, so we don't have to do anything else to remove the references from the region here.
+    }
 
-        // 3. Snapshot 'b' keys
-        pos = 0; i = 0;
-        while (set_next(b, &pos, &entry)) {
-            b_keys[i] = PyRegion_NewRef(entry->key);
-            b_hashes[i] = entry->hash;
-            i++;
-            b_snapped++;
-        }
-
-        // // 4. Call RemoveRef on all keys in 'a' and 'b'
-        // for (i = 0; i < a_size; i++){
-        //     PyRegion_RemoveRef(a, a_keys[i]);
-        //     Py_DECREF(a_keys[i]);
-        // }
-        // for (i = 0; i < b_size; i++){
-        //     PyRegion_RemoveRef(b, b_keys[i]);
-        //     Py_DECREF(b_keys[i]);
-        // }
-
-        // 5. Clear both sets
-        set_clear_internal((PyObject *)a);
-        set_clear_internal((PyObject *)b);
-
-        // 6. Fill 'a' with 'b's original keys, 'b' with 'a's original keys
-        for (i = 0; i < b_size; i++) {
-            if (set_add_entry(a, b_keys[i], b_hashes[i]) < 0)
-                goto error;
-            PyRegion_RemoveLocalRef(b_keys[i]);
-            Py_DECREF(b_keys[i]);
-            a_inserted++;
-        }
-        for (i = 0; i < a_size; i++) {
-            if (set_add_entry(b, a_keys[i], a_hashes[i]) < 0)
-                goto error;
-            PyRegion_RemoveLocalRef(a_keys[i]);
-            Py_DECREF(a_keys[i]);
-            b_inserted++;
-        }
-
-        error:
-            // on success: a_inserted == b_snapped and b_inserted == a_snapped
-            // so these loops are no-ops on the success path
-            for (i = a_inserted; i < b_snapped; i++) {
-                PyRegion_RemoveLocalRef(b_keys[i]);
-                Py_DECREF(b_keys[i]);
-            }
-            for (i = b_inserted; i < a_snapped; i++) {
-                PyRegion_RemoveLocalRef(a_keys[i]);
-                Py_DECREF(a_keys[i]);
-            }
-            PyMem_Free(a_keys);
-            PyMem_Free(a_hashes);
-            PyMem_Free(b_keys);
-            PyMem_Free(b_hashes);
+    Py_ssize_t t;
+    setentry *u;
+    setentry tab[PySet_MINSIZE];
+    Py_hash_t h;
+    t = a->fill;     a->fill   = b->fill;        b->fill  = t;
+    t = a->used;
+    FT_ATOMIC_STORE_SSIZE_RELAXED(a->used, b->used);
+    FT_ATOMIC_STORE_SSIZE_RELAXED(b->used, t);
+    t = a->mask;     a->mask   = b->mask;        b->mask  = t;
+    
+    u = a->table;
+    if (a->table == a->smalltable)
+    u = b->smalltable;
+    a->table  = b->table;
+    if (b->table == b->smalltable)
+    a->table = a->smalltable;
+    b->table = u;
+    
+    if (a->table == a->smalltable || b->table == b->smalltable) {
+        memcpy(tab, a->smalltable, sizeof(tab));
+        memcpy(a->smalltable, b->smalltable, sizeof(tab));
+        memcpy(b->smalltable, tab, sizeof(tab));
+    }
+    
+    if (PyType_IsSubtype(Py_TYPE(a), &PyFrozenSet_Type)  &&
+    PyType_IsSubtype(Py_TYPE(b), &PyFrozenSet_Type)) {
+        h = FT_ATOMIC_LOAD_SSIZE_RELAXED(a->hash);
+        FT_ATOMIC_STORE_SSIZE_RELAXED(a->hash, FT_ATOMIC_LOAD_SSIZE_RELAXED(b->hash));
+        FT_ATOMIC_STORE_SSIZE_RELAXED(b->hash, h);
+    } else {
+        FT_ATOMIC_STORE_SSIZE_RELAXED(a->hash, -1);
+        FT_ATOMIC_STORE_SSIZE_RELAXED(b->hash, -1);
     }
 }
 

@@ -44,7 +44,7 @@ r.f = A()
 # print(f"Intersection result: {s1}")
 
 r.arr1 = [r.a, r.b, r.c, r.d, r.e]
-arr2 = [r.a, r.d, r.f]
+arr2 = [r.a, r.b, r.c, r.f]
 print(f"Region after creating arr1 and arr2: {r}") # +3
 r.s1 = set(r.arr1)
 print(f"Region after creating set1: {r}") # +0
@@ -53,10 +53,11 @@ s2 = set(arr2)
 print(f"Region after creating set2: {r}") # +3
 print(f"{s2}")
 input("Press Enter to create set intersection...")
-r.s1 &= s2
-# r.s1.intersection_update(s2)
+# r.s1 &= s2
+r.s1.intersection_update(s2)
 print(f"Region after creating set intersection: {r}") 
 print(f"Intersection result: {r.s1}")
+print(f"s2: {s2}")
 
 # r.arr1 = [r.a, r.b, r.c]
 # arr2 = [r.a, r.b, r.f]
