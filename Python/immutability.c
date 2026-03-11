@@ -335,8 +335,13 @@ struct FreezeState {
     // It is also used to track nodes in GIL_DISABLED builds.
     _Py_hashtable_t *visited;
 
-    // The object that freeze() was called directly on.
-    PyObject *root;
+    // The objects that freeze() was called directly on.
+    _Py_hashtable_t *roots;
+
+    // Intrusive linked list of completed SCC representatives
+    // (threaded through _gc_prev / scc_parent), for rollback on error.
+    // NULL-terminated; NULL means empty.
+    PyObject *completed_sccs;
 
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
@@ -365,6 +370,12 @@ struct FreezeState {
 */
 #define SCC_RANK_FLAG _PyGC_PREV_MASK_COLLECTING
 
+static int
+is_root(struct FreezeState *state, PyObject *obj)
+{
+    return _Py_hashtable_get(state->roots, obj) != NULL;
+}
+
 static int init_freeze_state(struct FreezeState *state)
 {
 #ifndef GIL_DISABLED
@@ -372,6 +383,10 @@ static int init_freeze_state(struct FreezeState *state)
     state->pending = PyList_New(0);
 #endif
     state->visited = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+    state->completed_sccs = NULL;
+    state->roots = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
 #ifdef Py_DEBUG
@@ -385,6 +400,7 @@ static int init_freeze_state(struct FreezeState *state)
 static void deallocate_FreezeState(struct FreezeState *state)
 {
     _Py_hashtable_destroy(state->visited);
+    _Py_hashtable_destroy(state->roots);
 
 #ifndef GIL_DISABLED
     // We can't call the destructor directly as we didn't newref the objects
@@ -944,7 +960,9 @@ complete_scc(PyObject* obj, struct FreezeState *state)
     if (c == NULL) {
         debug_obj("Completing SCC %s (%p) with single member rc = %zd\n", obj, Py_REFCNT(obj));
         // This is not part of a cycle, just make it immutable.
-        set_scc_parent(obj, NULL);
+        // Link into the completed SCCs list for rollback.
+        set_scc_parent(obj, state->completed_sccs);
+        state->completed_sccs = obj;
         set_direct_rc(obj);
         return;
     }
@@ -964,9 +982,9 @@ complete_scc(PyObject* obj, struct FreezeState *state)
     // we need to remove that from the SCCs refcount.
     obj->ob_refcnt = rc - (count - 1);
     set_direct_rc(obj);
-    // Clear the rank information as we don't need it anymore.
-    // TODO use this for backtracking purposes?
-    set_scc_parent(obj, NULL);
+    // Link into the completed SCCs list for rollback.
+    set_scc_parent(obj, state->completed_sccs);
+    state->completed_sccs = obj;
     debug_obj("Completed SCC %s (%p) with %zu members with rc %zu \n", obj, count, rc - (count - 1));
 }
 
@@ -975,6 +993,110 @@ static void add_internal_reference(PyObject* obj, struct FreezeState *state)
     obj->ob_refcnt--;
     debug_obj("Decrementing rc of %s (%p) to %zd\n", obj, _Py_REFCNT(obj));
     assert(_Py_REFCNT(obj) > 0);
+}
+
+/*
+  Visitor for rollback_completed_scc walk 2.
+  Re-adds internal reference counts that were subtracted by
+  add_internal_reference during the freeze traversal.
+  The arg is a _Py_hashtable_t* of ring members.
+*/
+static int rollback_refcount_visit(PyObject* obj, void* ring_ht)
+{
+    if (obj == NULL)
+        return 0;
+
+    // Only increment for edges pointing to objects in this SCC ring.
+    if (_Py_hashtable_get((_Py_hashtable_t*)ring_ht, obj) == NULL)
+        return 0;
+
+    obj->ob_refcnt++;
+    return 0;
+}
+
+/*
+  Reverse the effects of complete_scc on a multi-member SCC,
+  restoring each object's original reference count.
+
+  Three walks of the ring:
+    Walk 1: Build ring membership hashtable + compute root's external RC
+    Walk 2: Re-add internal reference counts via tp_reachable
+    Walk 3: Clear immutability flags + return objects to GC
+*/
+static void rollback_completed_scc(PyObject* obj)
+{
+    debug_obj("Rolling back SCC starting at %s @ %p\n", obj);
+
+    _Py_hashtable_t *ring = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+
+    // Walk 1: Build ring membership set and compute root's external RC.
+    //
+    // After complete_scc:
+    //   root.ob_refcnt = total_ext - (count - 1)
+    //   Mi.ob_refcnt = external_refs_to_Mi (preserved by set_indirect_rc)
+    //
+    // We subtract each non-root member's RC from root and add (count-1)
+    // to recover: root.ob_refcnt = external_refs_to_root
+    size_t count = 0;
+    PyObject* n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        _Py_hashtable_set(ring, c, c);
+        if (c != obj) {
+            obj->ob_refcnt -= _Py_REFCNT(c);
+        }
+        count++;
+    } while (n != obj);
+    obj->ob_refcnt += (count - 1);
+
+    // Walk 2: Re-add internal reference counts.
+    // For each edge X->Y where Y is in the ring, increment Y.ob_refcnt.
+    // This reverses the add_internal_reference decrements from freeze.
+    n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        get_reachable_proc(Py_TYPE(c))(c, (visitproc)rollback_refcount_visit, ring);
+
+        // Handle weak references the same way as scc_add_internal_refcounts
+        // TODO(Immutable): David and Fred this change will impact you weak reference work.
+        if (PyWeakref_Check(c)) {
+            PyObject* wr = NULL;
+            PyWeakref_GetRef(c, &wr);
+            if (wr != NULL) {
+                rollback_refcount_visit(wr, ring);
+                Py_DECREF(wr);
+            }
+        }
+    } while (n != obj);
+
+    _Py_hashtable_destroy(ring);
+
+    // Walk 3: Clear immutability flags and return to GC.
+    n = obj;
+    do {
+        PyObject* c = n;
+        n = scc_next(c);
+        _Py_CLEAR_IMMUTABLE(c);
+        return_to_gc(c);  // clears scc_next and scc_parent, re-tracks in GC
+    } while (n != obj);
+}
+
+/*
+  Callback for _Py_hashtable_foreach to clear immutability flags
+  on visited objects (handles non-GC objects not in any SCC ring).
+*/
+static int clear_immutable_visitor(
+    _Py_hashtable_t* tbl, const void* key, const void* value, void* unused)
+{
+    (void)tbl;
+    (void)value;
+    (void)unused;
+    _Py_CLEAR_IMMUTABLE((PyObject*)key);
+    return 0;
 }
 
 #ifdef GIL_DISABLED
@@ -1223,7 +1345,7 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
         case _Py_FREEZABLE_NO:
             goto error;
         case _Py_FREEZABLE_EXPLICIT:
-            if (freeze_state != NULL && obj == freeze_state->root) {
+            if (freeze_state != NULL && is_root(freeze_state, obj)) {
                 return 0;
             }
             goto error;
@@ -1793,22 +1915,37 @@ late_init(struct _Py_immutability_state *state)
 #endif
 }
 
-// Main entry point to freeze an object and everything it can reach.
-int _PyImmutability_Freeze(PyObject* obj)
+// Core freeze implementation that supports multiple root objects.
+// All root objects are treated as directly-frozen for EXPLICIT freezable checks.
+static int
+freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
 {
-    if(_Py_IsImmutable(obj)){
-        return 0;
-    }
     int result = 0;
     TRACE_MERMAID_START();
 
     struct FreezeState freeze_state;
     // Initialize the freeze state
     SUCCEEDS(init_freeze_state(&freeze_state));
-    freeze_state.root = obj;
     struct _Py_immutability_state* imm_state = get_immutable_state();
     if(imm_state == NULL){
         goto error;
+    }
+
+    // Register all roots and push onto the DFS stack
+    for (Py_ssize_t i = 0; i < nobjs; i++) {
+        if (_Py_IsImmutable(objs[i])) {
+            continue;
+        }
+        if (_Py_hashtable_set(freeze_state.roots, objs[i], objs[i]) < 0) {
+            PyErr_NoMemory();
+            goto error;
+        }
+        SUCCEEDS(push(freeze_state.dfs, objs[i]));
+    }
+
+    // If all objects are already immutable, nothing to do.
+    if (_Py_hashtable_len(freeze_state.roots) == 0) {
+        goto finally;
     }
 
     // Late-init: mark importlib mutable state as not freezable.
@@ -1823,14 +1960,12 @@ int _PyImmutability_Freeze(PyObject* obj)
         PyObject *stack = PyObject_CallFunctionObjArgs(imm_state->traceback_func, NULL);
         if (stack != NULL) {
             // Add the type name to the top of the stack, can be useful.
-            PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(obj)), "__name__");
+            PyObject* typename = PyObject_GetAttrString(_PyObject_CAST(Py_TYPE(objs[0])), "__name__");
             push(stack, typename);
             freeze_state.freeze_location = stack;
         }
     }
 #endif
-
-    SUCCEEDS(push(freeze_state.dfs, obj));
 
     while (PyList_Size(freeze_state.dfs) != 0) {
         PyObject* item = pop(freeze_state.dfs);
@@ -1900,14 +2035,46 @@ error:
         }
         unfreeze(item);
     }
+    // Unfreeze completed SCCs via intrusive linked list.
+    {
+        PyObject *scc = freeze_state.completed_sccs;
+        while (scc != NULL) {
+            // Read next link before rollback clears _gc_prev.
+            PyObject *next = scc_parent(scc);
+            if (scc_next(scc) == NULL) {
+                // Single-member SCC: just clear flags and return to GC.
+                _Py_CLEAR_IMMUTABLE(scc);
+                return_to_gc(scc);
+            } else {
+                rollback_completed_scc(scc);
+            }
+            scc = next;
+        }
+        freeze_state.completed_sccs = NULL;
+    }
+    // Clear immutability flags on non-GC visited objects.
+    _Py_hashtable_foreach(freeze_state.visited,
+                          clear_immutable_visitor, NULL);
     result = -1;
-
-    // TODO(Immutable): In error case, we should unfreeze the completed SCCs too.
-    // This requires we create the linked list of all SCCs completed during the same
-    // freeze operation.
 
 finally:
     deallocate_FreezeState(&freeze_state);
     TRACE_MERMAID_END();
     return result;
+}
+
+// Main entry point to freeze an object and everything it can reach.
+int _PyImmutability_Freeze(PyObject* obj)
+{
+    if(_Py_IsImmutable(obj)){
+        return 0;
+    }
+    return freeze_impl(&obj, 1);
+}
+
+// Freeze multiple root objects and their reachable graphs together.
+// All provided objects are treated as roots for EXPLICIT freezable checks.
+int _PyImmutability_FreezeMany(PyObject *const *objs, Py_ssize_t nobjs)
+{
+    return freeze_impl(objs, nobjs);
 }

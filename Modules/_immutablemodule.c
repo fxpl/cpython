@@ -80,21 +80,26 @@ _immutable_register_freezable(PyObject *module, PyObject *obj)
 
 /*[clinic input]
 _immutable.freeze
-    obj: object
-    /
+    *args: object
 
-Freeze an object and its graph.
+Freeze one or more objects and their graphs.
 [clinic start generated code]*/
 
 static PyObject *
-_immutable_freeze(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=7612b209b2d604ab input=3e8ad29453cf365a]*/
+_immutable_freeze(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
+/*[clinic end generated code: output=3f4aa421661b0e42 input=ace5010dba36e8b1]*/
 {
-    if(_PyImmutability_Freeze(obj) < 0){
+    if (nargs == 0) {
+        PyErr_SetString(PyExc_TypeError,
+                        "freeze() requires at least one argument");
         return NULL;
     }
 
-    Py_RETURN_NONE;
+    if (_PyImmutability_FreezeMany(args, nargs) < 0) {
+        return NULL;
+    }
+
+    return Py_NewRef(args[0]);
 }
 
 /*[clinic input]

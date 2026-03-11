@@ -14,13 +14,13 @@ PyDoc_STRVAR(_immutable_register_freezable__doc__,
     {"register_freezable", (PyCFunction)_immutable_register_freezable, METH_O, _immutable_register_freezable__doc__},
 
 PyDoc_STRVAR(_immutable_freeze__doc__,
-"freeze($module, obj, /)\n"
+"freeze($module, /, *args)\n"
 "--\n"
 "\n"
-"Freeze an object and its graph.");
+"Freeze one or more objects and their graphs.");
 
 #define _IMMUTABLE_FREEZE_METHODDEF    \
-    {"freeze", (PyCFunction)_immutable_freeze, METH_O, _immutable_freeze__doc__},
+    {"freeze", _PyCFunction_CAST(_immutable_freeze), METH_FASTCALL, _immutable_freeze__doc__},
 
 PyDoc_STRVAR(_immutable_isfrozen__doc__,
 "isfrozen($module, obj, /)\n"
