@@ -4,16 +4,16 @@ import gc
 import unittest
 import weakref
 from immutable import (
-    freeze, isfrozen, register_freezable, set_freezable,
-    FREEZABLE_NO,
+    freeze, isfrozen, set_freezable,
+    FREEZABLE_NO, FREEZABLE_YES,
 )
 
 
 def make_freezable_class():
-    """Create a fresh class registered as freezable."""
+    """Create a fresh class marked as freezable."""
     class C:
         pass
-    register_freezable(C)
+    set_freezable(C, FREEZABLE_YES)
     return C
 
 
