@@ -964,7 +964,6 @@ class TestRegionSetUnionUpdate(unittest.TestCase):
         r.s1 |= s2 
         self.assertEqual(r._lrc, base_lrc)
     
-    @unittest.expectedFailure
     def test_union_update_adds_new_refs_2_update(self):
         """
         |= should add references to new elements from s2 that

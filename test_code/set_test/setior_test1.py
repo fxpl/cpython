@@ -14,8 +14,8 @@ r.c = A()
 r.d = A()
 r.e = A()
 r.f = A()
-r.arr1 = [r.a, r.b, r.c]
-r.arr2 = [r.b, r.c, r.f]
+r.arr1 = [r.a, r.b, r.c, r.d]
+r.arr2 = [r.b, r.c, r.f, r.e]
 
 # s1 = set(r.arr1)
 # print(f"Region after creating set1: {r}")
@@ -31,10 +31,10 @@ r.arr2 = [r.b, r.c, r.f]
 
 r.s1 = set(r.arr1)
 print(f"Region after creating set1: {r}")
-print(f"{r.s1}")
+# print(f"{r.s1}")
 s2 = set(r.arr2)
 print(f"Region after creating set2: {r}")
-print(f"{s2}")
+# print(f"{s2}")
 input("Press Enter to create set or...")
 # r.s1 |= s2
 r.s1.update(s2)
