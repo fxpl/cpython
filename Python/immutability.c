@@ -8,6 +8,7 @@
 #include "pycore_object.h"
 #include "pycore_immutability.h"
 #include "pycore_list.h"
+#include "pycore_weakref.h"
 
 
 // This file has many in progress aspects
@@ -1833,6 +1834,40 @@ int _Py_IsDead_Immutable(PyObject *op)
 #endif
 }
 
+static void make_weakrefs_safe_scc(PyObject* scc)
+{
+    PyObject* current = scc;
+    do {
+        _PyWeakref_OnObjectFreeze(current);
+        current = scc_next(current);
+    } while (current != NULL && current != scc);
+}
+
+static int make_weakrefs_safe_visited(
+    _Py_hashtable_t* tbl, const void* key, const void* value, void* unused)
+{
+    (void)tbl;
+    (void)value;
+    (void)unused;
+    _PyWeakref_OnObjectFreeze((PyObject*)key);
+    return 0;
+}
+
+/* Make weakrefs to newly frozen objects thread-safe. */
+static void make_weakrefs_safe(struct FreezeState* freeze_state)
+{
+    // Handle weakrefs to completed SCCs.
+    PyObject *scc = freeze_state->completed_sccs;
+    while (scc != NULL) {
+        PyObject *next = scc_parent(scc);
+        make_weakrefs_safe_scc(scc);
+        scc = next;
+    }
+    // Handle weakrefs to non-GC visited objects.
+    _Py_hashtable_foreach(freeze_state->visited,
+                          make_weakrefs_safe_visited, NULL);
+
+}
 
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
@@ -2061,6 +2096,7 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
         SUCCEEDS(traverse_freeze(item, &freeze_state));
     }
 
+    make_weakrefs_safe(&freeze_state);
     mark_all_frozen(&freeze_state);
 
     goto finally;

@@ -55,10 +55,21 @@
  *   lock is held.
  *
  * We also need to handle refcounts for the weakref object and the callback.
- * TODO(Immutable-weakrefs): Implement this; handle weakrefs with callbacks.
  *
  * - Basic weakrefs pointing to immutable objects are marked as immutable,
  *   which turns on atomic reference counting.
+ * - Weakrefs with callbacks and pointing to immutable objects
+ *   have their refcount pre-emptively incremented upon creation.
+ *   That accounts for the TryIncref that would be called when clearing
+ *   weakrefs, which would require atomic reference counting.
+ *   However, we cannot easily achieve atomic reference counting for weakrefs
+ *   with callbacks: we cannot make them immutable, and adding another branch
+ *   to PY_INCREF and PY_DECREF would have a significant performance impact.
+ *   The downside of our approach is that the weakref objects are kept alive
+ *   until the immutable object dies.
+ *   FIXME(Immutable): If the weakref is a part of an SCC, it never dies.
+ * - We keep the callback in the weakref object until it is about to be called.
+ *   That keeps it alive, so we don't need to increment its refcount.
  *
  * Immutable objects are never GC-collected.
  */
@@ -435,6 +446,44 @@ insert_weakref(PyWeakReference *newref, PyWeakReference **list)
     }
 }
 
+static void
+immutable_make_weakref_safe(PyWeakReference *self)
+{
+    if (self->wr_callback == NULL) {
+        // Turn on atomic reference counting for the weakref.
+        // FIXME(Immutable): freezing a weakref makes it strong
+        // _PyImmutability_Freeze(_PyObject_CAST(newref));
+    }
+    else {
+        // Pre-emptively increment the weakref's refcount.
+        // See the comment at the start of this file for details.
+        Py_INCREF(self);
+    }
+
+}
+
+/* Make weakrefs to the newly frozen object thread-safe. */
+void
+_PyWeakref_OnObjectFreeze(PyObject *object)
+{
+    assert(_Py_IsImmutable(object));
+    if (!_PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))) {
+        return;
+    }
+    PyWeakReference **list = GET_WEAKREFS_LISTPTR(object);
+    if (_Py_atomic_load_ptr(list) == NULL) {
+        // Fast path for the common case
+        return;
+    }
+    LOCK_WEAKREFS(object);
+    PyWeakReference *current = *list;
+    while (current != NULL) {
+        immutable_make_weakref_safe(current);
+        current = current->wr_next;
+    }
+    UNLOCK_WEAKREFS(object);
+}
+
 static PyWeakReference *
 allocate_weakref(PyTypeObject *type, PyObject *obj, PyObject *callback)
 {
@@ -443,6 +492,9 @@ allocate_weakref(PyTypeObject *type, PyObject *obj, PyObject *callback)
         return NULL;
     }
     init_weakref(newref, obj, callback);
+    if (_Py_IsImmutable(obj)) {
+        immutable_make_weakref_safe(newref);
+    }
     return newref;
 }
 

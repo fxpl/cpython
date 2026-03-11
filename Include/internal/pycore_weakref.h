@@ -149,6 +149,7 @@ extern Py_ssize_t _PyWeakref_GetWeakrefCount(PyObject *obj);
 // intact.
 extern void _PyWeakref_ClearWeakRefsNoCallbacks(PyObject *obj);
 
+PyAPI_FUNC(void) _PyWeakref_OnObjectFreeze(PyObject *object);
 PyAPI_FUNC(int) _PyWeakref_IsDead(PyObject *weakref);
 
 #ifdef __cplusplus
