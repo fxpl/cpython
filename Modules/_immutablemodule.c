@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include "pycore_object.h"
 #include "pycore_immutability.h"
+#include "pycore_critical_section.h"
 
 /*[clinic input]
 module _immutable
@@ -20,6 +21,8 @@ module _immutable
 
 typedef struct {
     PyObject *not_freezable_error_obj;
+    PyObject *interpreter_locals;  // dict: InterpreterLocal -> value
+    PyObject *interpreterlocal_type;  // heap type object
 } immutable_state;
 
 static struct PyModuleDef _immutablemodule;
@@ -37,6 +40,8 @@ immutable_clear(PyObject *module)
 {
     immutable_state *module_state = PyModule_GetState(module);
     Py_CLEAR(module_state->not_freezable_error_obj);
+    Py_CLEAR(module_state->interpreter_locals);
+    Py_CLEAR(module_state->interpreterlocal_type);
     return 0;
 }
 
@@ -45,6 +50,8 @@ immutable_traverse(PyObject *module, visitproc visit, void *arg)
 {
     immutable_state *module_state = PyModule_GetState(module);
     Py_VISIT(module_state->not_freezable_error_obj);
+    Py_VISIT(module_state->interpreter_locals);
+    Py_VISIT(module_state->interpreterlocal_type);
     return 0;
 }
 
@@ -130,6 +137,176 @@ _immutable_set_freezable_impl(PyObject *module, PyObject *obj, int status)
     Py_RETURN_NONE;
 }
 
+/*
+ * InterpreterLocal type
+ *
+ * An immutable indirection to per-interpreter mutable state.
+ * tp_reachable hides per-interpreter values from the freeze walk.
+ */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *default_value;  // Immutable default, or NULL if factory form
+    PyObject *factory;        // Frozen callable, or NULL if value form
+} PyInterpreterLocalObject;
+
+static PyObject *
+interpreterlocal_get_locals(PyObject *self)
+{
+    PyObject *module = PyType_GetModuleByDef(Py_TYPE(self), &_immutablemodule);
+    if (module == NULL) {
+        return NULL;
+    }
+    return get_immutable_state(module)->interpreter_locals;
+}
+
+static PyObject *
+interpreterlocal_lookup(PyInterpreterLocalObject *self)
+{
+    PyObject *locals = interpreterlocal_get_locals((PyObject *)self);
+    if (locals == NULL) {
+        return NULL;
+    }
+
+    PyObject *val = NULL;
+    // Under free-threading (--disable-gil), multiple threads in the same
+    // interpreter share this dict.  The critical section makes the
+    // get-or-init compound operation atomic so the factory is called
+    // at most once per interpreter.  On GIL builds this is a no-op.
+    Py_BEGIN_CRITICAL_SECTION(locals);
+    int ret = PyDict_GetItemRef(locals, (PyObject *)self, &val);
+    if (ret == 0) {
+        // Not found — initialise
+        if (self->factory != NULL) {
+            val = PyObject_CallNoArgs(self->factory);
+        }
+        else {
+            val = Py_NewRef(self->default_value);
+        }
+        if (val != NULL) {
+            if (PyDict_SetItem(locals, (PyObject *)self, val) < 0) {
+                Py_CLEAR(val);
+            }
+        }
+    }
+    else if (ret < 0) {
+        val = NULL;
+    }
+    Py_END_CRITICAL_SECTION();
+    return val;
+}
+
+static PyObject *
+interpreterlocal_get(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    return interpreterlocal_lookup((PyInterpreterLocalObject *)self);
+}
+
+static PyObject *
+interpreterlocal_set(PyObject *self, PyObject *value)
+{
+    PyObject *locals = interpreterlocal_get_locals(self);
+    if (locals == NULL) {
+        return NULL;
+    }
+    if (PyDict_SetItem(locals, self, value) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static int
+interpreterlocal_init(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    static char *kwlist[] = {"default", NULL};
+    PyObject *default_or_factory = NULL;
+    PyInterpreterLocalObject *il = (PyInterpreterLocalObject *)self;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", kwlist,
+                                     &default_or_factory)) {
+        return -1;
+    }
+
+    if (PyCallable_Check(default_or_factory)) {
+        if (_PyImmutability_Freeze(default_or_factory) < 0) {
+            return -1;
+        }
+        il->factory = Py_NewRef(default_or_factory);
+        il->default_value = NULL;
+    }
+    else {
+        if (_PyImmutability_Freeze(default_or_factory) < 0) {
+            return -1;
+        }
+        il->default_value = Py_NewRef(default_or_factory);
+        il->factory = NULL;
+    }
+    return 0;
+}
+
+static void
+interpreterlocal_dealloc(PyObject *self)
+{
+    PyInterpreterLocalObject *il = (PyInterpreterLocalObject *)self;
+    PyObject_GC_UnTrack(self);
+    Py_CLEAR(il->default_value);
+    Py_CLEAR(il->factory);
+    PyTypeObject *tp = Py_TYPE(self);
+    tp->tp_free(self);
+    Py_DECREF(tp);
+}
+
+static int
+interpreterlocal_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    PyInterpreterLocalObject *il = (PyInterpreterLocalObject *)self;
+    Py_VISIT(Py_TYPE(self));
+    Py_VISIT(il->default_value);
+    Py_VISIT(il->factory);
+    return 0;
+}
+
+static int
+interpreterlocal_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    // Visit the type and the frozen fields.
+    // Do NOT visit per-interpreter stored values — that's the escape hatch.
+    PyInterpreterLocalObject *il = (PyInterpreterLocalObject *)self;
+    Py_VISIT(Py_TYPE(self));
+    Py_VISIT(il->default_value);
+    Py_VISIT(il->factory);
+    return 0;
+}
+
+static PyMethodDef interpreterlocal_methods[] = {
+    {"get", interpreterlocal_get, METH_NOARGS,
+     "Return the value for the current interpreter."},
+    {"set", interpreterlocal_set, METH_O,
+     "Set the value for the current interpreter."},
+    {NULL, NULL}
+};
+
+static PyType_Slot interpreterlocal_slots[] = {
+    {Py_tp_dealloc, interpreterlocal_dealloc},
+    {Py_tp_init, interpreterlocal_init},
+    {Py_tp_methods, interpreterlocal_methods},
+    {Py_tp_traverse, interpreterlocal_traverse},
+    {Py_tp_reachable, interpreterlocal_reachable},
+    {Py_tp_new, PyType_GenericNew},
+    {Py_tp_alloc, PyType_GenericAlloc},
+    {Py_tp_free, PyObject_GC_Del},
+    {0, NULL},
+};
+
+static PyType_Spec interpreterlocal_spec = {
+    .name = "_immutable.InterpreterLocal",
+    .basicsize = sizeof(PyInterpreterLocalObject),
+    .flags = (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE |
+              Py_TPFLAGS_HAVE_GC),
+    .slots = interpreterlocal_slots,
+};
+
+
 static PyType_Slot not_freezable_error_slots[] = {
     {0, NULL},
 };
@@ -188,6 +365,27 @@ immutable_exec(PyObject *module) {
     }
 
     if (PyModule_AddType(module, &_PyImmModule_Type) != 0) {
+        return -1;
+    }
+
+    /* Create InterpreterLocal heap type */
+    module_state->interpreterlocal_type = PyType_FromModuleAndSpec(
+        module, &interpreterlocal_spec, NULL);
+    if (module_state->interpreterlocal_type == NULL) {
+        return -1;
+    }
+    if (PyModule_AddType(module,
+                         (PyTypeObject *)module_state->interpreterlocal_type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_RegisterFreezable(
+            (PyTypeObject *)module_state->interpreterlocal_type) < 0) {
+        return -1;
+    }
+
+    /* Create per-interpreter locals dict */
+    module_state->interpreter_locals = PyDict_New();
+    if (module_state->interpreter_locals == NULL) {
         return -1;
     }
 
