@@ -1479,12 +1479,7 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
     _PyUnicode_InternMortal(tstate->interp, &name);
     if (tp->tp_setattro != NULL) {
-        if(Py_CHECKWRITE(v)){
-            err = (*tp->tp_setattro)(v, name, value);
-        }else{
-            PyErr_WriteToImmutable(v);
-            err = -1;
-        }
+        err = (*tp->tp_setattro)(v, name, value);
 
         Py_DECREF(name);
         return err;
@@ -1496,12 +1491,7 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
             return -1;
         }
 
-        if(Py_CHECKWRITE(v)){
-            err = (*tp->tp_setattr)(v, (char *)name_str, value);
-        }else{
-            PyErr_WriteToImmutable(v);
-            err = -1;
-        }
+        err = (*tp->tp_setattr)(v, (char *)name_str, value);
 
         Py_DECREF(name);
         return err;
