@@ -1345,12 +1345,42 @@ set_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
    The function always succeeds and it leaves both objects in a stable state.
    Useful for operations that update in-place (by allowing an intermediate
    result to be swapped into one of the original inputs).
+
+   This function is only used in set_intersection_update_multi_impl and set_intersection_update. 
+   In other word, only .intersection_update and &= use this function.
 */
 static PyObject *set_difference(PySetObject *, PyObject *);  // add this
 
 static void
 set_swap_bodies(PySetObject *a, PySetObject *b)
 {
+    /*
+        The object b is guarantee to be the local object, due to the origin from set_intersection_update_multi_impl and set_intersection_update.
+        If the object a is the local object as well, no barrier is needed. For example, 
+
+        r.arr1 = [r.a, r.b, r.c]
+        r.arr2 = [r.b, r.c, r.f]
+        s1 = set(r.arr1)
+        s2 = set(r.arr2)
+
+        In set_intersection_update_multi_impl, tmp, which is b when it is passed to this function, points to r.b and r.c when being created, which increases LRC by 2. 
+        After swapping, tmp points to r.a, r.b, and r.c. When tmp ref count is decreased to 0, LRC is also decreased by 3 from set_dealloc.
+        Finally, the result of s1.intersect_update(s2) seems as s1 releases the reference to r.a, which means LRC is finally decreased by one as expected.
+
+        However, if s1 is in the region, which mean a is also in the region, not the local region anymore.
+
+        r.arr1 = [r.a, r.b, r.c]
+        r.arr2 = [r.b, r.c, r.f]
+        r.s1 = set(r.arr1)
+        s2 = set(r.arr2)
+
+        If there is no additional mechanism to handle LRC, the final LRC will be lower than it should be. 
+        Without the mechanism, when tmp is created, LRC is increased by 2. Then, after swapping, when destroying tmp, LRC is decreased by 3. The final LRC is decreased by 1.
+        However, LRC should not be changed in this case because s1 is in the region. Releasing and pointing to the objects in the same region should not modify the LRC.
+        So, the solution is that after increasing LRC by 2 from creating tmp, which points to the intersection results, we also increase LRC by the size of "a-b", which is 1.
+        Then, we can use the original swap mechanism. Finally, when tmp is destroyed, LRC is decreased by 3. +3 and -3 becomes zero. Correct!
+
+    */
     if(!PyRegion_IsLocal(a)) {
         Py_ssize_t pos = 0;
         setentry *entry;
@@ -1360,7 +1390,7 @@ set_swap_bodies(PySetObject *a, PySetObject *b)
             PyObject *key = entry->key;
             int rv = PyRegion_AddLocalRef(key); // b now points to "key" because of the swap, and b is guaranteed to be in the local region, so we can add a local reference to key for b. 
             assert(rv==0); // assure that AddLocalRef cannot fail since key is already in the region.
-            PyRegion_RemoveRef(a, key);
+            PyRegion_RemoveRef(a, key); // Because key will be swapped, and b will be the parent instead. So, remove the relationship between a and key.
         }
         assert(PyRegion_IsLocal(c));
         Py_DECREF(c); // set_dealloc will remove all references from c to the objects in the set, and set_dealloc also handles LRC, so we don't have to do anything else to remove the references from the region here.
