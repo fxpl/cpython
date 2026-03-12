@@ -987,12 +987,18 @@ static int clear_weakrefs(PyWeakReference* head, PyObject* to_dealloc)
         if (pending == NULL) {
             // Give up calling callbacks.
             weakref_decref_weakrefs(ip_callbacks);
+            continue;
+        }
+
+        _Py_atomic_add_int32(&progress->interpreters_remaining, 1);
+        pending->head = ip_callbacks;
+        pending->progress = progress;
+        if (PyInterpreterState_GetID(PyInterpreterState_Get()) == ipid) {
+            // We can run the callback here.
+            weakref_call_callbacks((void*)pending);
         }
         else {
-            _Py_atomic_add_int32(&progress->interpreters_remaining, 1);
-            pending->head = ip_callbacks;
-            pending->progress = progress;
-            // TODO(Immutable): run immediately if ipid is the current interpreter
+            // We need to schedule the callback on the target interpreter.
             weakref_schedule_callbacks(ipid, pending);
         }
     }
