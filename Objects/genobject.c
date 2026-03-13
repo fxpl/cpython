@@ -1526,13 +1526,6 @@ async_gen_traverse(PyObject *self, visitproc visit, void *arg)
     return gen_traverse((PyObject*)ag, visit, arg);
 }
 
-static int
-async_gen_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return async_gen_traverse(self, visit, arg);
-}
-
 
 static PyObject *
 async_gen_repr(PyObject *self)
@@ -1754,7 +1747,7 @@ PyTypeObject PyAsyncGen_Type = {
     0,                                          /* tp_del */
     0,                                          /* tp_version_tag */
     _PyGen_Finalize,                            /* tp_finalize */
-    .tp_reachable = async_gen_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 

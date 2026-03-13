@@ -11002,13 +11002,6 @@ bufferwrapper_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-bufferwrapper_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return bufferwrapper_traverse(self, visit, arg);
-}
-
 static void
 bufferwrapper_dealloc(PyObject *self)
 {
@@ -11059,7 +11052,7 @@ PyTypeObject _PyBufferWrapper_Type = {
     .tp_alloc = PyType_GenericAlloc,
     .tp_free = PyObject_GC_Del,
     .tp_traverse = bufferwrapper_traverse,
-    .tp_reachable = bufferwrapper_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_dealloc = bufferwrapper_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_as_buffer = &bufferwrapper_as_buffer,

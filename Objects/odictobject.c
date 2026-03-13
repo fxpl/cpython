@@ -1474,13 +1474,6 @@ odict_traverse(PyObject *op, visitproc visit, void *arg)
     return PyDict_Type.tp_traverse((PyObject *)od, visit, arg);
 }
 
-static int
-odict_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return odict_traverse(self, visit, arg);
-}
-
 /* tp_clear */
 
 static int
@@ -1621,7 +1614,7 @@ PyTypeObject PyODict_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     0,                                          /* tp_new */
     0,                                          /* tp_free */
-    .tp_reachable = odict_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 
@@ -1734,13 +1727,6 @@ odictiter_traverse(PyObject *op, visitproc visit, void *arg)
     Py_VISIT(di->di_current);  /* A key could be any type, not just str. */
     Py_VISIT(di->di_result);
     return 0;
-}
-
-static int
-odictiter_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return odictiter_traverse(self, visit, arg);
 }
 
 /* In order to protect against modifications during iteration, we track
@@ -1944,7 +1930,7 @@ PyTypeObject PyODictIter_Type = {
     odictiter_iternext,                       /* tp_iternext */
     odictiter_methods,                        /* tp_methods */
     0,
-    .tp_reachable = odictiter_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static PyObject *

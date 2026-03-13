@@ -272,13 +272,6 @@ meth_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-meth_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(Py_TYPE(self));
-    return meth_traverse(self, visit, arg);
-}
-
 static PyObject *
 meth_get__self__(PyObject *meth, void *closure)
 {
@@ -394,7 +387,7 @@ PyTypeObject PyCFunction_Type = {
     meth_getsets,                               /* tp_getset */
     0,                                          /* tp_base */
     0,                                          /* tp_dict */
-    .tp_reachable = meth_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 PyTypeObject PyCMethod_Type = {

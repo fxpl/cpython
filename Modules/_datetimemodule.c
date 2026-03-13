@@ -7272,13 +7272,6 @@ static PyNumberMethods datetime_as_number = {
     0,                                          /* nb_bool */
 };
 
-static int
-datetime_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(Py_TYPE(self));
-    return 0;
-}
-
 static PyTypeObject PyDateTime_DateTimeType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     "datetime.datetime",                        /* tp_name */
@@ -7319,7 +7312,7 @@ static PyTypeObject PyDateTime_DateTimeType = {
     datetime_alloc,                             /* tp_alloc */
     datetime_new,                               /* tp_new */
     0,                                          /* tp_free */
-    .tp_reachable = datetime_reachable,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 /* ---------------------------------------------------------------------------

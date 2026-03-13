@@ -14,6 +14,7 @@
 #endif
 
 #include "Python.h"
+#include "pycore_object.h"      // _PyObject_ReachableVisitTypeAndTraverse()
 
 /* ---- HasTraverseNoReachable ------------------------------------------- */
 
@@ -115,13 +116,6 @@ hr_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
-hr_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(Py_TYPE(self));
-    return hr_traverse(self, visit, arg);
-}
-
-static int
 hr_clear(PyObject *self)
 {
     HasReachableObject *obj = (HasReachableObject *)self;
@@ -161,7 +155,7 @@ static PyTypeObject HasReachable_Type = {
     .tp_alloc = PyType_GenericAlloc,
     .tp_new = PyType_GenericNew,
     .tp_free = PyObject_GC_Del,
-    .tp_reachable = hr_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 /* ---- Module ---------------------------------------------------------- */
@@ -185,13 +179,6 @@ si_traverse(PyObject *self, visitproc visit, void *arg)
     ShallowImmutableObject *obj = (ShallowImmutableObject *)self;
     Py_VISIT(obj->value);
     return 0;
-}
-
-static int
-si_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(Py_TYPE(self));
-    return si_traverse(self, visit, arg);
 }
 
 static int
@@ -234,7 +221,7 @@ static PyTypeObject ShallowImmutable_Type = {
     .tp_alloc = PyType_GenericAlloc,
     .tp_new = PyType_GenericNew,
     .tp_free = PyObject_GC_Del,
-    .tp_reachable = si_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static int

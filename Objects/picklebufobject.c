@@ -1,6 +1,7 @@
 /* PickleBuffer object implementation */
 
 #include "Python.h"
+#include "pycore_object.h"      // _PyObject_ReachableVisitTypeAndTraverse()
 #include "pycore_weakref.h"     // FT_CLEAR_WEAKREFS()
 #include <stddef.h>
 

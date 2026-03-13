@@ -632,13 +632,6 @@ tuple_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-tuple_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return tuple_traverse(self, visit, arg);
-}
-
 static PyObject *
 tuple_richcompare(PyObject *v, PyObject *w, int op)
 {
@@ -918,7 +911,7 @@ PyTypeObject PyTuple_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = tuple_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_TUPLE,
-    .tp_reachable = tuple_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 /* The following function breaks the notion that tuples are immutable:

@@ -166,13 +166,6 @@ BaseException_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-BaseException_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
-    return BaseException_traverse(op, visit, arg);
-}
-
 static PyObject *
 BaseException_str(PyObject *op)
 {
@@ -656,7 +649,7 @@ static PyTypeObject _PyExc_BaseException = {
     0,                          /* tp_alloc */
     BaseException_new,          /* tp_new */
     .tp_vectorcall = BaseException_vectorcall,
-    .tp_reachable = BaseException_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 /* the CPython API expects exceptions to be (PyObject *) - both a hold-over
 from the previous implementation and also allowing Python objects to be used
@@ -1813,13 +1806,6 @@ ImportError_traverse(PyObject *op, visitproc visit, void *arg)
     return BaseException_traverse(op, visit, arg);
 }
 
-static int
-ImportError_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
-    return ImportError_traverse(op, visit, arg);
-}
-
 static PyObject *
 ImportError_str(PyObject *op)
 {
@@ -1964,7 +1950,7 @@ static PyTypeObject _PyExc_ImportError = {
         "or can't find name in module."),
     .tp_traverse = ImportError_traverse,
     .tp_clear = ImportError_clear,
-    .tp_reachable = ImportError_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_methods = ImportError_methods,
     .tp_members = ImportError_members,
     .tp_base = &_PyExc_Exception,

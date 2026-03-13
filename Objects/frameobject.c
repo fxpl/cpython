@@ -463,13 +463,6 @@ framelocalsproxy_visit(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-framelocalsproxy_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return framelocalsproxy_visit(self, visit, arg);
-}
-
 static PyObject *
 framelocalsproxy_iter(PyObject *self)
 {
@@ -943,7 +936,7 @@ PyTypeObject PyFrameLocalsProxy_Type = {
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_MAPPING,
     .tp_traverse = framelocalsproxy_visit,
     .tp_clear = framelocalsproxy_tp_clear,
-    .tp_reachable = framelocalsproxy_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_richcompare = framelocalsproxy_richcompare,
     .tp_iter = framelocalsproxy_iter,
     .tp_methods = framelocalsproxy_methods,
@@ -2081,13 +2074,6 @@ static PyMethodDef frame_methods[] = {
     {NULL, NULL}  /* sentinel */
 };
 
-static int
-frame_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return frame_traverse(self, visit, arg);
-}
-
 PyTypeObject PyFrame_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "frame",
@@ -2122,7 +2108,7 @@ PyTypeObject PyFrame_Type = {
     frame_getsetlist,                           /* tp_getset */
     0,                                          /* tp_base */
     0,                                          /* tp_dict */
-    .tp_reachable = frame_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static void

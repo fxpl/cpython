@@ -16,6 +16,7 @@
 #include "pycore_pystate.h"       // _PyInterpreterState_GET()
 #include "pycore_stackref.h"      // PyStackRef_AsPyObjectBorrow()
 #include "pycore_structseq.h"     // _PyStructSequence_FiniBuiltin()
+#include "pycore_object.h"        // _PyObject_ReachableVisit()
 
 #include <float.h>                // DBL_MAX
 #include <stdlib.h>               // strtol()
@@ -1898,7 +1899,7 @@ PyTypeObject PyFloat_Type = {
     float_new,                                  /* tp_new */
     .tp_vectorcall = float_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_FLOAT,
-    .tp_reachable = _PyObject_ReachableType,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 static void

@@ -49,13 +49,6 @@ iter_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-iter_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(Py_TYPE(op));
-    return iter_traverse(op, visit, arg);
-}
-
 static PyObject *
 iter_iternext(PyObject *iterator)
 {
@@ -186,7 +179,7 @@ PyTypeObject PySeqIter_Type = {
     iter_iternext,                              /* tp_iternext */
     seqiter_methods,                            /* tp_methods */
     0,                                          /* tp_members */
-    .tp_reachable = iter_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 /* -------------------------------------- */
@@ -226,13 +219,6 @@ calliter_traverse(PyObject *op, visitproc visit, void *arg)
     Py_VISIT(it->it_callable);
     Py_VISIT(it->it_sentinel);
     return 0;
-}
-
-static int
-calliter_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(Py_TYPE(op));
-    return calliter_traverse(op, visit, arg);
 }
 
 static PyObject *
@@ -319,7 +305,7 @@ PyTypeObject PyCallIter_Type = {
     PyObject_SelfIter,                          /* tp_iter */
     calliter_iternext,                          /* tp_iternext */
     calliter_methods,                           /* tp_methods */
-    .tp_reachable = calliter_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 
@@ -350,13 +336,6 @@ anextawaitable_traverse(PyObject *op, visitproc visit, void *arg)
     Py_VISIT(obj->wrapped);
     Py_VISIT(obj->default_value);
     return 0;
-}
-
-static int
-anextawaitable_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(Py_TYPE(op));
-    return anextawaitable_traverse(op, visit, arg);
 }
 
 static PyObject *
@@ -548,7 +527,7 @@ PyTypeObject _PyAnextAwaitable_Type = {
     PyObject_SelfIter,                          /* tp_iter */
     anextawaitable_iternext,                    /* tp_iternext */
     anextawaitable_methods,                     /* tp_methods */
-    .tp_reachable = anextawaitable_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 PyObject *

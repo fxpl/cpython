@@ -3,6 +3,7 @@
 #include "Python.h"
 #include "pycore_initconfig.h"    // _PyStatus_OK
 #include "pycore_interpolation.h"
+#include "pycore_object.h"        // _PyObject_ReachableVisitTypeAndTraverse()
 #include "pycore_typeobject.h"    // _PyType_GetDict
 
 static int
@@ -108,13 +109,6 @@ interpolation_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-interpolation_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return interpolation_traverse(self, visit, arg);
-}
-
 static PyObject *
 interpolation_repr(PyObject *op)
 {
@@ -165,7 +159,7 @@ PyTypeObject _PyInterpolation_Type = {
     .tp_members = interpolation_members,
     .tp_methods = interpolation_methods,
     .tp_traverse = interpolation_traverse,
-    .tp_reachable = interpolation_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 PyStatus

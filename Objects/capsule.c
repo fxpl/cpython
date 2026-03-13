@@ -328,13 +328,6 @@ capsule_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-capsule_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return capsule_traverse(self, visit, arg);
-}
-
 
 static int
 capsule_clear(PyObject *self)
@@ -368,7 +361,7 @@ PyTypeObject PyCapsule_Type = {
     .tp_doc = PyCapsule_Type__doc__,
     .tp_traverse = capsule_traverse,
     .tp_clear = capsule_clear,
-    .tp_reachable = capsule_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 
