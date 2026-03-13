@@ -3441,3 +3441,11 @@ _PyObject_VisitType(PyObject *op, visitproc visit, void *arg)
     Py_VISIT(tp);
     return 0;
 }
+
+int
+_PyObject_ReachableType(PyObject *op, visitproc visit, void *arg)
+{
+    assert(op != NULL);
+    Py_VISIT(Py_TYPE(op));
+    return 0;
+}

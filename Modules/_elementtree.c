@@ -2356,6 +2356,7 @@ gettext:
 static PyType_Slot elementiter_slots[] = {
     {Py_tp_dealloc, elementiter_dealloc},
     {Py_tp_traverse, elementiter_traverse},
+    {Py_tp_reachable, elementiter_traverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, elementiter_next},
     {0, NULL},
@@ -4353,6 +4354,7 @@ static PyType_Slot element_slots[] = {
     {Py_tp_repr, element_repr},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, element_gc_traverse},
+    {Py_tp_reachable, element_gc_traverse},
     {Py_tp_clear, element_gc_clear},
     {Py_tp_methods, element_methods},
     {Py_tp_members, element_members},
@@ -4391,6 +4393,7 @@ static PyMethodDef treebuilder_methods[] = {
 static PyType_Slot treebuilder_slots[] = {
     {Py_tp_dealloc, treebuilder_dealloc},
     {Py_tp_traverse, treebuilder_gc_traverse},
+    {Py_tp_reachable, treebuilder_gc_traverse},
     {Py_tp_clear, treebuilder_gc_clear},
     {Py_tp_methods, treebuilder_methods},
     {Py_tp_init, _elementtree_TreeBuilder___init__},
@@ -4418,6 +4421,7 @@ static PyMethodDef xmlparser_methods[] = {
 static PyType_Slot xmlparser_slots[] = {
     {Py_tp_dealloc, xmlparser_dealloc},
     {Py_tp_traverse, xmlparser_gc_traverse},
+    {Py_tp_reachable, xmlparser_gc_traverse},
     {Py_tp_clear, xmlparser_gc_clear},
     {Py_tp_methods, xmlparser_methods},
     {Py_tp_members, xmlparser_members},

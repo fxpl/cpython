@@ -150,6 +150,7 @@ static PyType_Slot _abc_data_type_spec_slots[] = {
     {Py_tp_new, abc_data_new},
     {Py_tp_dealloc, abc_data_dealloc},
     {Py_tp_traverse, abc_data_traverse},
+    {Py_tp_reachable, abc_data_traverse},
     {Py_tp_clear, abc_data_clear},
     {0, 0}
 };

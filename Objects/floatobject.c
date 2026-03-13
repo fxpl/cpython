@@ -1898,6 +1898,7 @@ PyTypeObject PyFloat_Type = {
     float_new,                                  /* tp_new */
     .tp_vectorcall = float_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_FLOAT,
+    .tp_reachable = _PyObject_ReachableType,
 };
 
 static void

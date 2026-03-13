@@ -3790,6 +3790,7 @@ static PyType_Slot isocal_slots[] = {
     {Py_tp_new, iso_calendar_date_new},
     {Py_tp_dealloc, iso_calendar_date_dealloc},
     {Py_tp_traverse, iso_calendar_date_traverse},
+    {Py_tp_reachable, iso_calendar_date_traverse},
     {0, NULL},
 };
 
@@ -7271,6 +7272,13 @@ static PyNumberMethods datetime_as_number = {
     0,                                          /* nb_bool */
 };
 
+static int
+datetime_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(Py_TYPE(self));
+    return 0;
+}
+
 static PyTypeObject PyDateTime_DateTimeType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     "datetime.datetime",                        /* tp_name */
@@ -7311,6 +7319,7 @@ static PyTypeObject PyDateTime_DateTimeType = {
     datetime_alloc,                             /* tp_alloc */
     datetime_new,                               /* tp_new */
     0,                                          /* tp_free */
+    .tp_reachable = datetime_reachable,
 };
 
 /* ---------------------------------------------------------------------------

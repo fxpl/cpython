@@ -1111,6 +1111,11 @@ static inline Py_ALWAYS_INLINE void _Py_INCREF_MORTAL(PyObject *op)
  * references. */
 PyAPI_FUNC(int) _PyObject_VisitType(PyObject *op, visitproc visit, void *arg);
 
+/**
+ * Visits the type without verifying that it's a heap type
+ */
+PyAPI_FUNC(int) _PyObject_ReachableType(PyObject *op, visitproc visit, void *arg);
+
 #ifdef __cplusplus
 }
 #endif

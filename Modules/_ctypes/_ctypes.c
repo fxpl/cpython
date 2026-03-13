@@ -200,6 +200,7 @@ PyDoc_STRVAR(dictremover_doc, "deletes a key from a dictionary");
 static PyType_Slot dictremover_slots[] = {
     {Py_tp_dealloc, _DictRemover_dealloc},
     {Py_tp_traverse, _DictRemover_traverse},
+    {Py_tp_reachable, _DictRemover_traverse},
     {Py_tp_clear, _DictRemover_clear},
     {Py_tp_call, _DictRemover_call},
     {Py_tp_doc, (void *)dictremover_doc},
@@ -442,6 +443,7 @@ StructParam_dealloc(PyObject *myself)
 
 static PyType_Slot structparam_slots[] = {
     {Py_tp_traverse, StructParam_traverse},
+    {Py_tp_reachable, StructParam_traverse},
     {Py_tp_clear, StructParam_clear},
     {Py_tp_dealloc, StructParam_dealloc},
     {0, NULL},
@@ -651,6 +653,7 @@ static PyGetSetDef ctype_getsets[] = {
 static PyType_Slot ctype_type_slots[] = {
     {Py_tp_token, Py_TP_USE_SPEC},
     {Py_tp_traverse, CType_Type_traverse},
+    {Py_tp_reachable, CType_Type_traverse},
     {Py_tp_clear, CType_Type_clear},
     {Py_tp_dealloc, CType_Type_dealloc},
     {Py_tp_methods, ctype_methods},
@@ -1194,6 +1197,7 @@ static PyType_Slot pycstruct_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the CData Objects")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, PyCStructType_init},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
@@ -1209,6 +1213,7 @@ static PyType_Slot union_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the Union Objects")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, UnionType_init},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
@@ -1468,6 +1473,7 @@ static PyType_Slot pycpointer_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the Pointer Objects")},
     {Py_tp_methods, PyCPointerType_methods},
     {Py_tp_init, PyCPointerType_init},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
@@ -1870,6 +1876,7 @@ static PyType_Slot pycarray_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the Array Objects")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, PyCArrayType_init},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
@@ -2623,6 +2630,7 @@ static PyType_Slot pycsimple_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the PyCSimpleType Objects")},
     {Py_tp_methods, PyCSimpleType_methods},
     {Py_tp_init, PyCSimpleType_init},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
@@ -2881,6 +2889,7 @@ static PyType_Slot pycfuncptr_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for C function pointers")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, PyCFuncPtrType_init},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
@@ -3247,6 +3256,7 @@ static PyType_Slot pycdata_slots[] = {
     {Py_tp_hash, PyCData_nohash},
     {Py_tp_doc, PyDoc_STR("XXX to be provided")},
     {Py_tp_traverse, PyCData_traverse},
+    {Py_tp_reachable, PyCData_traverse},
     {Py_tp_clear, PyCData_clear},
     {Py_tp_methods, PyCData_methods},
     {Py_tp_members, PyCData_members},
@@ -4842,6 +4852,7 @@ static PyType_Slot pycfuncptr_slots[] = {
     {Py_tp_call, PyCFuncPtr_call},
     {Py_tp_doc, PyDoc_STR("Function Pointer")},
     {Py_tp_traverse, PyCFuncPtr_traverse},
+    {Py_tp_reachable, PyCFuncPtr_traverse},
     {Py_tp_clear, PyCFuncPtr_clear},
     {Py_tp_getset, PyCFuncPtr_getsets},
     {Py_tp_new, PyCFuncPtr_new},
@@ -4984,6 +4995,7 @@ static PyType_Slot pycstruct_slots[] = {
     {Py_tp_doc, PyDoc_STR("Structure base class")},
     {Py_tp_init, Struct_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_VisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {0, NULL},
 };
@@ -4999,6 +5011,7 @@ static PyType_Slot pycunion_slots[] = {
     {Py_tp_doc, PyDoc_STR("Union base class")},
     {Py_tp_init, Struct_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_VisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {0, NULL},
 };
@@ -5357,6 +5370,7 @@ static PyType_Slot pycarray_slots[] = {
     {Py_tp_methods, Array_methods},
     {Py_tp_init, Array_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_VisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {Py_sq_length, Array_length},
     {Py_sq_item, Array_item},
@@ -5586,6 +5600,7 @@ static PyType_Slot pycsimple_slots[] = {
     {Py_tp_getset, Simple_getsets},
     {Py_tp_init, Simple_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_VisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {Py_nb_bool, Simple_bool},
     {0, NULL},
@@ -6040,6 +6055,7 @@ static PyType_Slot pycpointer_slots[] = {
     {Py_tp_getset, Pointer_getsets},
     {Py_tp_init, Pointer_init},
     {Py_tp_new, Pointer_new},
+    {Py_tp_reachable, _PyObject_VisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {Py_nb_bool, Pointer_bool},
     {Py_mp_subscript, Pointer_subscript},
@@ -6130,6 +6146,7 @@ static PyType_Slot comerror_slots[] = {
     {Py_tp_doc, (void *)PyDoc_STR(comerror_doc)},
     {Py_tp_init, comerror_init},
     {Py_tp_traverse, comerror_traverse},
+    {Py_tp_reachable, comerror_traverse},
     {Py_tp_dealloc, comerror_dealloc},
     {Py_tp_clear, comerror_clear},
     {0, NULL},

@@ -3014,6 +3014,7 @@ static PyType_Slot array_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_new, array_new},
     {Py_tp_traverse, _PyObject_VisitType},
+    {Py_tp_reachable, _PyObject_VisitType},
 
     /* as sequence */
     {Py_sq_length, array_length},
@@ -3182,6 +3183,7 @@ static PyType_Slot arrayiter_slots[] = {
     {Py_tp_dealloc, arrayiter_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, arrayiter_traverse},
+    {Py_tp_reachable, arrayiter_traverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, arrayiter_next},
     {Py_tp_methods, arrayiter_methods},

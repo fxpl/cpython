@@ -2368,6 +2368,7 @@ static PyType_Slot generic_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_free, PyObject_GC_Del},
     {Py_tp_traverse, _PyObject_VisitType},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
