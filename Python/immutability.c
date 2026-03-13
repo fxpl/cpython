@@ -954,12 +954,12 @@ static PyWeakReference* weakref_separate_ipid(PyWeakReference** list, int64_t ip
     return result;
 }
 
-/* Clear the weakrefs in the list.
+/* Distribute the callbacks to their original interpreters.
  * Returns:
  * (true) The caller can proceed with deallocating 'to_dealloc'.
  * (false) Callbacks were scheduled, deallocation will be triggered again.
  */
-static int clear_weakrefs(PyWeakReference* head, PyObject* to_dealloc)
+static int weakref_distribute_callbacks(PyWeakReference* head, PyObject* to_dealloc)
 {
     if (head == NULL) {
         return true;
@@ -1007,12 +1007,12 @@ static int clear_weakrefs(PyWeakReference* head, PyObject* to_dealloc)
     return false;
 }
 
-/* Clear the weakrefs for an SCC.
+/* Clear weakrefs with callbacks for an SCC, and call them.
  * Returns:
  * (true) Deallocation can continue.
  * (false) Callbacks were scheduled, deallocation will be triggered again.
  */
-static int clear_weakrefs_scc(PyObject* obj)
+static int weakref_handle_callbacks_scc(PyObject* obj)
 {
     // Collect weakrefs with callbacks into a list.
     PyWeakReference* head = NULL;
@@ -1021,27 +1021,27 @@ static int clear_weakrefs_scc(PyObject* obj)
         PyObject* c = n;
         n = scc_next(c);
         if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(c))) {
-            _PyImmutability_ClearWeakRefs(c, &head);
+            _PyImmutability_ClearWeakRefsWithCallback(c, &head);
         }
     } while (n != obj);
 
-    return clear_weakrefs(head, obj);
+    return weakref_distribute_callbacks(head, obj);
 }
 
-/* Clear the weakrefs for a single object.
+/* Clear weakrefs with callbacks for a single object, and call them.
  * Returns:
  * (true) Deallocation can continue.
  * (false) Callbacks were scheduled, deallocation will be triggered again.
  */
-static int clear_weakrefs_single(PyObject* obj)
+static int weakref_handle_callbacks_single(PyObject* obj)
 {
     if (!_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
         return true;
     }
     // Collect weakrefs with callbacks into a list.
     PyWeakReference* head = NULL;
-    _PyImmutability_ClearWeakRefs(obj, &head);
-    return clear_weakrefs(head, obj);
+    _PyImmutability_ClearWeakRefsWithCallback(obj, &head);
+    return weakref_distribute_callbacks(head, obj);
 }
 
 static void unfreeze_and_finalize_scc(PyObject* obj)
@@ -1080,6 +1080,18 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
             finalize(c);
             // Mark so we don't finalize it again.
             _PyGC_SET_FINALIZED(c);
+        } while (n != obj);
+    }
+
+    if (scc_details.has_weakreferences) {
+        // Clear the remaining weakrefs without calling callbacks.
+        n = obj;
+        do {
+            PyObject* c = n;
+            n = scc_next(c);
+            if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(c))) {
+                _PyWeakref_ClearWeakRefsNoCallbacks(c);
+            }
         } while (n != obj);
     }
 
@@ -1987,9 +1999,13 @@ int _Py_DecRef_Immutable(PyObject *op)
 
     assert(_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) == 0);
 
+    // First, we only clear weakrefs with callbacks.
+    // Callbackless weakrefs are cleared after finalizers have run.
+    // See the comment in Python/gc.c above handle_weakref_callbacks.
+
     if (PyObject_IS_GC(op) && scc_next(op) != NULL) {
         // This object is the root of an SCC.
-        if (!clear_weakrefs_scc(op)) {
+        if (!weakref_handle_callbacks_scc(op)) {
             // Callbacks were scheduled, deallocation will be triggered again.
             return false;
         }
@@ -1998,7 +2014,7 @@ int _Py_DecRef_Immutable(PyObject *op)
         unfreeze_and_finalize_scc(op);
         return false;
     }
-    if (!clear_weakrefs_single(op)) {
+    if (!weakref_handle_callbacks_single(op)) {
         // Callbacks were scheduled, deallocation will be triggered again.
         return false;
     }

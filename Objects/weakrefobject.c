@@ -1196,12 +1196,11 @@ PyObject_ClearWeakRefs(PyObject *object)
     PyErr_SetRaisedException(exc);
 }
 
-/* Clear weak references of an immutable object.
- * For weakrefs with callbacks, add them to the callbacks list
- * to be handled later.
+/* Clear weak references with callbacks of an immutable object.
+ * Store them in a list to be able to call their callbacks later.
  */
 void
-_PyImmutability_ClearWeakRefs(PyObject *object, PyWeakReference **callbacks)
+_PyImmutability_ClearWeakRefsWithCallback(PyObject *object, PyWeakReference **callbacks)
 {
     if (object == NULL
         || !_PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))
@@ -1217,21 +1216,17 @@ _PyImmutability_ClearWeakRefs(PyObject *object, PyWeakReference **callbacks)
         return;
     }
 
-    // Weakrefs without callbacks are just cleared.
-    // Weakrefs with callbacks are cleared and added to the list.
-    for (int done = 0; !done;) {
-        LOCK_WEAKREFS(object);
-        PyWeakReference *cur = *list;
-        if (cur != NULL) {
-            clear_weakref_lock_held(cur, NULL); // keeps wr_callback
-            if (cur->wr_callback != NULL) {
-                // We need to store the callback to be able to call it later.
-                insert_head(cur, callbacks);
-            }
+    LOCK_WEAKREFS(object);
+    PyWeakReference *next = *list;
+    while (next != NULL) {
+        PyWeakReference *current = next;
+        next = next->wr_next;
+        if (current->wr_callback != NULL) {
+            clear_weakref_lock_held(current, NULL); // keeps the callback
+            insert_head(current, callbacks);
         }
-        done = (*list == NULL);
-        UNLOCK_WEAKREFS(object);
     }
+    UNLOCK_WEAKREFS(object);
 }
 
 void
