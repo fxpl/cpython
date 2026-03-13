@@ -813,6 +813,7 @@ _Py_TryIncref(PyObject *op)
 #ifdef Py_GIL_DISABLED
     return _Py_TryIncrefFast(op) || _Py_TryIncRefShared(op);
 #else
+    assert(!_Py_IsImmutable(op) && "Use _Py_TryIncref_Immutable for immutable objects");
     if (Py_REFCNT(op) > 0) {
         Py_INCREF(op);
         return 1;
@@ -820,6 +821,9 @@ _Py_TryIncref(PyObject *op)
     return 0;
 #endif
 }
+
+int _Py_TryIncref_Immutable(PyObject *op);
+int _Py_IsDead_Immutable(PyObject *op);
 
 // Enqueue an object to be freed possibly after some delay
 #ifdef Py_GIL_DISABLED

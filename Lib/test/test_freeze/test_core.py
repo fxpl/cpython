@@ -461,6 +461,8 @@ class TestWeakRef(unittest.TestCase):
         # The reference should remain as it was reachable through a frozen weakref.
         self.assertTrue(c.val() is not None)
 
+    # Thread safety of weakrefs is tested in test_freeze/test_weakref.py
+
 class TestStackCapture(unittest.TestCase):
      def test_stack_capture(self):
          import sys
