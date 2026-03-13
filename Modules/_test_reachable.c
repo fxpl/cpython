@@ -5,6 +5,8 @@
  * the freeze-time warnings in traverse_freeze().
  *
  *   HasTraverseNoReachable  - has tp_traverse, no tp_reachable
+ *   HasTraverseNoReachableHeap - heap type, has tp_traverse, no tp_reachable
+ *   IncorrectTraverseNoReachableHeap - heap type, forgets to visit its type
  *   NoTraverseNoReachable   - no  tp_traverse, no tp_reachable
  *   HasReachable            - has both tp_traverse and tp_reachable (no warning)
  */
@@ -71,6 +73,133 @@ static PyTypeObject HasTraverseNoReachable_Type = {
     .tp_new = PyType_GenericNew,
     .tp_free = PyObject_GC_Del,
     /* tp_reachable deliberately left NULL */
+};
+
+/* ---- HasTraverseNoReachableHeap --------------------------------------- */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *value;
+} HasTraverseNoReachableHeapObject;
+
+static int
+htnrh_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    HasTraverseNoReachableHeapObject *obj = (HasTraverseNoReachableHeapObject *)self;
+    Py_VISIT(Py_TYPE(self));
+    Py_VISIT(obj->value);
+    return 0;
+}
+
+static int
+htnrh_clear(PyObject *self)
+{
+    HasTraverseNoReachableHeapObject *obj = (HasTraverseNoReachableHeapObject *)self;
+    Py_CLEAR(obj->value);
+    return 0;
+}
+
+static void
+htnrh_dealloc(PyObject *self)
+{
+    PyObject_GC_UnTrack(self);
+    htnrh_clear(self);
+    Py_TYPE(self)->tp_free(self);
+}
+
+static int
+htnrh_init(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    HasTraverseNoReachableHeapObject *obj = (HasTraverseNoReachableHeapObject *)self;
+    PyObject *value = Py_None;
+    if (!PyArg_ParseTuple(args, "|O", &value))
+        return -1;
+    Py_XSETREF(obj->value, Py_NewRef(value));
+    return 0;
+}
+
+static PyType_Slot HasTraverseNoReachableHeap_slots[] = {
+    {Py_tp_doc, "Heap type with tp_traverse but no tp_reachable."},
+    {Py_tp_dealloc, htnrh_dealloc},
+    {Py_tp_traverse, htnrh_traverse},
+    {Py_tp_clear, htnrh_clear},
+    {Py_tp_init, htnrh_init},
+    {Py_tp_alloc, PyType_GenericAlloc},
+    {Py_tp_new, PyType_GenericNew},
+    {Py_tp_free, PyObject_GC_Del},
+    {0, NULL},
+};
+
+static PyType_Spec HasTraverseNoReachableHeap_spec = {
+    .name = "_test_reachable.HasTraverseNoReachableHeap",
+    .basicsize = sizeof(HasTraverseNoReachableHeapObject),
+    .itemsize = 0,
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .slots = HasTraverseNoReachableHeap_slots,
+};
+
+/* ---- IncorrectTraverseNoReachableHeap -------------------------------- */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *value;
+} IncorrectTraverseNoReachableHeapObject;
+
+static int
+itnrh_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    IncorrectTraverseNoReachableHeapObject *obj = (IncorrectTraverseNoReachableHeapObject *)self;
+    // This is intentionally not visiting the heap type for testing
+    // Py_VISIT(Py_TYPE(self));
+    Py_VISIT(obj->value);
+    return 0;
+}
+
+static int
+itnrh_clear(PyObject *self)
+{
+    IncorrectTraverseNoReachableHeapObject *obj = (IncorrectTraverseNoReachableHeapObject *)self;
+    Py_CLEAR(obj->value);
+    return 0;
+}
+
+static void
+itnrh_dealloc(PyObject *self)
+{
+    PyObject_GC_UnTrack(self);
+    itnrh_clear(self);
+    Py_TYPE(self)->tp_free(self);
+}
+
+static int
+itnrh_init(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    IncorrectTraverseNoReachableHeapObject *obj = (IncorrectTraverseNoReachableHeapObject *)self;
+    PyObject *value = Py_None;
+    if (!PyArg_ParseTuple(args, "|O", &value))
+        return -1;
+    Py_XSETREF(obj->value, Py_NewRef(value));
+    return 0;
+}
+
+static PyType_Slot IncorrectTraverseNoReachableHeap_slots[] = {
+    {Py_tp_doc, "Heap type with tp_traverse but no tp_reachable and an incorrect traverse."},
+    {Py_tp_dealloc, itnrh_dealloc},
+    {Py_tp_traverse, itnrh_traverse},
+    {Py_tp_clear, itnrh_clear},
+    {Py_tp_init, itnrh_init},
+    {Py_tp_alloc, PyType_GenericAlloc},
+    {Py_tp_new, PyType_GenericNew},
+    {Py_tp_free, PyObject_GC_Del},
+    {0, NULL},
+};
+
+static PyType_Spec IncorrectTraverseNoReachableHeap_spec = {
+    .name = "_test_reachable.IncorrectTraverseNoReachableHeap",
+    .basicsize = sizeof(IncorrectTraverseNoReachableHeapObject),
+    .itemsize = 0,
+    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .slots = IncorrectTraverseNoReachableHeap_slots,
 };
 
 /* ---- NoTraverseNoReachable ------------------------------------------- */
@@ -240,6 +369,9 @@ static PyTypeObject ShallowImmutable_Type = {
 static int
 _test_reachable_exec(PyObject *module)
 {
+    PyObject *htnrh_type = NULL;
+    PyObject *itnrh_type = NULL;
+
     /* Ready both types and register them as freezable */
     if (PyType_Ready(&HasTraverseNoReachable_Type) < 0)
         return -1;
@@ -249,6 +381,36 @@ _test_reachable_exec(PyObject *module)
         return -1;
     if (_PyImmutability_RegisterFreezable(&HasTraverseNoReachable_Type) < 0)
         return -1;
+
+    htnrh_type = PyType_FromModuleAndSpec(module, &HasTraverseNoReachableHeap_spec, NULL);
+    if (htnrh_type == NULL)
+        return -1;
+    /* Keep this heap type as "no tp_reachable" even if inherited. */
+    ((PyTypeObject *)htnrh_type)->tp_reachable = NULL;
+    if (PyModule_AddObjectRef(module, "HasTraverseNoReachableHeap", htnrh_type) != 0) {
+        Py_DECREF(htnrh_type);
+        return -1;
+    }
+    if (_PyImmutability_RegisterFreezable((PyTypeObject *)htnrh_type) < 0) {
+        Py_DECREF(htnrh_type);
+        return -1;
+    }
+    Py_DECREF(htnrh_type);
+
+    itnrh_type = PyType_FromModuleAndSpec(module, &IncorrectTraverseNoReachableHeap_spec, NULL);
+    if (itnrh_type == NULL)
+        return -1;
+    /* Keep this heap type as "no tp_reachable" even if inherited. */
+    ((PyTypeObject *)itnrh_type)->tp_reachable = NULL;
+    if (PyModule_AddObjectRef(module, "IncorrectTraverseNoReachableHeap", itnrh_type) != 0) {
+        Py_DECREF(itnrh_type);
+        return -1;
+    }
+    if (_PyImmutability_RegisterFreezable((PyTypeObject *)itnrh_type) < 0) {
+        Py_DECREF(itnrh_type);
+        return -1;
+    }
+    Py_DECREF(itnrh_type);
 
     if (PyType_Ready(&NoTraverseNoReachable_Type) < 0)
         return -1;
