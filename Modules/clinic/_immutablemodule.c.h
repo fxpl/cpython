@@ -22,6 +22,24 @@ PyDoc_STRVAR(_immutable_freeze__doc__,
 #define _IMMUTABLE_FREEZE_METHODDEF    \
     {"freeze", _PyCFunction_CAST(_immutable_freeze), METH_FASTCALL, _immutable_freeze__doc__},
 
+static PyObject *
+_immutable_freeze_impl(PyObject *module, PyObject * const *args,
+                       Py_ssize_t args_length);
+
+static PyObject *
+_immutable_freeze(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
+{
+    PyObject *return_value = NULL;
+    PyObject * const *__clinic_args;
+    Py_ssize_t args_length;
+
+    __clinic_args = args;
+    args_length = nargs;
+    return_value = _immutable_freeze_impl(module, __clinic_args, args_length);
+
+    return return_value;
+}
+
 PyDoc_STRVAR(_immutable_isfrozen__doc__,
 "isfrozen($module, obj, /)\n"
 "--\n"
@@ -72,4 +90,4 @@ _immutable_set_freezable(PyObject *module, PyObject *const *args, Py_ssize_t nar
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=6ccbbe8cca58c3bb input=a9049054013a1b77]*/
+/*[clinic end generated code: output=c6e7830815e38208 input=a9049054013a1b77]*/

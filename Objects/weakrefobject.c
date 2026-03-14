@@ -210,13 +210,6 @@ gc_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-weakref_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
-    return gc_traverse(op, visit, arg);
-}
-
 
 static int
 gc_clear(PyObject *op)
@@ -612,7 +605,7 @@ _PyWeakref_RefType = {
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
                 Py_TPFLAGS_HAVE_VECTORCALL | Py_TPFLAGS_BASETYPE,
     .tp_traverse = gc_traverse,
-    .tp_reachable = weakref_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_clear = gc_clear,
     .tp_richcompare = weakref_richcompare,
     .tp_methods = weakref_methods,
@@ -985,7 +978,7 @@ _PyWeakref_ProxyType = {
     proxy_iter,                         /* tp_iter */
     proxy_iternext,                     /* tp_iternext */
     proxy_methods,                      /* tp_methods */
-    .tp_reachable = weakref_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 
@@ -1019,7 +1012,7 @@ _PyWeakref_CallableProxyType = {
     0,                                  /* tp_weaklistoffset */
     proxy_iter,                         /* tp_iter */
     proxy_iternext,                     /* tp_iternext */
-    .tp_reachable = weakref_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 PyObject *

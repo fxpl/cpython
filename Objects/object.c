@@ -2248,13 +2248,6 @@ static Py_hash_t none_hash(PyObject *v)
     return 0xFCA86420;
 }
 
-static int
-none_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    visit(_PyObject_CAST(Py_TYPE(self)), arg);
-    return 0;
-}
-
 static PyNumberMethods none_as_number = {
     0,                          /* nb_add */
     0,                          /* nb_subtract */
@@ -2336,7 +2329,7 @@ PyTypeObject _PyNone_Type = {
     0,                  /*tp_init */
     0,                  /*tp_alloc */
     none_new,           /*tp_new */
-    .tp_reachable = none_reachable,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject _Py_NoneStruct = _PyObject_HEAD_INIT(&_PyNone_Type);
@@ -3440,4 +3433,24 @@ _PyObject_VisitType(PyObject *op, visitproc visit, void *arg)
     _PyObject_ASSERT((PyObject *)tp, PyType_HasFeature(tp, Py_TPFLAGS_HEAPTYPE));
     Py_VISIT(tp);
     return 0;
+}
+
+int
+_PyObject_ReachableVisitType(PyObject *op, visitproc visit, void *arg)
+{
+    assert(op != NULL);
+    Py_VISIT(Py_TYPE(op));
+    return 0;
+}
+
+
+int
+_PyObject_ReachableVisitTypeAndTraverse(PyObject *op, visitproc visit, void *arg)
+{
+    assert(op != NULL);
+    Py_VISIT(Py_TYPE(op));
+
+    assert(Py_TYPE(op)->tp_traverse != NULL);
+    assert(Py_TYPE(op)->tp_traverse != _PyObject_VisitType);
+    return Py_TYPE(op)->tp_traverse(op, visit, arg);
 }

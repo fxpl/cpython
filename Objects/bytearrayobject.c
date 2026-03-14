@@ -2740,13 +2740,6 @@ Construct a mutable bytearray object from:\n\
   - any object implementing the buffer API.\n\
   - an integer");
 
-static int
-bytearray_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return 0;
-}
-
 
 static PyObject *bytearray_iter(PyObject *seq);
 
@@ -2791,7 +2784,7 @@ PyTypeObject PyByteArray_Type = {
     PyType_GenericAlloc,                /* tp_alloc */
     PyType_GenericNew,                  /* tp_new */
     PyObject_Free,                      /* tp_free */
-    .tp_reachable = bytearray_reachable,
+    .tp_reachable = _PyObject_ReachableVisitType,
     .tp_version_tag = _Py_TYPE_VERSION_BYTEARRAY,
 };
 
@@ -2926,13 +2919,6 @@ static PyMethodDef bytearrayiter_methods[] = {
     {NULL, NULL} /* sentinel */
 };
 
-static int
-bytearrayiter_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return bytearrayiter_traverse(self, visit, arg);
-}
-
 PyTypeObject PyByteArrayIter_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "bytearray_iterator",              /* tp_name */
@@ -2964,7 +2950,7 @@ PyTypeObject PyByteArrayIter_Type = {
     bytearrayiter_next,                /* tp_iternext */
     bytearrayiter_methods,             /* tp_methods */
     0,
-    .tp_reachable = bytearrayiter_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static PyObject *

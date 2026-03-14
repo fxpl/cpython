@@ -8574,6 +8574,7 @@ static PyTypeObject EncodingMapType = {
     /* methods */
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_methods = encoding_map_methods,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject*
@@ -14629,15 +14630,6 @@ errors defaults to 'strict'.");
 
 static PyObject *unicode_iter(PyObject *seq);
 
-static int
-unicode_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    // Strings do not own references to other PyObjects, but we still
-    // report reachability to the type object.
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return 0;
-}
-
 PyTypeObject PyUnicode_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     "str",                        /* tp_name */
@@ -14682,7 +14674,7 @@ PyTypeObject PyUnicode_Type = {
     unicode_new,                  /* tp_new */
     PyObject_Free,                /* tp_free */
     .tp_vectorcall = unicode_vectorcall,
-    .tp_reachable = unicode_reachable,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 /* Initialize the Unicode implementation */
@@ -15124,13 +15116,6 @@ unicodeiter_traverse(PyObject *op, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-unicodeiter_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
-    return unicodeiter_traverse(op, visit, arg);
-}
-
 static PyObject *
 unicodeiter_next(PyObject *op)
 {
@@ -15272,7 +15257,7 @@ PyTypeObject PyUnicodeIter_Type = {
     unicodeiter_next,   /* tp_iternext */
     unicodeiter_methods,            /* tp_methods */
     0,
-    .tp_reachable = unicodeiter_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 PyTypeObject _PyUnicodeASCIIIter_Type = {
@@ -15286,7 +15271,7 @@ PyTypeObject _PyUnicodeASCIIIter_Type = {
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = unicode_ascii_iter_next,
     .tp_methods = unicodeiter_methods,
-    .tp_reachable = unicodeiter_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static PyObject *

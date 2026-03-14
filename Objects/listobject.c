@@ -3463,13 +3463,6 @@ list_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-list_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return list_traverse(self, visit, arg);
-}
-
 static PyObject *
 list_richcompare_impl(PyObject *v, PyObject *w, int op)
 {
@@ -3992,7 +3985,7 @@ PyTypeObject PyList_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_vectorcall = list_vectorcall,
     .tp_version_tag = _Py_TYPE_VERSION_LIST,
-    .tp_reachable = list_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 /*********************** List Iterator **************************/

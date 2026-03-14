@@ -52,13 +52,6 @@ ga_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
-ga_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return ga_traverse(self, visit, arg);
-}
-
-static int
 ga_repr_items_list(PyUnicodeWriter *writer, PyObject *p)
 {
     assert(PyList_CheckExact(p));
@@ -957,13 +950,6 @@ ga_iter_traverse(PyObject *op, visitproc visit, void *arg)
 }
 
 static int
-ga_iter_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return ga_iter_traverse(self, visit, arg);
-}
-
-static int
 ga_iter_clear(PyObject *self)
 {
     gaiterobject *gi = (gaiterobject *)self;
@@ -1001,7 +987,7 @@ PyTypeObject _Py_GenericAliasIterType = {
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = ga_iternext,
     .tp_traverse = ga_iter_traverse,
-    .tp_reachable = ga_iter_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_methods = ga_iter_methods,
     .tp_dealloc = ga_iter_dealloc,
     .tp_clear = ga_iter_clear,
@@ -1036,7 +1022,7 @@ PyTypeObject Py_GenericAliasType = {
     .tp_getattro = ga_getattro,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_VECTORCALL,
     .tp_traverse = ga_traverse,
-    .tp_reachable = ga_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_richcompare = ga_richcompare,
     .tp_weaklistoffset = offsetof(gaobject, weakreflist),
     .tp_methods = ga_methods,

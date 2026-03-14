@@ -335,13 +335,6 @@ method_traverse(PyObject *self, visitproc visit, void *arg)
     return 0;
 }
 
-static int
-method_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return method_traverse(self, visit, arg);
-}
-
 static PyObject *
 method_descr_get(PyObject *meth, PyObject *obj, PyObject *cls)
 {
@@ -364,7 +357,6 @@ PyTypeObject PyMethod_Type = {
                 Py_TPFLAGS_HAVE_VECTORCALL,
     .tp_doc = method_new__doc__,
     .tp_traverse = method_traverse,
-    .tp_reachable = method_reachable,
     .tp_richcompare = method_richcompare,
     .tp_weaklistoffset = offsetof(PyMethodObject, im_weakreflist),
     .tp_methods = method_methods,
@@ -372,6 +364,7 @@ PyTypeObject PyMethod_Type = {
     .tp_getset = method_getset,
     .tp_descr_get = method_descr_get,
     .tp_new = method_new,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 /* ------------------------------------------------------------------------
@@ -462,12 +455,6 @@ static int
 instancemethod_traverse(PyObject *self, visitproc visit, void *arg) {
     Py_VISIT(PyInstanceMethod_GET_FUNCTION(self));
     return 0;
-}
-
-static int
-instancemethod_reachable(PyObject *self, visitproc visit, void *arg) {
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return instancemethod_traverse(self, visit, arg);
 }
 
 static PyObject *
@@ -571,10 +558,10 @@ PyTypeObject PyInstanceMethod_Type = {
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_doc = instancemethod_new__doc__,
     .tp_traverse = instancemethod_traverse,
-    .tp_reachable = instancemethod_reachable,
     .tp_richcompare = instancemethod_richcompare,
     .tp_members = instancemethod_memberlist,
     .tp_getset = instancemethod_getset,
     .tp_descr_get = instancemethod_descr_get,
     .tp_new = instancemethod_new,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };

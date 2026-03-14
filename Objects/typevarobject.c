@@ -153,13 +153,6 @@ constevaluator_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
-constevaluator_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return constevaluator_traverse(self, visit, arg);
-}
-
-static int
 constevaluator_clear(PyObject *self)
 {
     constevaluatorobject *ce = constevaluatorobject_CAST(self);
@@ -249,7 +242,7 @@ static PyType_Slot constevaluator_slots[] = {
     {Py_tp_doc, (void *)constevaluator_doc},
     {Py_tp_dealloc, constevaluator_dealloc},
     {Py_tp_traverse, constevaluator_traverse},
-    {Py_tp_reachable, constevaluator_reachable},
+    {Py_tp_reachable, _PyObject_ReachableVisitTypeAndTraverse},
     {Py_tp_clear, constevaluator_clear},
     {Py_tp_repr, constevaluator_repr},
     {Py_tp_call, constevaluator_call},
@@ -508,13 +501,6 @@ typevar_traverse(PyObject *self, visitproc visit, void *arg)
     Py_VISIT(tv->evaluate_default);
     PyObject_VisitManagedDict(self, visit, arg);
     return 0;
-}
-
-static int
-typevar_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return typevar_traverse(self, visit, arg);
 }
 
 static int
@@ -937,7 +923,7 @@ static PyType_Slot typevar_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_free, PyObject_GC_Del},
     {Py_tp_traverse, typevar_traverse},
-    {Py_tp_reachable, typevar_reachable},
+    {Py_tp_reachable, _PyObject_ReachableVisitTypeAndTraverse},
     {Py_tp_clear, typevar_clear},
     {Py_tp_repr, typevar_repr},
     {Py_tp_members, typevar_members},
@@ -980,13 +966,6 @@ paramspecattr_traverse(PyObject *self, visitproc visit, void *arg)
     paramspecattrobject *psa = paramspecattrobject_CAST(self);
     Py_VISIT(psa->__origin__);
     return 0;
-}
-
-static int
-paramspecattr_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return paramspecattr_traverse(self, visit, arg);
 }
 
 static int
@@ -1093,7 +1072,7 @@ static PyType_Slot paramspecargs_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_free, PyObject_GC_Del},
     {Py_tp_traverse, paramspecattr_traverse},
-    {Py_tp_reachable, paramspecattr_reachable},
+    {Py_tp_reachable, _PyObject_ReachableVisitTypeAndTraverse},
     {Py_tp_clear, paramspecattr_clear},
     {Py_tp_repr, paramspecargs_repr},
     {Py_tp_members, paramspecattr_members},
@@ -1174,7 +1153,7 @@ static PyType_Slot paramspeckwargs_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_free, PyObject_GC_Del},
     {Py_tp_traverse, paramspecattr_traverse},
-    {Py_tp_reachable, paramspecattr_reachable},
+    {Py_tp_reachable, _PyObject_ReachableVisitTypeAndTraverse},
     {Py_tp_clear, paramspecattr_clear},
     {Py_tp_repr, paramspeckwargs_repr},
     {Py_tp_members, paramspecattr_members},
@@ -1220,13 +1199,6 @@ paramspec_traverse(PyObject *self, visitproc visit, void *arg)
     Py_VISIT(ps->evaluate_default);
     PyObject_VisitManagedDict(self, visit, arg);
     return 0;
-}
-
-static int
-paramspec_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return paramspec_traverse(self, visit, arg);
 }
 
 static int
@@ -1535,7 +1507,7 @@ static PyType_Slot paramspec_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_free, PyObject_GC_Del},
     {Py_tp_traverse, paramspec_traverse},
-    {Py_tp_reachable, paramspec_reachable},
+    {Py_tp_reachable, _PyObject_ReachableVisitTypeAndTraverse},
     {Py_tp_clear, paramspec_clear},
     {Py_tp_repr, paramspec_repr},
     {0, 0},
@@ -1728,13 +1700,6 @@ typevartuple_traverse(PyObject *self, visitproc visit, void *arg)
 }
 
 static int
-typevartuple_reachable(PyObject *self, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
-    return typevartuple_traverse(self, visit, arg);
-}
-
-static int
 typevartuple_clear(PyObject *self)
 {
     typevartupleobject *tvt = typevartupleobject_CAST(self);
@@ -1840,7 +1805,7 @@ PyType_Slot typevartuple_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_free, PyObject_GC_Del},
     {Py_tp_traverse, typevartuple_traverse},
-    {Py_tp_reachable, typevartuple_reachable},
+    {Py_tp_reachable, _PyObject_ReachableVisitTypeAndTraverse},
     {Py_tp_clear, typevartuple_clear},
     {0, 0},
 };
@@ -2088,13 +2053,6 @@ typealias_traverse(PyObject *op, visitproc visit, void *arg)
 }
 
 static int
-typealias_reachable(PyObject *op, visitproc visit, void *arg)
-{
-    Py_VISIT(_PyObject_CAST(Py_TYPE(op)));
-    return typealias_traverse(op, visit, arg);
-}
-
-static int
 typealias_clear(PyObject *op)
 {
     typealiasobject *self = typealiasobject_CAST(op);
@@ -2223,7 +2181,7 @@ PyTypeObject _PyTypeAlias_Type = {
     .tp_iter = unpack_iter,
     .tp_traverse = typealias_traverse,
     .tp_clear = typealias_clear,
-    .tp_reachable = typealias_reachable,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_repr = typealias_repr,
     .tp_as_number = &typealias_as_number,
     .tp_as_mapping = &typealias_as_mapping,
@@ -2368,6 +2326,7 @@ static PyType_Slot generic_slots[] = {
     {Py_tp_alloc, PyType_GenericAlloc},
     {Py_tp_free, PyObject_GC_Del},
     {Py_tp_traverse, _PyObject_VisitType},
+    {Py_tp_reachable, _PyObject_VisitType},
     {0, NULL},
 };
 
