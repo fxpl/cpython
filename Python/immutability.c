@@ -336,6 +336,7 @@ struct FreezeState {
 
     // The next pointer used for handling nested freezing
     struct FreezeState *next;
+    bool restart;
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
     PyObject* freeze_location;
@@ -465,6 +466,7 @@ static int init_freeze_state(struct FreezeState *state)
         _Py_hashtable_compare_direct);
 
     state->next = NULL;
+    state->restart = false;
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
 #endif
@@ -2077,6 +2079,38 @@ static void make_weakrefs_safe(struct FreezeState* freeze_state)
 
 }
 
+/* This undoes a freeze belonging to the given state */
+static void undo_freeze(struct FreezeState* state) {
+    debug("Unfreezing all frozen objects belonging to %p\n", state);
+
+    // Clear pending stack
+    while (PyList_Size(state->pending) != 0) {
+        PyObject* item = pop(state->pending);
+        assert(item != NULL);
+        unfreeze(item);
+    }
+
+    // Unfreeze completed SCCs via intrusive linked list.
+    PyObject *scc = state->completed_sccs;
+    while (scc != NULL) {
+        // Read next link before rollback clears _gc_prev.
+        PyObject *next = scc_parent(scc);
+        if (scc_next(scc) == NULL) {
+            // Single-member SCC: just clear flags and return to GC.
+            _Py_CLEAR_IMMUTABLE(scc);
+            return_to_gc(scc);
+        } else {
+            rollback_completed_scc(scc);
+        }
+        scc = next;
+    }
+    state->completed_sccs = NULL;
+
+    // Clear immutability flags on non-GC visited objects.
+    _Py_hashtable_foreach(state->visited,
+                          clear_immutable_visitor, NULL);
+}
+
 static int _run_pre_freeze_hook(struct _Py_immutability_state *imm_state, PyObject* obj) {
     // 1. Check for the `__pre_freeze__` name
     PyObject *attr = NULL;
@@ -2271,6 +2305,7 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
         if (_Py_IsImmutable(objs[i])) {
             continue;
         }
+        // TODO: Push to global roots
         if (_Py_hashtable_set(freeze_state.roots, objs[i], objs[i]) < 0) {
             PyErr_NoMemory();
             goto error;
@@ -2301,6 +2336,20 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
         }
     }
 #endif
+
+    // A nested `freeze()` call forced a restart of this freeze
+    // the roots remain the same, but we have to repopulate the
+    // DFS stack
+    if (false) {
+restart:
+        for (Py_ssize_t i = 0; i < nobjs; i++) {
+            if (_Py_IsImmutable(objs[i])) {
+                continue;
+            }
+            SUCCEEDS(push(freeze_state.dfs, objs[i]));
+        }
+        freeze_state.restart = false;
+    }
 
     while (PyList_Size(freeze_state.dfs) != 0) {
         PyObject* item = pop(freeze_state.dfs);
@@ -2366,6 +2415,12 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
         // Call the pre-freeze hook if one is present
         SUCCEEDS(check_pre_freeze_hook(imm_state, item));
 
+        // Pre-freeze hooks can force a restart of freezing.
+        // We only restart if the pre-freeze hook succeeds.
+        if (freeze_state.restart) {
+            goto restart;
+        }
+
         // If the pre-freeze hook turned the object immutable, we want to skip it.
         if (_Py_IsImmutable(item)) {
             continue;
@@ -2394,34 +2449,8 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
     goto finally;
 
 error:
-    debug("Error during freeze, unfreezing all frozen objects\n");
-    while(PyList_Size(freeze_state.pending) != 0){
-        PyObject* item = pop(freeze_state.pending);
-        if(item == NULL){
-            return -1;
-        }
-        unfreeze(item);
-    }
-    // Unfreeze completed SCCs via intrusive linked list.
-    {
-        PyObject *scc = freeze_state.completed_sccs;
-        while (scc != NULL) {
-            // Read next link before rollback clears _gc_prev.
-            PyObject *next = scc_parent(scc);
-            if (scc_next(scc) == NULL) {
-                // Single-member SCC: just clear flags and return to GC.
-                _Py_CLEAR_IMMUTABLE(scc);
-                return_to_gc(scc);
-            } else {
-                rollback_completed_scc(scc);
-            }
-            scc = next;
-        }
-        freeze_state.completed_sccs = NULL;
-    }
-    // Clear immutability flags on non-GC visited objects.
-    _Py_hashtable_foreach(freeze_state.visited,
-                          clear_immutable_visitor, NULL);
+    debug("Error during freeze\n");
+    undo_freeze(&freeze_state);
     result = -1;
 
 finally:
