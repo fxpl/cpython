@@ -3131,6 +3131,7 @@ static PyTypeObject PyDateTime_DeltaType = {
     0,                                                  /* tp_alloc */
     delta_new,                                          /* tp_new */
     0,                                                  /* tp_free */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 // XXX Can we make this const?

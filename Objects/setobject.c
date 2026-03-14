@@ -2930,6 +2930,7 @@ static PyTypeObject _PySetDummy_Type = {
     0,                  /*tp_setattro */
     0,                  /*tp_as_buffer */
     Py_TPFLAGS_DEFAULT, /*tp_flags */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 static PyObject _dummy_struct = _PyObject_HEAD_INIT(&_PySetDummy_Type);

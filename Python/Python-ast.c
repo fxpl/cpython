@@ -5976,7 +5976,6 @@ static PyType_Slot AST_type_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_setattro, PyObject_GenericSetAttr},
     {Py_tp_traverse, ast_traverse},
-    {Py_tp_reachable, ast_traverse},
     {Py_tp_clear, ast_clear},
     {Py_tp_members, ast_type_members},
     {Py_tp_methods, ast_type_methods},

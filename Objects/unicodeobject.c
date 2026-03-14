@@ -8574,6 +8574,7 @@ static PyTypeObject EncodingMapType = {
     /* methods */
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_methods = encoding_map_methods,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject*
