@@ -861,16 +861,18 @@ static void scc_return_to_gc(PyObject* obj, bool decref_required)
         PyObject* c = n;
         n = scc_next(c);
         return_to_gc(c);
+        debug("Returned %p rc = %zu to GC\n", c, Py_REFCNT(c));
         if (decref_required) {
             Py_DECREF(c);
         }
-        debug_obj("Returned %s (%p) rc = %zu to GC\n", c, Py_REFCNT(c));
     } while (n != obj);
 }
 
 static void unfreeze(PyObject* obj)
 {
-    debug_obj("Unfreezing SCC starting at %s @ %p\n", obj);
+    // Repr should not be called with an exception set. This can therefore
+    // only print the memory address of the object
+    debug("Unfreezing SCC starting at %p\n", obj);
     if (scc_next(obj) == NULL)
     {
         // Clear Immutable flags
@@ -879,7 +881,7 @@ static void unfreeze(PyObject* obj)
         return_to_gc(obj);
         return;
     }
-    debug_obj("Unfreezing %s @ %p\n", obj);
+    debug("Unfreezing %p\n", obj);
     // Note: We don't need the details of the SCC for a simple unfreeze.
     struct SCCDetails scc_details;
     scc_reset_root_refcount(obj);
@@ -1185,7 +1187,7 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
     // tp_clear all elements in the cycle.
     n = obj;
     do {
-        debug_obj("Clearing %s (%p)\n", n);
+        debug("Clearing (%p)\n", n);
         PyObject* c = n;
         n = scc_next(c);
         inquiry clear;
@@ -1340,7 +1342,7 @@ static int rollback_refcount_visit(PyObject* obj, void* ring_ht)
 */
 static void rollback_completed_scc(PyObject* obj)
 {
-    debug_obj("Rolling back SCC starting at %s @ %p\n", obj);
+    debug("Rolling back SCC starting at %p\n", obj);
 
     _Py_hashtable_t *ring = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
@@ -2088,6 +2090,9 @@ static void undo_freeze(struct FreezeState* state) {
     while (PyList_Size(state->pending) != 0) {
         PyObject* item = pop(state->pending);
         assert(item != NULL);
+        if (item == PostOrderMarker) {
+            continue;
+        }
         unfreeze(item);
     }
 
@@ -2365,6 +2370,7 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
     // DFS stack
     if (false) {
 restart:
+        assert(PyList_Size(freeze_state.dfs) == 0);
         for (Py_ssize_t i = 0; i < nobjs; i++) {
             if (_Py_IsImmutable(objs[i])) {
                 continue;
