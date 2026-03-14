@@ -1220,8 +1220,8 @@ _Py_module_getattro(PyObject *self, PyObject *name)
     return _Py_module_getattro_impl(m, name, 0);
 }
 
-int
-_Py_immmodule_setattro(PyObject *self, PyObject *name, PyObject *value)
+static int
+immmodule_setattro(PyObject *self, PyObject *name, PyObject *value)
 {
     PyModuleObject *m = _PyInterpreterState_GetModuleState(self);
     return PyObject_GenericSetAttr(_PyObject_CAST(m), name, value);
@@ -1505,7 +1505,8 @@ module_reachable(PyObject *self, visitproc visit, void *arg)
     return module_traverse(self, visit, arg);
 }
 
-int module_make_immutable_proxy(PyObject *self) {
+static int
+module_make_immutable_proxy(PyObject *self) {
     // Use cast, since we want this exact object
     PyModuleObject *m = _PyModule_CAST(self);
 
@@ -1553,7 +1554,8 @@ int module_make_immutable_proxy(PyObject *self) {
     return 0;
 }
 
-int module_prefreeze(PyObject *self) {
+static int
+module_prefreeze(PyObject *self) {
     // TODO(immutable): Check if the module defines a custom pre-freeze hook:
 
     // TODO(immutable): Check if the module wants to be a proxy first:
@@ -1623,7 +1625,7 @@ PyTypeObject _PyImmModule_Type = {
     0,                                          /* tp_call */
     0,                                          /* tp_str */
     _Py_module_getattro,                        /* tp_getattro */
-    _Py_immmodule_setattro,                        /* tp_setattro */
+    immmodule_setattro,                         /* tp_setattro */
     0,                                          /* tp_as_buffer */
     (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC |
         Py_TPFLAGS_BASETYPE) & (~Py_TPFLAGS_MANAGED_DICT),                    /* tp_flags */

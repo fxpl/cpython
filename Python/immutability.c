@@ -2086,11 +2086,16 @@ static void make_weakrefs_safe(struct FreezeState* freeze_state)
 static void undo_freeze(struct FreezeState* state) {
     debug("Unfreezing all frozen objects belonging to %p\n", state);
 
+    // Clear dfs stack
+    while(PyList_Size(state->dfs) > 0){
+        pop(state->dfs);
+    }
+
     // Clear pending stack
-    while (PyList_Size(state->pending) != 0) {
+    while (PyList_Size(state->pending) > 0) {
         PyObject* item = pop(state->pending);
         assert(item != NULL);
-        if (item == PostOrderMarker) {
+        if (item == PostOrderMarker || item == EnsureVisitedMarker) {
             continue;
         }
         unfreeze(item);
@@ -2207,7 +2212,7 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     TRACE_MERMAID_NODE(obj);
 #endif
 
-    debug_obj("%s (%p) rc=%zd\n", obj, Py_REFCNT(obj));
+    debug_obj("Traversing %s (%p) rc=%zd\n", obj, Py_REFCNT(obj));
 
     if(is_c_wrapper(obj)) {
         set_direct_rc(obj);
@@ -2303,19 +2308,21 @@ late_init(struct _Py_immutability_state *state)
 static int
 freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
 {
+    struct _Py_immutability_state* imm_state = NULL;
     int result = 0;
     TRACE_MERMAID_START();
 
-    struct FreezeState freeze_state;
     // Initialize the freeze state
+    struct FreezeState freeze_state;
     SUCCEEDS(init_freeze_state(&freeze_state));
-    struct _Py_immutability_state* imm_state = get_immutable_state();
+
+    // Get Immutable state
+    imm_state = get_immutable_state();
     if(imm_state == NULL){
         goto error;
     }
     freeze_state.enclosing = imm_state->freeze_stack;
     imm_state->freeze_stack = &freeze_state;
-
     debug("\nfreeze_impl start. State ptr: %p\n", &freeze_state);
 
     // The SCC algorithm can't handle nested calls directly. So, we
@@ -2333,7 +2340,11 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
         if (_Py_IsImmutable(objs[i])) {
             continue;
         }
-        // TODO: Push to global roots
+        // FIXME(immutable): It is not quite clear how `Explicit` should work
+        // for nested freeze calls. One could argue that they should be frozen
+        // if they're the root of at least one freeze call. Even if this is an
+        // enclosing `freeze` call. For now we only allow `freeze` to explicitly
+        // freeze root objects of its own freeze call and ignore enclosing ones.
         if (_Py_hashtable_set(freeze_state.roots, objs[i], objs[i]) < 0) {
             PyErr_NoMemory();
             goto error;
@@ -2371,6 +2382,7 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
     if (false) {
 restart:
         assert(PyList_Size(freeze_state.dfs) == 0);
+        assert(PyList_Size(freeze_state.pending) == 0);
         for (Py_ssize_t i = 0; i < nobjs; i++) {
             if (_Py_IsImmutable(objs[i])) {
                 continue;
