@@ -334,8 +334,9 @@ struct FreezeState {
     // NULL-terminated; NULL means empty.
     PyObject *completed_sccs;
 
-    // The next pointer used for handling nested freezing
-    struct FreezeState *next;
+    // A pointer to enclosing freeze states taken from the
+    // interpreter local immutable state
+    struct FreezeState *enclosing;
     bool restart;
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
@@ -465,7 +466,7 @@ static int init_freeze_state(struct FreezeState *state)
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
 
-    state->next = NULL;
+    state->enclosing = NULL;
     state->restart = false;
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
@@ -2111,6 +2112,22 @@ static void undo_freeze(struct FreezeState* state) {
                           clear_immutable_visitor, NULL);
 }
 
+/* This undoes enclosing freezes and marks them to be restarted */
+static void restart_enclosing_freezes(struct _Py_immutability_state* imm_state) {
+    struct FreezeState* freeze_state = imm_state->freeze_stack;
+
+    debug("Restarting enclosing freezes of %p\n", freeze_state);
+
+    // Skip the current call, and only walk the enclosing ones
+    freeze_state = freeze_state->enclosing;
+    // Mark all enclosing freezes for restart
+    while (freeze_state) {
+        undo_freeze(freeze_state);
+        freeze_state->restart = true;
+        freeze_state = freeze_state->enclosing;
+    }
+}
+
 static int _run_pre_freeze_hook(struct _Py_immutability_state *imm_state, PyObject* obj) {
     // 1. Check for the `__pre_freeze__` name
     PyObject *attr = NULL;
@@ -2291,13 +2308,19 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
     if(imm_state == NULL){
         goto error;
     }
-    freeze_state.next = imm_state->freeze_stack;
+    freeze_state.enclosing = imm_state->freeze_stack;
     imm_state->freeze_stack = &freeze_state;
 
-    // TODO(immutable): Support nested freeze calls
-    if (freeze_state.next) {
-        PyErr_Format(PyExc_RuntimeError, "Nested freeze calls are currently not supported");
-        goto error;
+    debug("\nfreeze_impl start. State ptr: %p\n", &freeze_state);
+
+    // The SCC algorithm can't handle nested calls directly. So, we
+    // treat freezing like transactions. We simply roll back enclosing
+    // freeze calls and mark them to be restarted.
+    //
+    // Pre-freeze hooks only run once, this ensures progress and that
+    // we'll eventually terminate.
+    if (freeze_state.enclosing) {
+        restart_enclosing_freezes(imm_state);
     }
 
     // Register all roots and push onto the DFS stack
@@ -2455,8 +2478,9 @@ error:
 
 finally:
     if (imm_state) {
-        imm_state->freeze_stack = freeze_state.next;
+        imm_state->freeze_stack = freeze_state.enclosing;
     }
+    debug("freeze_impl end. State ptr: %p\n\n", &freeze_state);
     deallocate_FreezeState(&freeze_state);
     TRACE_MERMAID_END();
     return result;
