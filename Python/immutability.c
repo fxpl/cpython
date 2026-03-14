@@ -334,6 +334,8 @@ struct FreezeState {
     // NULL-terminated; NULL means empty.
     PyObject *completed_sccs;
 
+    // The next pointer used for handling nested freezing
+    struct FreezeState *next;
 #ifdef Py_DEBUG
     // For debugging, track the stack trace of the freeze operation.
     PyObject* freeze_location;
@@ -461,6 +463,8 @@ static int init_freeze_state(struct FreezeState *state)
     state->roots = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
+
+    state->next = NULL;
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
 #endif
@@ -2253,6 +2257,14 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
     if(imm_state == NULL){
         goto error;
     }
+    freeze_state.next = imm_state->freeze_stack;
+    imm_state->freeze_stack = &freeze_state;
+
+    // TODO(immutable): Support nested freeze calls
+    if (freeze_state.next) {
+        PyErr_Format(PyExc_RuntimeError, "Nested freeze calls are currently not supported");
+        goto error;
+    }
 
     // Register all roots and push onto the DFS stack
     for (Py_ssize_t i = 0; i < nobjs; i++) {
@@ -2413,6 +2425,9 @@ error:
     result = -1;
 
 finally:
+    if (imm_state) {
+        imm_state->freeze_stack = freeze_state.next;
+    }
     deallocate_FreezeState(&freeze_state);
     TRACE_MERMAID_END();
     return result;

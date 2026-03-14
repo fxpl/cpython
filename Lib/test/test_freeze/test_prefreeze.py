@@ -54,5 +54,19 @@ class TestPreFreezeHook(unittest.TestCase):
         self.assertFalse(isfrozen(obj))
 
 
+    def test_nested_pre_freeze(self):
+        class A:
+            def __init__(self, field):
+                self.field = field
+
+            def __pre_freeze__(self):
+                freeze(self.field)
+
+        a = A(A(None))
+
+        # Temporary exception to the a minimum viable product.
+        with self.assertRaises(RuntimeError):
+            freeze(a)
+
 if __name__ == "__main__":
     unittest.main()
