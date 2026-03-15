@@ -11,7 +11,6 @@ import _immutable as _c
 freeze = _c.freeze
 is_frozen = _c.is_frozen
 set_freezable = _c.set_freezable
-NotFreezable = getattr(_c, "NotFreezable", None)
 NotFreezableError = _c.NotFreezableError
 ImmutableModule = _c.ImmutableModule
 FREEZABLE_YES = _c.FREEZABLE_YES
@@ -53,7 +52,6 @@ __all__ = [
     "freeze",
     "is_frozen",
     "set_freezable",
-    "NotFreezable",
     "NotFreezableError",
     "ImmutableModule",
     "FREEZABLE_YES",

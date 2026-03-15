@@ -9,8 +9,6 @@ typedef enum {
     _Py_FREEZABLE_PROXY = 3,
 } _Py_freezable_status;
 
-PyAPI_DATA(PyTypeObject) _PyNotFreezable_Type;
-
 PyAPI_FUNC(int) _PyImmutability_Freeze(PyObject*);
 PyAPI_FUNC(int) _PyImmutability_FreezeMany(PyObject *const *, Py_ssize_t);
 PyAPI_FUNC(int) _PyImmutability_RegisterShallowImmutable(PyTypeObject*);

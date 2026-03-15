@@ -174,23 +174,6 @@ static struct _Py_immutability_state* get_immutable_state(void)
 }
 
 
-PyDoc_STRVAR(notfreezable_doc,
-    "NotFreezable()\n\
-    \n\
-    Indicate that a type cannot be frozen.");
-
-
-PyTypeObject _PyNotFreezable_Type = {
-    PyVarObject_HEAD_INIT(&PyType_Type, 0)
-    .tp_name = "NotFreezable",
-    .tp_doc = notfreezable_doc,
-    .tp_basicsize = sizeof(PyObject),
-    .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE | Py_TPFLAGS_BASETYPE,
-    .tp_new = PyType_GenericNew
-};
-
-
 static int push(PyObject* s, PyObject* item){
     if(item == NULL){
         return 0;
@@ -1522,12 +1505,6 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
             // Reserved for future use — fall through to existing checks.
             break;
         }
-    }
-
-    // Check is object is subclass of NotFreezable
-    // TODO: Would be nice for this to be faster.
-    if (PyObject_IsInstance(obj, (PyObject *)&_PyNotFreezable_Type) == 1){
-        goto error;
     }
 
     if(is_freezable_builtin(obj->ob_type)){

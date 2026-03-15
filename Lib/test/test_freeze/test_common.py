@@ -1,5 +1,5 @@
 import unittest
-from immutable import freeze, is_frozen, NotFreezable
+from immutable import freeze, is_frozen
 
 
 class BaseObjectTest(unittest.TestCase):
@@ -26,11 +26,14 @@ class BaseObjectTest(unittest.TestCase):
 
 
 class BaseNotFreezableTest(unittest.TestCase):
-    def __init__(self, *args, obj=NotFreezable(), **kwargs):
+    def __init__(self, *args, obj=None, **kwargs):
         unittest.TestCase.__init__(self, *args, **kwargs)
         self.obj = obj
 
     def test_not_freezable(self):
+        if self.obj == None:
+            return
+
         with self.assertRaises(TypeError):
             freeze(self.obj)
 

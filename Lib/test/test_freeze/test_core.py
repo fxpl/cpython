@@ -1,5 +1,5 @@
 import unittest
-from immutable import freeze, NotFreezable, is_frozen
+from immutable import freeze, is_frozen
 
 from .test_common import BaseNotFreezableTest, BaseObjectTest
 
@@ -596,15 +596,6 @@ class TestFunctionDefaults(unittest.TestCase):
         freeze(f)
 
         self.assertTrue(is_frozen(bdef))
-
-
-class TestNotFreezable(BaseNotFreezableTest):
-    class C(NotFreezable):
-        pass
-
-    def __init__(self, *args, **kwargs):
-        obj = self.C()
-        super().__init__(*args, obj=obj, **kwargs)
 
 
 class TestInheritFromCType(unittest.TestCase):
