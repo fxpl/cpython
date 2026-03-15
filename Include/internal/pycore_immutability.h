@@ -23,6 +23,9 @@ struct _Py_immutability_state {
     _Py_hashtable_t *shallow_immutable_types;
     PyObject *destroy_cb;
     _Py_hashtable_t *warned_types;
+    // With the pre-freeze hook it can happen that freeze calls are
+    // nested. This is stack of the enclosing freeze states.
+    struct FreezeState *freeze_stack;
 #ifdef Py_DEBUG
     PyObject *traceback_func;  // For debugging purposes, can be NULL
 #endif
