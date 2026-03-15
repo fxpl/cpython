@@ -112,27 +112,9 @@ static PyMethodDef _destroy_def = {
     "_destroy", (PyCFunction) _destroy, METH_O
 };
 
-static PyObject *
-type_weakref(struct _Py_immutability_state *state, PyObject *obj)
-{
-    if(state->destroy_cb == NULL){
-        state->destroy_cb = PyCFunction_NewEx(&_destroy_def, state->freezable_types, NULL);
-        if (state->destroy_cb == NULL) {
-            return NULL;
-        }
-    }
-
-    return PyWeakref_NewRef(obj, state->destroy_cb);
-}
-
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    state->freezable_types = PySet_New(NULL);
-    if(state->freezable_types == NULL){
-        return -1;
-    }
-
     state->warned_types = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
@@ -181,7 +163,7 @@ static struct _Py_immutability_state* get_immutable_state(void)
 {
     PyInterpreterState* interp = PyInterpreterState_Get();
     struct _Py_immutability_state *state = &interp->immutability;
-    if(state->freezable_types == NULL){
+    if(state->shallow_immutable_types == NULL){
         if(init_state(state) == -1){
             PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
             return NULL;
@@ -1517,20 +1499,6 @@ is_freezable_builtin(PyTypeObject *type)
      return false;
 }
 
-static int
-is_explicitly_freezable(struct _Py_immutability_state *state, PyObject *obj)
-{
-    int result = 0;
-    PyObject *ref = type_weakref(state, (PyObject *)obj->ob_type);
-    if(ref == NULL){
-        return -1;
-    }
-
-    result = PySet_Contains(state->freezable_types, ref);
-    Py_DECREF(ref);
-    return result;
-}
-
 
 static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
                            struct FreezeState *freeze_state)
@@ -1566,17 +1534,6 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
         return 0;
     }
 
-    // TODO(Immutable): Fail is type is not already frozen.
-    // This will require the test suite to be updated.
-
-    int result = is_explicitly_freezable(state, obj);
-    if(result == -1){
-        return -1;
-    }
-    else if(result == 1){
-        return 0;
-    }
-
     // TODO(Immutable): Visit what the right balance of making Python types immutable is.
     if(!_PyType_HasExtensionSlots(obj->ob_type)){
         return 0;
@@ -1592,28 +1549,7 @@ error:
 }
 
 
-int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
-{
-    PyObject *ref;
-    int result;
-    struct _Py_immutability_state *state = get_immutable_state();
-    if(state == NULL){
-        PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
-        return -1;
-    }
-
-    ref = type_weakref(state, (PyObject*)tp);
-    if(ref == NULL){
-        return -1;
-    }
-
-    result = PySet_Add(state->freezable_types, ref);
-    Py_DECREF(ref);
-    return result;
-}
-
-
-int _PyImmutability_SetFreezable(PyObject *obj, int status)
+int _PyImmutability_SetFreezable(PyObject *obj, _Py_freezable_status status)
 {
     if (status < _Py_FREEZABLE_YES || status > _Py_FREEZABLE_PROXY) {
         PyErr_Format(PyExc_ValueError,
@@ -1633,18 +1569,22 @@ int _PyImmutability_SetFreezable(PyObject *obj, int status)
         return -1;
     }
 
+    assert(PyErr_Occurred() == NULL);
     int rc = PyObject_SetAttr(obj, &_Py_ID(__freezable__), value);
     Py_DECREF(value);
     if (rc == 0) {
         return 0;
+    } else {
+        // Attempting to set the attribute can cause different errors
+        // depending on the type implementation. We just clear it here
+        // and store the freezability in the object fields instead.
+        // This should be safe, since `PyErr` should never be set when
+        // this function is called.
+        PyErr_Clear();
     }
+
     // If the object doesn't support attribute setting, fall back
     // to ob_flags (64-bit only).
-    if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
-        return -1;
-    }
-    PyErr_Clear();
-
 #if SIZEOF_VOID_P > 4
     // Store the freezable status in ob_flags bits 5-7.
     uint16_t flags = obj->ob_flags;

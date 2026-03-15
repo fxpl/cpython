@@ -55,30 +55,6 @@ immutable_free(void *module)
 }
 
 /*[clinic input]
-_immutable.register_freezable
-    obj: object
-    /
-
-Register a type as freezable.
-[clinic start generated code]*/
-
-static PyObject *
-_immutable_register_freezable(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=7a68ab35ee36a572 input=48ad5294977fe780]*/
-{
-    if(!PyType_Check(obj)){
-        PyErr_SetString(PyExc_TypeError, "Expected a type");
-        return NULL;
-    }
-
-    if(_PyImmutability_RegisterFreezable((PyTypeObject *)obj) < 0){
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
-}
-
-/*[clinic input]
 _immutable.freeze
     *args: array
 
@@ -179,9 +155,8 @@ PyDoc_STRVAR(immutable_module_doc,
 "making them immutable at runtime.");
 
 static struct PyMethodDef immutable_methods[] = {
-    _IMMUTABLE_REGISTER_FREEZABLE_METHODDEF
     _IMMUTABLE_FREEZE_METHODDEF
-    _IMMUTABLE_ISFROZEN_METHODDEF
+    _IMMUTABLE_IS_FROZEN_METHODDEF
     _IMMUTABLE_SET_FREEZABLE_METHODDEF
     { NULL, NULL }
 };

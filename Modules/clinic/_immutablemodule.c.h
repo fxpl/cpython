@@ -4,15 +4,6 @@ preserve
 
 #include "pycore_modsupport.h"    // _PyArg_CheckPositional()
 
-PyDoc_STRVAR(_immutable_register_freezable__doc__,
-"register_freezable($module, obj, /)\n"
-"--\n"
-"\n"
-"Register a type as freezable.");
-
-#define _IMMUTABLE_REGISTER_FREEZABLE_METHODDEF    \
-    {"register_freezable", (PyCFunction)_immutable_register_freezable, METH_O, _immutable_register_freezable__doc__},
-
 PyDoc_STRVAR(_immutable_freeze__doc__,
 "freeze($module, /, *args)\n"
 "--\n"
@@ -91,4 +82,4 @@ _immutable_set_freezable(PyObject *module, PyObject *const *args, Py_ssize_t nar
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=90e8e33edcb8a911 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=39afc4be55c6fa33 input=a9049054013a1b77]*/

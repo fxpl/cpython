@@ -2705,7 +2705,7 @@ _structmodule_exec(PyObject *m)
     if (PyModule_AddType(m, (PyTypeObject *)state->PyStructType) < 0) {
         return -1;
     }
-    if (_PyImmutability_RegisterFreezable((PyTypeObject *)state->PyStructType) < 0){
+    if (_PyImmutability_SetFreezable(state->PyStructType, _Py_FREEZABLE_YES) < 0){
         return -1;
     }
 

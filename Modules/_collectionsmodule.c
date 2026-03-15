@@ -2904,11 +2904,11 @@ collections_exec(PyObject *module) {
     ADD_TYPE(module, &dequereviter_spec, state->dequereviter_type, NULL);
     ADD_TYPE(module, &tuplegetter_spec, state->tuplegetter_type, NULL);
 
-    if(_PyImmutability_RegisterFreezable(state->deque_type) < 0){
+    if(_PyImmutability_SetFreezable(state->deque_type, _Py_FREEZABLE_YES) < 0){
         return -1;
     }
 
-    if(_PyImmutability_RegisterFreezable(state->defdict_type) < 0){
+    if(_PyImmutability_SetFreezable(state->defdict_type, _Py_FREEZABLE_YES) < 0){
         return -1;
     }
 

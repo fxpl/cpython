@@ -172,16 +172,11 @@ class TestSetFreezableStorage(unittest.TestCase):
     def test_ob_flags_fallback_for_slots_only(self):
         # Objects with __slots__ but no __dict__ use ob_flags for
         # instance-level set_freezable on 64-bit.
-        # Use _immutable.register_freezable (the low-level C API) to
-        # register the type without setting __freezable__, so the
-        # per-instance ob_flags path is tested in isolation.
         import sys
-        import _immutable
         if sys.maxsize <= 2**31:
             self.skipTest("ob_flags fallback not available on 32-bit")
         class S:
             __slots__ = ('__weakref__', 'x')
-        _immutable.register_freezable(S)
         obj = S()
         set_freezable(obj, FREEZABLE_NO)
         # No __freezable__ attribute should be set on the instance

@@ -366,7 +366,7 @@ _test_reachable_exec(PyObject *module)
     HasTraverseNoReachable_Type.tp_reachable = NULL;
     if (PyModule_AddType(module, &HasTraverseNoReachable_Type) != 0)
         return -1;
-    if (_PyImmutability_RegisterFreezable(&HasTraverseNoReachable_Type) < 0)
+    if (_PyImmutability_SetFreezable((PyObject*)&HasTraverseNoReachable_Type, _Py_FREEZABLE_YES) < 0)
         return -1;
 
     htnrh_type = PyType_FromModuleAndSpec(module, &HasTraverseNoReachableHeap_spec, NULL);
@@ -378,7 +378,7 @@ _test_reachable_exec(PyObject *module)
         Py_DECREF(htnrh_type);
         return -1;
     }
-    if (_PyImmutability_RegisterFreezable((PyTypeObject *)htnrh_type) < 0) {
+    if (_PyImmutability_SetFreezable((PyObject*)htnrh_type, _Py_FREEZABLE_YES) < 0) {
         Py_DECREF(htnrh_type);
         return -1;
     }
@@ -393,7 +393,7 @@ _test_reachable_exec(PyObject *module)
         Py_DECREF(itnrh_type);
         return -1;
     }
-    if (_PyImmutability_RegisterFreezable((PyTypeObject *)itnrh_type) < 0) {
+    if (_PyImmutability_SetFreezable((PyObject*)itnrh_type, _Py_FREEZABLE_YES) < 0) {
         Py_DECREF(itnrh_type);
         return -1;
     }
@@ -405,21 +405,21 @@ _test_reachable_exec(PyObject *module)
     NoTraverseNoReachable_Type.tp_reachable = NULL;
     if (PyModule_AddType(module, &NoTraverseNoReachable_Type) != 0)
         return -1;
-    if (_PyImmutability_RegisterFreezable(&NoTraverseNoReachable_Type) < 0)
+    if (_PyImmutability_SetFreezable((PyObject*)&NoTraverseNoReachable_Type, _Py_FREEZABLE_YES) < 0)
         return -1;
 
     if (PyType_Ready(&HasReachable_Type) < 0)
         return -1;
     if (PyModule_AddType(module, &HasReachable_Type) != 0)
         return -1;
-    if (_PyImmutability_RegisterFreezable(&HasReachable_Type) < 0)
+    if (_PyImmutability_SetFreezable((PyObject*)&HasReachable_Type, _Py_FREEZABLE_YES) < 0)
         return -1;
 
     if (PyType_Ready(&ShallowImmutable_Type) < 0)
         return -1;
     if (PyModule_AddType(module, &ShallowImmutable_Type) != 0)
         return -1;
-    if (_PyImmutability_RegisterFreezable(&ShallowImmutable_Type) < 0)
+    if (_PyImmutability_SetFreezable((PyObject*)&ShallowImmutable_Type, _Py_FREEZABLE_YES) < 0)
         return -1;
     if (_PyImmutability_RegisterShallowImmutable(&ShallowImmutable_Type) < 0)
         return -1;

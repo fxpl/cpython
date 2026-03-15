@@ -3278,7 +3278,7 @@ array_modexec(PyObject *m)
         return -1;
     }
 
-    if(_PyImmutability_RegisterFreezable(state->ArrayType) < 0){
+    if(_PyImmutability_SetFreezable((PyObject*)state->ArrayType, _Py_FREEZABLE_YES) < 0){
         Py_DECREF((PyObject *)state->ArrayType);
         return -1;
     }
