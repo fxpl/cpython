@@ -85,5 +85,18 @@ class TestReachableWarnings(unittest.TestCase):
         self.assertNotIn("HasReachable", stderr)
 
 
+    def test_warn_tp_traverse_skips_type(self):
+        """Warn when a C type has tp_traverse that doesn't visit the type"""
+        stdout, stderr = self._run_code("""\
+            import _immutable, _test_reachable
+            obj = _test_reachable.IncorrectTraverseNoReachableHeap(42)
+            _immutable.freeze(obj)
+        """)
+        self.assertIn(
+            "freeze: type '_test_reachable.IncorrectTraverseNoReachableHeap' "
+            "is not visiting the type during traversal",
+            stderr,
+        )
+
 if __name__ == "__main__":
     unittest.main()

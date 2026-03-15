@@ -92,6 +92,9 @@
 #define IMMUTABLE_FLAG_FIELD(op) (op->ob_refcnt)
 #endif
 
+// Macro that jumps to error, if the expression `x` does not succeed.
+#define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
+
 static PyObject *
 _destroy(PyObject* set, PyObject *objweakref)
 {
@@ -257,25 +260,127 @@ static PyObject* pop(PyObject* s){
     return item;
 }
 
+
+
+/**
+ * The DFS walk for SCC calculations needs to perform actions on both
+ * the pre-order and post-order visits to an object.  To achieve this
+ * with a single stack we use a marker object (PostOrderMarker) to
+ * indicate that the object being popped is a post-order visit.
+ *
+ * Effectively we do
+ *   obj = pop()
+ *   if obj is PostOrderMarker:
+ *      obj = pop()
+ *      post_order_action(obj)
+ *   else:
+ *      push(obj)
+ *      push(PostOrderMarker)
+ *      pre_order_action(obj)
+ *
+ * In pre_order_action, the children of obj can be pushed onto the stack,
+ * and once all that work is completed, then the PostOrderMarker will pop out
+ * and the post_order_action can be performed.
+ *
+ * Using a separate object means it cannot conflict with anything
+ * in the actual python object graph.
+ */
+PyObject PostOrderMarkerStruct = _PyObject_HEAD_INIT(&_PyNone_Type);
+static PyObject* PostOrderMarker = &PostOrderMarkerStruct;
+
+/**
+ * `tp_traverse` and `tp_reachable` **should** visit their types but
+ * this is sometimes forgotten. To deal with this inconsistency we
+ * push the type on to the stack and use this marker to indicate that
+ * the type should only be visited if it is not marked as pending when
+ * the marker is reached again. We can then manually visit the type
+ * and print a warning.
+ *
+ * If the type is part of an SCC we may end up with a higher SCC-RC
+ * since this can only account for one internal edge. But this will
+ * just cause a memory leak instead of crashing.
+ */
+PyObject EnsureVisitedMarkerStruct = _PyObject_HEAD_INIT(&_PyNone_Type);
+static PyObject* EnsureVisitedMarker = &EnsureVisitedMarkerStruct;
+
 static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
+
+/**
+ * Used to track the state of an in progress freeze operation.
+ *
+ * TODO(Immutable):  This representation could mostly be done in the
+ * GC header for the GIL enabled build.  Doing it externally works for
+ * both builds, and we can optimize later.
+ **/
+struct FreezeState {
+#ifndef GIL_DISABLED
+    // Used to track traversal order
+    PyObject *dfs;
+    // Used to track SCC to handle cycles during traversal
+    PyObject *pending;
+#endif
+    // Used to track visited nodes that don't have inline GC state.
+    // This is required to be able to backtrack a failed freeze.
+    // It is also used to track nodes in GIL_DISABLED builds.
+    _Py_hashtable_t *visited;
+
+    // The objects that freeze() was called directly on.
+    _Py_hashtable_t *roots;
+
+    // Intrusive linked list of completed SCC representatives
+    // (threaded through _gc_prev / scc_parent), for rollback on error.
+    // NULL-terminated; NULL means empty.
+    PyObject *completed_sccs;
+
+#ifdef Py_DEBUG
+    // For debugging, track the stack trace of the freeze operation.
+    PyObject* freeze_location;
+#endif
+#ifdef MERMAID_TRACING
+    PyObject* start;
+#endif
+};
 
 // Wrapper around tp_traverse that also visits the type object.
 // tp_traverse does not visit the type for non-heap types, but
 // tp_reachable should visit all reachable objects including the type.
 static int
-traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *arg)
+traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *freeze_state_untyped)
 {
     traverseproc traverse = Py_TYPE(obj)->tp_traverse;
     if (traverse != NULL) {
-        int err = traverse(obj, visit, arg);
+        int err = traverse(obj, visit, freeze_state_untyped);
         if (err) {
             return err;
         }
     }
 
-    return visit((PyObject *)Py_TYPE(obj), arg);
+    PyTypeObject *tp = Py_TYPE(obj);
+    // Manually visit the type if it's a static type
+    if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        return visit((PyObject *)Py_TYPE(obj), freeze_state_untyped);
+    }
+
+    // `tp_traverse` of heap types *should* include a
+    // `Py_VISIT(Py_TYPE(self));` since around Python 2.7 but
+    // there are still plenty of types that don't. LLMs currently
+    // also don't do this consistently. So, instead of visiting the
+    // type directly we throw it on to the DFS stack to check the
+    // correct behavior on back traversal.
+    //
+    // Only push the type if it's still mutable and not pending
+    if (!_Py_IsImmutable(tp)) {
+        struct FreezeState* freeze_state = (struct FreezeState *)freeze_state_untyped;
+        SUCCEEDS(push(freeze_state->dfs, _PyObject_CAST(tp)));
+        SUCCEEDS(push(freeze_state->dfs, EnsureVisitedMarker));
+    }
+
+    return 0;
+
+error:
+    return -1;
 }
 
 // Returns the appropriate traversal function for reaching all references
@@ -317,42 +422,6 @@ static inline void _Py_SetImmutable(PyObject *op)
     }
 }
 #endif
-
-/**
- * Used to track the state of an in progress freeze operation.
- *
- * TODO(Immutable):  This representation could mostly be done in the
- * GC header for the GIL enabled build.  Doing it externally works for
- * both builds, and we can optimize later.
- **/
-struct FreezeState {
-#ifndef GIL_DISABLED
-    // Used to track traversal order
-    PyObject *dfs;
-    // Used to track SCC to handle cycles during traversal
-    PyObject *pending;
-#endif
-    // Used to track visited nodes that don't have inline GC state.
-    // This is required to be able to backtrack a failed freeze.
-    // It is also used to track nodes in GIL_DISABLED builds.
-    _Py_hashtable_t *visited;
-
-    // The objects that freeze() was called directly on.
-    _Py_hashtable_t *roots;
-
-    // Intrusive linked list of completed SCC representatives
-    // (threaded through _gc_prev / scc_parent), for rollback on error.
-    // NULL-terminated; NULL means empty.
-    PyObject *completed_sccs;
-
-#ifdef Py_DEBUG
-    // For debugging, track the stack trace of the freeze operation.
-    PyObject* freeze_location;
-#endif
-#ifdef MERMAID_TRACING
-    PyObject* start;
-#endif
-};
 
 
 #define REPRESENTATIVE_FLAG 1
@@ -1115,33 +1184,6 @@ static void unfreeze_and_finalize_scc(PyObject* obj)
     // elements of the SCC so that they can be reclaimed
     scc_return_to_gc(obj, true);
 }
-
-
-/**
- * The DFS walk for SCC calculations needs to perform actions on both
- * the pre-order and post-order visits to an object.  To achieve this
- * with a single stack we use a marker object (PostOrderMarker) to
- * indicate that the object being popped is a post-order visit.
- *
- * Effectively we do
- *   obj = pop()
- *   if obj is PostOrderMarker:
- *      obj = pop()
- *      post_order_action(obj)
- *   else:
- *      push(obj)
- *      push(PostOrderMarker)
- *      pre_order_action(obj)
- *
- * In pre_order_action, the children of obj can be pushed onto the stack,
- * and once all that work is completed, then the PostOrderMarker will pop out
- * and the post_order_action can be performed.
- *
- * Using a separate object means it cannot conflict with anything
- * in the actual python object graph.
- */
-PyObject PostOrderMarkerStruct = _PyObject_HEAD_INIT(&_PyNone_Type);
-static PyObject* PostOrderMarker = &PostOrderMarkerStruct;
 
 /*
   When we first visit an object, we create a partial SCC for it,
@@ -2136,9 +2178,6 @@ static void make_weakrefs_safe(struct FreezeState* freeze_state)
 
 }
 
-// Macro that jumps to error, if the expression `x` does not succeed.
-#define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
-
 static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
 {
     //  WARNING
@@ -2325,6 +2364,29 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
                 // Completed an SCC do the calculation here.
                 complete_scc(item, &freeze_state);
             }
+            continue;
+        }
+
+        if (item == EnsureVisitedMarker) {
+            item = pop(freeze_state.dfs);
+
+            // Ignore item if it has been visited
+            if (has_visited(&freeze_state, item)) {
+                continue;
+            }
+
+            // Print a warning to get this fixed quickly
+            PyTypeObject* tp = Py_TYPE(item);
+            if (PyType_Check(item)) {
+                tp = _PyType_CAST(item);
+            }
+            PySys_FormatStderr(
+                "freeze: type '%.100s' is not visiting the type during traversal\n",
+                tp->tp_name);
+
+            // Manually calling freeze will add it to the DFS stack
+            freeze_visit(item, (void*)&freeze_state);
+
             continue;
         }
 
