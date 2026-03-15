@@ -154,8 +154,43 @@ int init_state(struct _Py_immutability_state *state)
                               shallow_types[i], (void *)1) < 0) {
             return -1;
         }
+        if (_PyImmutability_SetFreezable(shallow_types[i], _Py_FREEZABLE_YES)) {
+            return -1;
+        }
     }
 
+    PyTypeObject *builtin_freezable_types[] = {
+        &PyType_Type,
+        &PyBaseObject_Type,
+        &PyFunction_Type,
+        &PyList_Type,
+        &PyDict_Type,
+        &PySet_Type,
+        &PyMemoryView_Type,
+        &PyByteArray_Type,
+        &PyGetSetDescr_Type,
+        &PyMemberDescr_Type,
+        &PyProperty_Type,
+        &PyWrapperDescr_Type,
+        &PyMethodDescr_Type,
+        &PyClassMethod_Type, // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
+        &PyClassMethodDescr_Type,
+        &PyStaticMethod_Type,
+        &PyMethod_Type,
+        &PyCapsule_Type,
+        &PyCode_Type,
+        &PyCell_Type,
+        &PyFrame_Type,
+        &_PyWeakref_RefType,
+        &PyModule_Type, // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
+        &_PyImmModule_Type,
+        NULL
+    };
+    for (int i = 0; builtin_freezable_types[i] != NULL; i++) {
+        if (_PyImmutability_SetFreezable(builtin_freezable_types[i], _Py_FREEZABLE_YES)) {
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -1431,58 +1466,6 @@ static int freeze_visit(PyObject* obj, void* freeze_state_untyped)
     return 0;
 }
 
-
-
-static bool
-is_freezable_builtin(PyTypeObject *type)
-{
-    if(
-        type == &PyType_Type ||
-        type == &PyBaseObject_Type ||
-        type == &PyFunction_Type ||
-        type == &_PyNone_Type ||
-        type == &PyBool_Type ||
-        type == &PyLong_Type ||
-        type == &PyFloat_Type ||
-        type == &PyComplex_Type ||
-        type == &PyBytes_Type ||
-        type == &PyUnicode_Type ||
-        type == &PyTuple_Type ||
-        type == &PyList_Type ||
-        type == &PyDict_Type ||
-        type == &PySet_Type ||
-        type == &PyFrozenSet_Type ||
-        type == &PyMemoryView_Type ||
-        type == &PyByteArray_Type ||
-        type == &PyRange_Type ||
-        type == &PyGetSetDescr_Type ||
-        type == &PyMemberDescr_Type ||
-        type == &PyProperty_Type ||
-        type == &PyWrapperDescr_Type ||
-        type == &PyMethodDescr_Type ||
-        type == &PyClassMethod_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
-        type == &PyClassMethodDescr_Type ||
-        type == &PyStaticMethod_Type ||
-        type == &PyMethod_Type ||
-        type == &PyCFunction_Type ||
-        type == &PyCapsule_Type ||
-        type == &PyCode_Type ||
-        type == &PyCell_Type ||
-        type == &PyFrame_Type ||
-        type == &_PyWeakref_RefType ||
-        type == &_PyNotImplemented_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
-        type == &PyModule_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
-        type == &_PyImmModule_Type ||
-        type == &PyEllipsis_Type
-     )
-     {
-         return true;
-     }
-
-     return false;
-}
-
-
 static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
                            struct FreezeState *freeze_state)
 {
@@ -1505,10 +1488,6 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
             // Reserved for future use — fall through to existing checks.
             break;
         }
-    }
-
-    if(is_freezable_builtin(obj->ob_type)){
-        return 0;
     }
 
     // TODO(Immutable): Visit what the right balance of making Python types immutable is.
