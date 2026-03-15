@@ -7772,9 +7772,9 @@ _decimal_exec(PyObject *m)
     CHECK_INT(PyModule_AddType(m, state->PyDecContext_Type));
     CHECK_INT(PyModule_AddType(m, state->DecimalTuple));
 
-    CHECK_INT(_PyImmutability_SetFreezable(state->PyDec_Type, _Py_FREEZABLE_YES));
-    CHECK_INT(_PyImmutability_SetFreezable(state->PyDecContext_Type, _Py_FREEZABLE_YES));
-    CHECK_INT(_PyImmutability_SetFreezable(state->PyDecSignalDict_Type, _Py_FREEZABLE_YES));
+    CHECK_INT(_PyImmutability_SetFreezable((PyObject*)state->PyDec_Type, _Py_FREEZABLE_YES));
+    CHECK_INT(_PyImmutability_SetFreezable((PyObject*)state->PyDecContext_Type, _Py_FREEZABLE_YES));
+    CHECK_INT(_PyImmutability_SetFreezable((PyObject*)state->PyDecSignalDict_Type, _Py_FREEZABLE_YES));
 
     /* Create top level exception */
     ASSIGN_PTR(state->DecimalException, PyErr_NewException(

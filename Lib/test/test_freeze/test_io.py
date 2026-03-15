@@ -4,34 +4,28 @@ from .test_common import BaseNotFreezableTest
 
 
 class BytesIOTest(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, obj=io.BytesIO(), **kwargs)
-
-    def tearDown(self):
-        self.obj.close()
+    def test_not_freezable(self):
+        obj = io.BytesIO()
+        self.check_not_freezable(obj)
+        obj.close()
 
 
 class StringIOTest(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, obj=io.StringIO(), **kwargs)
-
-    def tearDown(self):
-        self.obj.close()
+    def test_not_freezable(self):
+        obj = io.StringIO()
+        self.check_not_freezable(obj)
+        obj.close()
 
 
 class TextWrapperTest(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
+    def test_not_freezable(self):
         handle = open(__file__, 'r')
-        super().__init__(*args, obj=handle, **kwargs)
-
-    def tearDown(self):
-        self.obj.close()
+        self.check_not_freezable(handle)
+        handle.close()
 
 
 class RawWrapperTest(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
+    def test_not_freezable(self):
         handle = open(__file__, 'rb')
-        super().__init__(*args, obj=handle, **kwargs)
-
-    def tearDown(self):
-        self.obj.close()
+        self.check_not_freezable(handle)
+        handle.close()

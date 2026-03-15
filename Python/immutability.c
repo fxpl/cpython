@@ -95,23 +95,6 @@
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
-static PyObject *
-_destroy(PyObject* set, PyObject *objweakref)
-{
-    Py_INCREF(set);
-    if (PySet_Discard(set, objweakref) < 0) {
-        Py_DECREF(set);
-        return NULL;
-    }
-    Py_DECREF(set);
-
-    Py_RETURN_NONE;
-}
-
-static PyMethodDef _destroy_def = {
-    "_destroy", (PyCFunction) _destroy, METH_O
-};
-
 static
 int init_state(struct _Py_immutability_state *state)
 {
@@ -126,6 +109,8 @@ int init_state(struct _Py_immutability_state *state)
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
     if(state->shallow_immutable_types == NULL){
+        _Py_hashtable_destroy(state->warned_types);
+        state->warned_types = NULL;
         return -1;
     }
 
@@ -185,7 +170,7 @@ int init_state(struct _Py_immutability_state *state)
         NULL
     };
     for (int i = 0; builtin_freezable_types[i] != NULL; i++) {
-        if (_PyImmutability_SetFreezable(builtin_freezable_types[i], _Py_FREEZABLE_YES)) {
+        if (_PyImmutability_SetFreezable((PyObject*)builtin_freezable_types[i], _Py_FREEZABLE_YES)) {
             return -1;
         }
     }
@@ -1523,18 +1508,24 @@ int _PyImmutability_SetFreezable(PyObject *obj, _Py_freezable_status status)
         return -1;
     }
 
-    assert(PyErr_Occurred() == NULL);
     int rc = PyObject_SetAttr(obj, &_Py_ID(__freezable__), value);
     Py_DECREF(value);
     if (rc == 0) {
         return 0;
-    } else {
-        // Attempting to set the attribute can cause different errors
-        // depending on the type implementation. We just clear it here
-        // and store the freezability in the object fields instead.
-        // This should be safe, since `PyErr` should never be set when
-        // this function is called.
+    }
+
+    // If setting the attribute failed, only fall back to ob_flags for
+    // "attribute not supported / read-only" cases. Propagate all other
+    // exceptions to the caller.
+    if (PyErr_ExceptionMatches(PyExc_AttributeError) ||
+        PyErr_ExceptionMatches(PyExc_TypeError))
+    {
         PyErr_Clear();
+    }
+    else {
+        // Preserve the original error (e.g. MemoryError or a custom
+        // tp_setattro exception).
+        return -1;
     }
 
     // If the object doesn't support attribute setting, fall back
@@ -1648,7 +1639,7 @@ int _PyImmutability_RegisterShallowImmutable(PyTypeObject* tp)
     }
 
     // Mark the type also as freezable
-    if (_PyImmutability_SetFreezable(tp, _Py_FREEZABLE_YES)) {
+    if (_PyImmutability_SetFreezable((PyObject*)tp, _Py_FREEZABLE_YES)) {
         return -1;
     }
     return 0;

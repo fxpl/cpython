@@ -10,8 +10,8 @@ from .test_common import BaseNotFreezableTest, BaseObjectTest
 #         super().__init__(*args, obj=ElementTree(), **kwargs)
 
 class TestXMLParser(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, obj=XMLParser(), **kwargs)
+    def test_not_freezable(self):
+        self.check_not_freezable(XMLParser())
 
 
 class TestElement(BaseObjectTest):

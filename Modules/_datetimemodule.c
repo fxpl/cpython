@@ -7498,7 +7498,7 @@ _PyDateTime_InitTypes(PyInterpreterState *interp)
         }
 
         // TODO(Immutable): Revisit after PLDI deadline.
-        if(_PyImmutability_SetFreezable(capi_types[i], _Py_FREEZABLE_YES) < 0) {
+        if(_PyImmutability_SetFreezable((PyObject*)capi_types[i], _Py_FREEZABLE_YES) < 0) {
             return _PyStatus_ERR("could not freeze static types");
         }
     }
