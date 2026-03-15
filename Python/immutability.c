@@ -150,11 +150,7 @@ int init_state(struct _Py_immutability_state *state)
         NULL
     };
     for (int i = 0; shallow_types[i] != NULL; i++) {
-        if (_Py_hashtable_set(state->shallow_immutable_types,
-                              shallow_types[i], (void *)1) < 0) {
-            return -1;
-        }
-        if (_PyImmutability_SetFreezable(shallow_types[i], _Py_FREEZABLE_YES)) {
+        if (_PyImmutability_RegisterShallowImmutable(shallow_types[i])) {
             return -1;
         }
     }
@@ -184,6 +180,8 @@ int init_state(struct _Py_immutability_state *state)
         &_PyWeakref_RefType,
         &PyModule_Type, // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
         &_PyImmModule_Type,
+        &PyCFunction_Type,
+        &_PyMethodWrapper_Type,
         NULL
     };
     for (int i = 0; builtin_freezable_types[i] != NULL; i++) {
@@ -1648,6 +1646,11 @@ int _PyImmutability_RegisterShallowImmutable(PyTypeObject* tp)
         PyErr_NoMemory();
         return -1;
     }
+
+    // Mark the type also as freezable
+    if (_PyImmutability_SetFreezable(tp, _Py_FREEZABLE_YES)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -2111,10 +2114,8 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     debug_obj("Traversing %s (%p) rc=%zd\n", obj, Py_REFCNT(obj));
 
     if(is_c_wrapper(obj)) {
+        // FIXME(Immutable): Is this still needed?
         set_direct_rc(obj);
-        // C functions are not mutable
-        // Types are manually traversed
-        return 0;
     }
 
     SUCCEEDS(get_reachable_proc(Py_TYPE(obj))(obj, (visitproc)freeze_visit, freeze_state));

@@ -1,7 +1,7 @@
 import unittest
 from immutable import freeze, is_frozen
 
-from .test_common import BaseNotFreezableTest, BaseObjectTest
+from .test_common import BaseObjectTest
 
 
 # This is a canary to check that global variables are not made immutable
