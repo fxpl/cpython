@@ -104,7 +104,7 @@ _immutable_freeze_impl(PyObject *module, PyObject * const *args,
 }
 
 /*[clinic input]
-_immutable.isfrozen
+_immutable.is_frozen
     obj: object
     /
 
@@ -115,8 +115,8 @@ side effect and True is returned.
 [clinic start generated code]*/
 
 static PyObject *
-_immutable_isfrozen(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=5857a038e2a68ed7 input=f60302e01ab45c4d]*/
+_immutable_is_frozen(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=880efe7d38b137b5 input=97c61fe65ccb1574]*/
 {
     int result = _PyImmutability_CanViewAsImmutable(obj);
     if (result < 0) {
@@ -139,13 +139,14 @@ Set the freezable status of an object.
 Status values:
   FREEZABLE_YES (0): always freezable
   FREEZABLE_NO (1): never freezable
-  FREEZABLE_EXPLICIT (2): freezable only when freeze() is called directly on it
+  FREEZABLE_EXPLICIT (2): freezable only when freeze() is
+                          called directly on it
   FREEZABLE_PROXY (3): reserved for future use
 [clinic start generated code]*/
 
 static PyObject *
 _immutable_set_freezable_impl(PyObject *module, PyObject *obj, int status)
-/*[clinic end generated code: output=73cad0b4df9a46f9 input=63df024c940ba301]*/
+/*[clinic end generated code: output=73cad0b4df9a46f9 input=6528458c547e93a8]*/
 {
     if (_PyImmutability_SetFreezable(obj, status) < 0) {
         return NULL;

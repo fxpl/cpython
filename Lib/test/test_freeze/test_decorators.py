@@ -2,7 +2,7 @@
 
 import unittest
 from immutable import (
-    freeze, isfrozen, freezable, unfreezable, explicitlyFreezable, frozen,
+    freeze, is_frozen, freezable, unfreezable, explicitlyFreezable, frozen,
 )
 
 
@@ -14,7 +14,7 @@ class TestFreezableDecorator(unittest.TestCase):
             pass
         obj = C()
         freeze(obj)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
 
     def test_freezable_returns_class(self):
         @freezable
@@ -32,7 +32,7 @@ class TestUnfreezableDecorator(unittest.TestCase):
         obj = C()
         with self.assertRaises(TypeError):
             freeze(obj)
-        self.assertFalse(isfrozen(obj))
+        self.assertFalse(is_frozen(obj))
 
     def test_unfreezable_returns_class(self):
         @unfreezable
@@ -49,7 +49,7 @@ class TestExplicitlyFreezableDecorator(unittest.TestCase):
             pass
         # The class itself can be frozen when passed directly.
         freeze(C)
-        self.assertTrue(isfrozen(C))
+        self.assertTrue(is_frozen(C))
 
     def test_explicit_as_child_fails(self):
         @freezable
@@ -80,7 +80,7 @@ class TestFrozenDecorator(unittest.TestCase):
         @frozen
         class C:
             pass
-        self.assertTrue(isfrozen(C))
+        self.assertTrue(is_frozen(C))
 
     def test_frozen_class_is_immutable(self):
         @frozen
@@ -120,7 +120,7 @@ class TestFreezeReturnValue(unittest.TestCase):
         class C:
             pass
         self.assertIsInstance(C, type)
-        self.assertTrue(isfrozen(C))
+        self.assertTrue(is_frozen(C))
 
 
 if __name__ == '__main__':

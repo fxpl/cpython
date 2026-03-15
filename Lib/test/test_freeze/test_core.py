@@ -1,5 +1,5 @@
 import unittest
-from immutable import freeze, NotFreezable, isfrozen
+from immutable import freeze, NotFreezable, is_frozen
 
 from .test_common import BaseNotFreezableTest, BaseObjectTest
 
@@ -19,7 +19,7 @@ def global1_inc():
 class MutableGlobalTest(unittest.TestCase):
     # Add initial test to confirm that global_canary is mutable
     def test_global_mutable(self):
-        self.assertTrue(not isfrozen(global_canary))
+        self.assertTrue(not is_frozen(global_canary))
 
 
 class TestBasicObject(BaseObjectTest):
@@ -34,13 +34,13 @@ class TestFloat(unittest.TestCase):
     def test_freeze_float(self):
         obj = 0.0
         freeze(obj)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
 
 class TestFloatType(unittest.TestCase):
     def test_float_type_immutable(self):
         obj = 0.0
         c = obj.__class__
-        self.assertTrue(isfrozen(c))
+        self.assertTrue(is_frozen(c))
 
 class TestList(BaseObjectTest):
     class C:
@@ -190,25 +190,25 @@ class TestMultiLevel(unittest.TestCase):
         freeze(self.obj)
 
     def test_immutable(self):
-        self.assertTrue(isfrozen(self.obj))
-        self.assertTrue(isfrozen(self.obj.a))
-        self.assertTrue(isfrozen(self.obj.a.b))
-        self.assertTrue(isfrozen(self.obj.d))
-        self.assertTrue(isfrozen(self.obj.d[0]))
-        self.assertTrue(isfrozen(self.obj.d[0].e))
-        self.assertTrue(isfrozen(self.obj.g))
-        self.assertTrue(isfrozen(self.obj.g[1]))
-        self.assertTrue(isfrozen(self.obj.g[1].h))
-        self.assertTrue(isfrozen(self.obj.g["two"]))
-        self.assertTrue(isfrozen(self.obj.g["two"].i))
+        self.assertTrue(is_frozen(self.obj))
+        self.assertTrue(is_frozen(self.obj.a))
+        self.assertTrue(is_frozen(self.obj.a.b))
+        self.assertTrue(is_frozen(self.obj.d))
+        self.assertTrue(is_frozen(self.obj.d[0]))
+        self.assertTrue(is_frozen(self.obj.d[0].e))
+        self.assertTrue(is_frozen(self.obj.g))
+        self.assertTrue(is_frozen(self.obj.g[1]))
+        self.assertTrue(is_frozen(self.obj.g[1].h))
+        self.assertTrue(is_frozen(self.obj.g["two"]))
+        self.assertTrue(is_frozen(self.obj.g["two"].i))
 
     def test_set_const(self):
         with self.assertRaises(TypeError):
             self.obj.const = 1
 
     def test_type_immutable(self):
-        self.assertTrue(isfrozen(type(self.obj)))
-        self.assertTrue(isfrozen(type(self.obj).const))
+        self.assertTrue(is_frozen(type(self.obj)))
+        self.assertTrue(is_frozen(type(self.obj).const))
 
 
 class TestFunctions(unittest.TestCase):
@@ -269,8 +269,8 @@ class TestFunctions(unittest.TestCase):
 
         self.assertEqual(d(), 1)
         freeze(d)
-        self.assertTrue(isfrozen(global0))
-        self.assertFalse(isfrozen(global_canary))
+        self.assertTrue(is_frozen(global0))
+        self.assertFalse(is_frozen(global_canary))
         self.assertRaises(TypeError, d)
 
     def test_hidden_global(self):
@@ -292,9 +292,9 @@ class TestFunctions(unittest.TestCase):
             return sum(test)
 
         freeze(e)
-        self.assertTrue(isfrozen(list))
-        self.assertTrue(isfrozen(range))
-        self.assertTrue(isfrozen(sum))
+        self.assertTrue(is_frozen(list))
+        self.assertTrue(is_frozen(range))
+        self.assertTrue(is_frozen(sum))
 
     def test_builtins_nested(self):
         def g():
@@ -305,18 +305,18 @@ class TestFunctions(unittest.TestCase):
             return nested_test()
 
         freeze(g)
-        self.assertTrue(isfrozen(list))
-        self.assertTrue(isfrozen(range))
-        self.assertTrue(isfrozen(sum))
+        self.assertTrue(is_frozen(list))
+        self.assertTrue(is_frozen(range))
+        self.assertTrue(is_frozen(sum))
 
     def test_global_fun(self):
         def d():
             return global1_inc()
 
         freeze(d)
-        self.assertTrue(isfrozen(global1))
-        self.assertTrue(isfrozen(global1_inc))
-        self.assertFalse(isfrozen(global_canary))
+        self.assertTrue(is_frozen(global1))
+        self.assertTrue(is_frozen(global1_inc))
+        self.assertFalse(is_frozen(global_canary))
         self.assertRaises(TypeError, d)
 
     def test_globals_copy(self):
@@ -348,8 +348,8 @@ class TestMethods(unittest.TestCase):
         obj = TestMethods.C()
         obj.c = lambda x: pow(x, 2)
         freeze(obj)
-        self.assertTrue(isfrozen(TestMethods.C))
-        self.assertTrue(isfrozen(pow))
+        self.assertTrue(is_frozen(TestMethods.C))
+        self.assertTrue(is_frozen(pow))
         self.assertRaises(TypeError, obj.b, 1)
         self.assertEqual(obj.c(2), 4)
 
@@ -357,9 +357,9 @@ class TestMethods(unittest.TestCase):
         obj = TestMethods.C()
         freeze(obj)
         self.assertEqual(obj.a(), 1)
-        self.assertTrue(isfrozen(obj))
-        self.assertTrue(isfrozen(abs))
-        self.assertTrue(isfrozen(obj.val))
+        self.assertTrue(is_frozen(obj))
+        self.assertTrue(is_frozen(abs))
+        self.assertTrue(is_frozen(obj.val))
         self.assertRaises(TypeError, obj.b, 1)
         # Second test as the byte code can be changed by the first call
         self.assertRaises(TypeError, obj.b, 1)
@@ -383,9 +383,9 @@ class TestLocals(unittest.TestCase):
             freeze(obj)
             return obj, obj2, obj3
         obj, obj2, obj3 = inner()
-        self.assertTrue(isfrozen(obj))
-        self.assertTrue(isfrozen(obj2))
-        self.assertFalse(isfrozen(obj3))
+        self.assertTrue(is_frozen(obj))
+        self.assertTrue(is_frozen(obj2))
+        self.assertFalse(is_frozen(obj3))
 
 class TestDictMutation(unittest.TestCase):
     class C:
@@ -402,7 +402,7 @@ class TestDictMutation(unittest.TestCase):
     def test_dict_mutation(self):
         obj = TestDictMutation.C()
         freeze(obj)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
         self.assertRaises(TypeError, obj.set, 1)
         self.assertEqual(obj.get(), 0)
 
@@ -412,7 +412,7 @@ class TestDictMutation(unittest.TestCase):
         self.assertEqual(obj.get(), 1)
         freeze(obj)
         self.assertEqual(obj.get(), 1)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
         self.assertRaises(TypeError, obj.set, 1)
 
     def test_dict_mutation3(self):
@@ -420,7 +420,7 @@ class TestDictMutation(unittest.TestCase):
         d = obj.__dict__
         freeze(d)
         # Should obj be frozen?
-        # self.assertTrue(isfrozen(obj))
+        # self.assertTrue(is_frozen(obj))
         # The following line should raise an exception, as we are trying to mutate the dict
         with self.assertRaises(TypeError):
             obj.f = 1
@@ -454,9 +454,9 @@ class TestWeakRef(unittest.TestCase):
         obj = TestWeakRef.B()
         c = TestWeakRef.C(obj)
         freeze(c)
-        self.assertTrue(isfrozen(c))
+        self.assertTrue(is_frozen(c))
         self.assertTrue(c.val() is obj)
-        self.assertTrue(isfrozen(c.val()))
+        self.assertTrue(is_frozen(c.val()))
         obj = None
         # The reference should remain as it was reachable through a frozen weakref.
         self.assertTrue(c.val() is not None)
@@ -469,8 +469,8 @@ class TestStackCapture(unittest.TestCase):
          x = {}
          x["frame"] = sys._getframe()
          freeze(x)
-         self.assertTrue(isfrozen(x))
-         self.assertTrue(isfrozen(x["frame"]))
+         self.assertTrue(is_frozen(x))
+         self.assertTrue(is_frozen(x["frame"]))
 
 
 class TestSubclass(unittest.TestCase):
@@ -487,8 +487,8 @@ class TestSubclass(unittest.TestCase):
 
         c_obj = C(1)
         freeze(c_obj)
-        self.assertTrue(isfrozen(c_obj))
-        self.assertTrue(isfrozen(C))
+        self.assertTrue(is_frozen(c_obj))
+        self.assertTrue(is_frozen(C))
         class D(C):
             def __init__(self, val):
                 super().__init__(val)
@@ -585,7 +585,7 @@ class TestFunctionDefaults(unittest.TestCase):
 
         freeze(f)
 
-        self.assertTrue(isfrozen(bdef))
+        self.assertTrue(is_frozen(bdef))
 
     def test_function_kwdefaults(self):
         bdef = {}
@@ -595,7 +595,7 @@ class TestFunctionDefaults(unittest.TestCase):
 
         freeze(f)
 
-        self.assertTrue(isfrozen(bdef))
+        self.assertTrue(is_frozen(bdef))
 
 
 class TestNotFreezable(BaseNotFreezableTest):

@@ -9,7 +9,7 @@ from __future__ import annotations
 import _immutable as _c
 
 freeze = _c.freeze
-isfrozen = _c.isfrozen
+is_frozen = _c.is_frozen
 set_freezable = _c.set_freezable
 NotFreezable = getattr(_c, "NotFreezable", None)
 NotFreezableError = _c.NotFreezableError
@@ -19,6 +19,10 @@ FREEZABLE_NO = _c.FREEZABLE_NO
 FREEZABLE_EXPLICIT = _c.FREEZABLE_EXPLICIT
 FREEZABLE_PROXY = _c.FREEZABLE_PROXY
 
+# FIXME(immutable): For the longest time we used the name `isfrozen`
+# without the underscore. This keeps the function name for now, but
+# aliases it to `is_frozen`
+isfrozen = is_frozen
 
 def freezable(cls):
     """Class decorator: mark a class as always freezable."""
@@ -47,7 +51,7 @@ def frozen(cls):
 
 __all__ = [
     "freeze",
-    "isfrozen",
+    "is_frozen",
     "set_freezable",
     "NotFreezable",
     "NotFreezableError",
