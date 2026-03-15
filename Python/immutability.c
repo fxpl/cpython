@@ -349,19 +349,7 @@ struct FreezeState {
 static int
 traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *freeze_state_untyped)
 {
-    traverseproc traverse = Py_TYPE(obj)->tp_traverse;
-    if (traverse != NULL) {
-        int err = traverse(obj, visit, freeze_state_untyped);
-        if (err) {
-            return err;
-        }
-    }
-
     PyTypeObject *tp = Py_TYPE(obj);
-    // Manually visit the type if it's a static type
-    if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
-        return visit((PyObject *)Py_TYPE(obj), freeze_state_untyped);
-    }
 
     // `tp_traverse` of heap types *should* include a
     // `Py_VISIT(Py_TYPE(self));` since around Python 2.7 but
@@ -375,6 +363,19 @@ traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *freeze_state_unty
         struct FreezeState* freeze_state = (struct FreezeState *)freeze_state_untyped;
         SUCCEEDS(push(freeze_state->dfs, _PyObject_CAST(tp)));
         SUCCEEDS(push(freeze_state->dfs, EnsureVisitedMarker));
+    }
+
+    traverseproc traverse = tp->tp_traverse;
+    if (traverse != NULL) {
+        int err = traverse(obj, visit, freeze_state_untyped);
+        if (err) {
+            return err;
+        }
+    }
+
+    // Manually visit the type if it's a static type
+    if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
+        return visit((PyObject *)Py_TYPE(obj), freeze_state_untyped);
     }
 
     return 0;
