@@ -455,7 +455,6 @@ sharedfield_traverse(PyObject *self, visitproc visit, void *arg)
 {
     PySharedFieldObject *sf = (PySharedFieldObject *)self;
     Py_VISIT(Py_TYPE(self));
-    Py_VISIT(sf->value);
     return 0;
 }
 
@@ -466,7 +465,6 @@ sharedfield_reachable(PyObject *self, visitproc visit, void *arg)
     // The value is always frozen, so it's safe to include in the freeze walk.
     PySharedFieldObject *sf = (PySharedFieldObject *)self;
     Py_VISIT(Py_TYPE(self));
-    Py_VISIT(sf->value);
     return 0;
 }
 
