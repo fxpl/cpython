@@ -378,8 +378,8 @@ immutable_exec(PyObject *module) {
                          (PyTypeObject *)module_state->interpreterlocal_type) != 0) {
         return -1;
     }
-    if (_PyImmutability_RegisterFreezable(
-            (PyTypeObject *)module_state->interpreterlocal_type) < 0) {
+    if (_PyImmutability_SetFreezable(
+            module_state->interpreterlocal_type, _Py_FREEZABLE_YES) < 0) {
         return -1;
     }
 

@@ -1,6 +1,6 @@
 import os
 import unittest
-from immutable import freeze, isfrozen, InterpreterLocal
+from immutable import freeze, is_frozen, InterpreterLocal
 from test.support import import_helper
 
 
@@ -67,7 +67,7 @@ class TestInterpreterLocalFreeze(unittest.TestCase):
         c = Container()
         c.field = InterpreterLocal(42)
         freeze(c)
-        self.assertTrue(isfrozen(c))
+        self.assertTrue(is_frozen(c))
 
     def test_value_accessible_after_freeze(self):
         class Container:
@@ -101,7 +101,7 @@ class TestInterpreterLocalFreeze(unittest.TestCase):
     def test_interpreterlocal_itself_frozen(self):
         field = InterpreterLocal(42)
         freeze(field)
-        self.assertTrue(isfrozen(field))
+        self.assertTrue(is_frozen(field))
 
     def test_factory_result_mutable_after_freeze(self):
         class Container:
@@ -132,11 +132,13 @@ class TestInterpreterLocalErrors(unittest.TestCase):
 
     def test_non_freezable_default(self):
         """Non-freezable default should raise at construction."""
-        from immutable import NotFreezable
-        class NF(NotFreezable):
+        from immutable import set_freezable, FREEZABLE_NO
+        class NF:
             pass
+        obj = NF()
+        set_freezable(obj, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            InterpreterLocal(NF())
+            InterpreterLocal(obj)
 
     def test_non_freezable_factory(self):
         """Non-freezable factory should raise at construction."""
