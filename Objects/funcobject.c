@@ -1738,6 +1738,7 @@ PyTypeObject PyClassMethod_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject *
