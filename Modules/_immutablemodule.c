@@ -23,6 +23,7 @@ typedef struct {
     PyObject *not_freezable_error_obj;
     PyObject *interpreter_locals;  // dict: InterpreterLocal -> value
     PyObject *interpreterlocal_type;  // heap type object
+    PyObject *sharedfield_type;  // heap type object
 } immutable_state;
 
 static struct PyModuleDef _immutablemodule;
@@ -42,6 +43,7 @@ immutable_clear(PyObject *module)
     Py_CLEAR(module_state->not_freezable_error_obj);
     Py_CLEAR(module_state->interpreter_locals);
     Py_CLEAR(module_state->interpreterlocal_type);
+    Py_CLEAR(module_state->sharedfield_type);
     return 0;
 }
 
@@ -52,6 +54,7 @@ immutable_traverse(PyObject *module, visitproc visit, void *arg)
     Py_VISIT(module_state->not_freezable_error_obj);
     Py_VISIT(module_state->interpreter_locals);
     Py_VISIT(module_state->interpreterlocal_type);
+    Py_VISIT(module_state->sharedfield_type);
     return 0;
 }
 
@@ -172,7 +175,9 @@ interpreterlocal_lookup(PyInterpreterLocalObject *self)
     // Under free-threading (--disable-gil), multiple threads in the same
     // interpreter share this dict.  The critical section makes the
     // get-or-init compound operation atomic so the factory is called
-    // at most once per interpreter.  On GIL builds this is a no-op.
+    // at most once per interpreter.  On GIL builds this is a no-op,
+    // which is safe because InterpreterLocal storage is per-interpreter
+    // and each interpreter's GIL serializes its own threads.
     Py_BEGIN_CRITICAL_SECTION(locals);
     int ret = PyDict_GetItemRef(locals, (PyObject *)self, &val);
     if (ret == 0) {
@@ -307,6 +312,191 @@ static PyType_Spec interpreterlocal_spec = {
 };
 
 
+/*
+ * SharedField type
+ *
+ * A mutable field inside a frozen object that only holds frozen values.
+ * Because the stored value is always immutable, it can be safely shared
+ * across sub-interpreters.  All access is protected by a PyMutex to
+ * avoid TOCTOU races between reading the pointer and adjusting reference
+ * counts.  A PyMutex is used rather than Py_BEGIN_CRITICAL_SECTION
+ * because the latter is a no-op on GIL-enabled builds, but SharedField
+ * can be accessed concurrently from different sub-interpreters (each
+ * with its own GIL).
+ */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *value;   // Always frozen; guarded by lock
+    PyMutex lock;      // Protects value across sub-interpreters
+} PySharedFieldObject;
+
+static int
+sharedfield_check_frozen(PyObject *value)
+{
+    if (!_PyImmutability_CanViewAsImmutable(value)) {
+        PyErr_SetString(PyExc_TypeError,
+                        "SharedField value must be frozen");
+        return -1;
+    }
+    return 0;
+}
+
+static PyObject *
+sharedfield_get(PyObject *self, PyObject *Py_UNUSED(ignored))
+{
+    PySharedFieldObject *sf = (PySharedFieldObject *)self;
+    PyMutex_Lock(&sf->lock);
+    PyObject *val = Py_NewRef(sf->value);
+    PyMutex_Unlock(&sf->lock);
+    return val;
+}
+
+static PyObject *
+sharedfield_swap(PyObject *self, PyObject *new_value)
+{
+    if (sharedfield_check_frozen(new_value) < 0) {
+        return NULL;
+    }
+    PySharedFieldObject *sf = (PySharedFieldObject *)self;
+    Py_INCREF(new_value);
+    PyMutex_Lock(&sf->lock);
+    PyObject *old = sf->value;
+    sf->value = new_value;
+    PyMutex_Unlock(&sf->lock);
+    return old;  // caller owns the reference
+}
+
+static PyObject *
+sharedfield_set(PyObject *self, PyObject *new_value)
+{
+    PyObject *old = sharedfield_swap(self, new_value);
+    if (old == NULL) {
+        return NULL;
+    }
+    Py_DECREF(old);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+sharedfield_compare_and_swap(PyObject *self, PyObject *const *args,
+                             Py_ssize_t nargs)
+{
+    if (nargs != 2) {
+        PyErr_SetString(PyExc_TypeError,
+                        "compare_and_swap() requires exactly 2 arguments"
+                        " (old, new)");
+        return NULL;
+    }
+    PyObject *expected = args[0];
+    PyObject *new_value = args[1];
+
+    if (sharedfield_check_frozen(new_value) < 0) {
+        return NULL;
+    }
+
+    PySharedFieldObject *sf = (PySharedFieldObject *)self;
+    int swapped;
+    PyObject *old = NULL;
+    Py_INCREF(new_value);
+    PyMutex_Lock(&sf->lock);
+    if (sf->value == expected) {
+        old = sf->value;
+        sf->value = new_value;
+        swapped = 1;
+    }
+    else {
+        swapped = 0;
+    }
+    PyMutex_Unlock(&sf->lock);
+    if (swapped) {
+        Py_DECREF(old);
+        Py_RETURN_TRUE;
+    }
+    Py_DECREF(new_value);
+    Py_RETURN_FALSE;
+}
+
+static int
+sharedfield_init(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    static char *kwlist[] = {"value", NULL};
+    PyObject *initial = NULL;
+    PySharedFieldObject *sf = (PySharedFieldObject *)self;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", kwlist, &initial)) {
+        return -1;
+    }
+
+    if (_PyImmutability_Freeze(initial) < 0) {
+        return -1;
+    }
+
+    sf->value = Py_NewRef(initial);
+    return 0;
+}
+
+static void
+sharedfield_dealloc(PyObject *self)
+{
+    PySharedFieldObject *sf = (PySharedFieldObject *)self;
+    PyObject_GC_UnTrack(self);
+    Py_CLEAR(sf->value);
+    PyTypeObject *tp = Py_TYPE(self);
+    tp->tp_free(self);
+    Py_DECREF(tp);
+}
+
+static int
+sharedfield_traverse(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(Py_TYPE(self));
+    return 0;
+}
+
+static int
+sharedfield_reachable(PyObject *self, visitproc visit, void *arg)
+{
+    Py_VISIT(Py_TYPE(self));
+    return 0;
+}
+
+static PyMethodDef sharedfield_methods[] = {
+    {"get", sharedfield_get, METH_NOARGS,
+     "Return the current value."},
+    {"set", sharedfield_set, METH_O,
+     "Set a new value. The value must be frozen."},
+    {"swap", sharedfield_swap, METH_O,
+     "Replace the value and return the old value. The new value must be frozen."},
+    {"compare_and_swap",
+     _PyCFunction_CAST(sharedfield_compare_and_swap), METH_FASTCALL,
+     "compare_and_swap(old, new) -> bool.\n"
+     "If the current value is `old`, replace it with `new` and return True.\n"
+     "Otherwise return False. The new value must be frozen."},
+    {NULL, NULL}
+};
+
+static PyType_Slot sharedfield_slots[] = {
+    {Py_tp_dealloc, sharedfield_dealloc},
+    {Py_tp_init, sharedfield_init},
+    {Py_tp_methods, sharedfield_methods},
+    {Py_tp_traverse, sharedfield_traverse},
+    {Py_tp_reachable, sharedfield_reachable},
+    {Py_tp_new, PyType_GenericNew},
+    {Py_tp_alloc, PyType_GenericAlloc},
+    {Py_tp_free, PyObject_GC_Del},
+    {0, NULL},
+};
+
+static PyType_Spec sharedfield_spec = {
+    .name = "_immutable.SharedField",
+    .basicsize = sizeof(PySharedFieldObject),
+    .flags = (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE |
+              Py_TPFLAGS_HAVE_GC),
+    .slots = sharedfield_slots,
+};
+
+
 static PyType_Slot not_freezable_error_slots[] = {
     {0, NULL},
 };
@@ -390,6 +580,21 @@ immutable_exec(PyObject *module) {
     }
     if (_PyImmutability_SetFreezable(
             module_state->interpreter_locals, _Py_FREEZABLE_NO) < 0) {
+        return -1;
+    }
+
+    /* Create SharedField heap type */
+    module_state->sharedfield_type = PyType_FromModuleAndSpec(
+        module, &sharedfield_spec, NULL);
+    if (module_state->sharedfield_type == NULL) {
+        return -1;
+    }
+    if (PyModule_AddType(module,
+                         (PyTypeObject *)module_state->sharedfield_type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_SetFreezable(
+            module_state->sharedfield_type, _Py_FREEZABLE_YES) < 0) {
         return -1;
     }
 
