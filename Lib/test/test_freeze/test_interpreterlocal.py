@@ -166,12 +166,13 @@ class TestInterpreterLocalSubinterpreters(unittest.TestCase):
 
         interp = self._interpreters.create()
         try:
-            with os.fdopen(r, encoding='utf-8') as rpipe:
-                self._interpreters.run_string(
-                    interp, wrapped, shared=shared or {})
-                return rpipe.read()
+            self._interpreters.run_string(
+                interp, wrapped, shared=shared or {})
         finally:
+            with os.fdopen(r, encoding='utf-8') as rpipe:
+                result = rpipe.read()
             self._interpreters.destroy(interp)
+        return result
 
     def test_shared_frozen_object_gets_default_in_subinterp(self):
         """A frozen InterpreterLocal shared to a sub-interpreter
