@@ -323,9 +323,6 @@ static PyType_Spec interpreterlocal_spec = {
  * because the latter is a no-op on GIL-enabled builds, but SharedField
  * can be accessed concurrently from different sub-interpreters (each
  * with its own GIL).
- *
- * Unlike InterpreterLocal, tp_reachable DOES visit the stored value
- * (since it's frozen and part of the shared immutable graph).
  */
 
 typedef struct {
