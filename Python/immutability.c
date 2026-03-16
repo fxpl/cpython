@@ -1470,8 +1470,8 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
             }
             goto error;
         case _Py_FREEZABLE_PROXY:
-            // Reserved for future use — fall through to existing checks.
-            break;
+            assert(PyModule_Check(obj) || obj == _PyObject_CAST(&PyModule_Type));
+            return 0;
         }
     }
 
