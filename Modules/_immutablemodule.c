@@ -137,6 +137,55 @@ _immutable_set_freezable_impl(PyObject *module, PyObject *obj, int status)
     Py_RETURN_NONE;
 }
 
+/*[clinic input]
+_immutable.get_freezable
+    obj: object
+    /
+
+Get the freezable status of an object.
+
+Returns the freezable status, or -1 if no status has been set.
+Status values:
+  FREEZABLE_YES (0): always freezable
+  FREEZABLE_NO (1): never freezable
+  FREEZABLE_EXPLICIT (2): freezable only when freeze() is
+                          called directly on it
+  FREEZABLE_PROXY (3): reserved for future use
+[clinic start generated code]*/
+
+static PyObject *
+_immutable_get_freezable(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=bc22cd6d416850e3 input=a8ab19eb5ed3df08]*/
+{
+    int status = _PyImmutability_GetFreezable(obj);
+    if (status == -2) {
+        return NULL;  // Error occurred
+    }
+    return PyLong_FromLong(status);
+}
+
+/*[clinic input]
+_immutable.unset_freezable
+    obj: object
+    /
+
+Remove any explicitly set freezable status from an object.
+
+After this call, get_freezable(obj) will no longer reflect a
+per-object status and will fall back to the type's status (or
+return -1 if neither has been set).
+[clinic start generated code]*/
+
+static PyObject *
+_immutable_unset_freezable(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=f4d96bda33ecbf57 input=96cdad3c7489fee0]*/
+{
+    if (_PyImmutability_UnsetFreezable(obj) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 /*
  * InterpreterLocal type
  *
@@ -335,6 +384,8 @@ static struct PyMethodDef immutable_methods[] = {
     _IMMUTABLE_FREEZE_METHODDEF
     _IMMUTABLE_IS_FROZEN_METHODDEF
     _IMMUTABLE_SET_FREEZABLE_METHODDEF
+    _IMMUTABLE_GET_FREEZABLE_METHODDEF
+    _IMMUTABLE_UNSET_FREEZABLE_METHODDEF
     { NULL, NULL }
 };
 

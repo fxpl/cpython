@@ -15,3 +15,4 @@ PyAPI_FUNC(int) _PyImmutability_RegisterShallowImmutable(PyTypeObject*);
 PyAPI_FUNC(int) _PyImmutability_CanViewAsImmutable(PyObject*);
 PyAPI_FUNC(int) _PyImmutability_SetFreezable(PyObject *, _Py_freezable_status);
 PyAPI_FUNC(int) _PyImmutability_GetFreezable(PyObject *);
+PyAPI_FUNC(int) _PyImmutability_UnsetFreezable(PyObject *);
