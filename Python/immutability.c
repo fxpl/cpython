@@ -95,44 +95,9 @@
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
 
-static PyObject *
-_destroy(PyObject* set, PyObject *objweakref)
-{
-    Py_INCREF(set);
-    if (PySet_Discard(set, objweakref) < 0) {
-        Py_DECREF(set);
-        return NULL;
-    }
-    Py_DECREF(set);
-
-    Py_RETURN_NONE;
-}
-
-static PyMethodDef _destroy_def = {
-    "_destroy", (PyCFunction) _destroy, METH_O
-};
-
-static PyObject *
-type_weakref(struct _Py_immutability_state *state, PyObject *obj)
-{
-    if(state->destroy_cb == NULL){
-        state->destroy_cb = PyCFunction_NewEx(&_destroy_def, state->freezable_types, NULL);
-        if (state->destroy_cb == NULL) {
-            return NULL;
-        }
-    }
-
-    return PyWeakref_NewRef(obj, state->destroy_cb);
-}
-
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    state->freezable_types = PySet_New(NULL);
-    if(state->freezable_types == NULL){
-        return -1;
-    }
-
     state->warned_types = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
@@ -144,6 +109,8 @@ int init_state(struct _Py_immutability_state *state)
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
     if(state->shallow_immutable_types == NULL){
+        _Py_hashtable_destroy(state->warned_types);
+        state->warned_types = NULL;
         return -1;
     }
 
@@ -168,12 +135,45 @@ int init_state(struct _Py_immutability_state *state)
         NULL
     };
     for (int i = 0; shallow_types[i] != NULL; i++) {
-        if (_Py_hashtable_set(state->shallow_immutable_types,
-                              shallow_types[i], (void *)1) < 0) {
+        if (_PyImmutability_RegisterShallowImmutable(shallow_types[i])) {
             return -1;
         }
     }
 
+    PyTypeObject *builtin_freezable_types[] = {
+        &PyType_Type,
+        &PyBaseObject_Type,
+        &PyFunction_Type,
+        &PyList_Type,
+        &PyDict_Type,
+        &PySet_Type,
+        &PyMemoryView_Type,
+        &PyByteArray_Type,
+        &PyGetSetDescr_Type,
+        &PyMemberDescr_Type,
+        &PyProperty_Type,
+        &PyWrapperDescr_Type,
+        &PyMethodDescr_Type,
+        &PyClassMethod_Type, // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
+        &PyClassMethodDescr_Type,
+        &PyStaticMethod_Type,
+        &PyMethod_Type,
+        &PyCapsule_Type,
+        &PyCode_Type,
+        &PyCell_Type,
+        &PyFrame_Type,
+        &_PyWeakref_RefType,
+        &PyModule_Type, // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
+        &_PyImmModule_Type,
+        &PyCFunction_Type,
+        &_PyMethodWrapper_Type,
+        NULL
+    };
+    for (int i = 0; builtin_freezable_types[i] != NULL; i++) {
+        if (_PyImmutability_SetFreezable((PyObject*)builtin_freezable_types[i], _Py_FREEZABLE_YES)) {
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -181,7 +181,7 @@ static struct _Py_immutability_state* get_immutable_state(void)
 {
     PyInterpreterState* interp = PyInterpreterState_Get();
     struct _Py_immutability_state *state = &interp->immutability;
-    if(state->freezable_types == NULL){
+    if(state->shallow_immutable_types == NULL){
         if(init_state(state) == -1){
             PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
             return NULL;
@@ -190,23 +190,6 @@ static struct _Py_immutability_state* get_immutable_state(void)
 
     return state;
 }
-
-
-PyDoc_STRVAR(notfreezable_doc,
-    "NotFreezable()\n\
-    \n\
-    Indicate that a type cannot be frozen.");
-
-
-PyTypeObject _PyNotFreezable_Type = {
-    PyVarObject_HEAD_INIT(&PyType_Type, 0)
-    .tp_name = "NotFreezable",
-    .tp_doc = notfreezable_doc,
-    .tp_basicsize = sizeof(PyObject),
-    .tp_itemsize = 0,
-    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_IMMUTABLETYPE | Py_TPFLAGS_BASETYPE,
-    .tp_new = PyType_GenericNew
-};
 
 
 static int push(PyObject* s, PyObject* item){
@@ -1466,72 +1449,6 @@ static int freeze_visit(PyObject* obj, void* freeze_state_untyped)
     return 0;
 }
 
-
-
-static bool
-is_freezable_builtin(PyTypeObject *type)
-{
-    if(
-        type == &PyType_Type ||
-        type == &PyBaseObject_Type ||
-        type == &PyFunction_Type ||
-        type == &_PyNone_Type ||
-        type == &PyBool_Type ||
-        type == &PyLong_Type ||
-        type == &PyFloat_Type ||
-        type == &PyComplex_Type ||
-        type == &PyBytes_Type ||
-        type == &PyUnicode_Type ||
-        type == &PyTuple_Type ||
-        type == &PyList_Type ||
-        type == &PyDict_Type ||
-        type == &PySet_Type ||
-        type == &PyFrozenSet_Type ||
-        type == &PyMemoryView_Type ||
-        type == &PyByteArray_Type ||
-        type == &PyRange_Type ||
-        type == &PyGetSetDescr_Type ||
-        type == &PyMemberDescr_Type ||
-        type == &PyProperty_Type ||
-        type == &PyWrapperDescr_Type ||
-        type == &PyMethodDescr_Type ||
-        type == &PyClassMethod_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
-        type == &PyClassMethodDescr_Type ||
-        type == &PyStaticMethod_Type ||
-        type == &PyMethod_Type ||
-        type == &PyCFunction_Type ||
-        type == &PyCapsule_Type ||
-        type == &PyCode_Type ||
-        type == &PyCell_Type ||
-        type == &PyFrame_Type ||
-        type == &_PyWeakref_RefType ||
-        type == &_PyNotImplemented_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
-        type == &PyModule_Type || // TODO(Immutable): mjp I added this, is it correct? Discuss with maj
-        type == &_PyImmModule_Type ||
-        type == &PyEllipsis_Type
-     )
-     {
-         return true;
-     }
-
-     return false;
-}
-
-static int
-is_explicitly_freezable(struct _Py_immutability_state *state, PyObject *obj)
-{
-    int result = 0;
-    PyObject *ref = type_weakref(state, (PyObject *)obj->ob_type);
-    if(ref == NULL){
-        return -1;
-    }
-
-    result = PySet_Contains(state->freezable_types, ref);
-    Py_DECREF(ref);
-    return result;
-}
-
-
 static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
                            struct FreezeState *freeze_state)
 {
@@ -1556,27 +1473,6 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
         }
     }
 
-    // Check is object is subclass of NotFreezable
-    // TODO: Would be nice for this to be faster.
-    if (PyObject_IsInstance(obj, (PyObject *)&_PyNotFreezable_Type) == 1){
-        goto error;
-    }
-
-    if(is_freezable_builtin(obj->ob_type)){
-        return 0;
-    }
-
-    // TODO(Immutable): Fail is type is not already frozen.
-    // This will require the test suite to be updated.
-
-    int result = is_explicitly_freezable(state, obj);
-    if(result == -1){
-        return -1;
-    }
-    else if(result == 1){
-        return 0;
-    }
-
     // TODO(Immutable): Visit what the right balance of making Python types immutable is.
     if(!_PyType_HasExtensionSlots(obj->ob_type)){
         return 0;
@@ -1592,28 +1488,7 @@ error:
 }
 
 
-int _PyImmutability_RegisterFreezable(PyTypeObject* tp)
-{
-    PyObject *ref;
-    int result;
-    struct _Py_immutability_state *state = get_immutable_state();
-    if(state == NULL){
-        PyErr_SetString(PyExc_RuntimeError, "Failed to initialize immutability state");
-        return -1;
-    }
-
-    ref = type_weakref(state, (PyObject*)tp);
-    if(ref == NULL){
-        return -1;
-    }
-
-    result = PySet_Add(state->freezable_types, ref);
-    Py_DECREF(ref);
-    return result;
-}
-
-
-int _PyImmutability_SetFreezable(PyObject *obj, int status)
+int _PyImmutability_SetFreezable(PyObject *obj, _Py_freezable_status status)
 {
     if (status < _Py_FREEZABLE_YES || status > _Py_FREEZABLE_PROXY) {
         PyErr_Format(PyExc_ValueError,
@@ -1638,13 +1513,23 @@ int _PyImmutability_SetFreezable(PyObject *obj, int status)
     if (rc == 0) {
         return 0;
     }
-    // If the object doesn't support attribute setting, fall back
-    // to ob_flags (64-bit only).
-    if (!PyErr_ExceptionMatches(PyExc_AttributeError)) {
+
+    // If setting the attribute failed, only fall back to ob_flags for
+    // "attribute not supported / read-only" cases. Propagate all other
+    // exceptions to the caller.
+    if (PyErr_ExceptionMatches(PyExc_AttributeError) ||
+        PyErr_ExceptionMatches(PyExc_TypeError))
+    {
+        PyErr_Clear();
+    }
+    else {
+        // Preserve the original error (e.g. MemoryError or a custom
+        // tp_setattro exception).
         return -1;
     }
-    PyErr_Clear();
 
+    // If the object doesn't support attribute setting, fall back
+    // to ob_flags (64-bit only).
 #if SIZEOF_VOID_P > 4
     // Store the freezable status in ob_flags bits 5-7.
     uint16_t flags = obj->ob_flags;
@@ -1750,6 +1635,11 @@ int _PyImmutability_RegisterShallowImmutable(PyTypeObject* tp)
     if (_Py_hashtable_set(state->shallow_immutable_types,
                           (void *)tp, (void *)1) < 0) {
         PyErr_NoMemory();
+        return -1;
+    }
+
+    // Mark the type also as freezable
+    if (_PyImmutability_SetFreezable((PyObject*)tp, _Py_FREEZABLE_YES)) {
         return -1;
     }
     return 0;
@@ -2215,10 +2105,8 @@ static int traverse_freeze(PyObject* obj, struct FreezeState* freeze_state)
     debug_obj("Traversing %s (%p) rc=%zd\n", obj, Py_REFCNT(obj));
 
     if(is_c_wrapper(obj)) {
+        // FIXME(Immutable): Is this still needed?
         set_direct_rc(obj);
-        // C functions are not mutable
-        // Types are manually traversed
-        return 0;
     }
 
     SUCCEEDS(get_reachable_proc(Py_TYPE(obj))(obj, (visitproc)freeze_visit, freeze_state));

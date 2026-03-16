@@ -1,6 +1,6 @@
 import unittest
 from test.support import import_helper
-from immutable import isfrozen
+from immutable import is_frozen
 
 from .test_common import BaseObjectTest
 
@@ -59,8 +59,8 @@ class TestPointer(BaseObjectTest):
         super().__init__(*args, obj=ctypes.pointer(self.a), **kwargs)
 
     def test_contents_immutable(self):
-        self.assertTrue(isfrozen(self.a))
-        self.assertTrue(isfrozen(TestPointer.POINT))
+        self.assertTrue(is_frozen(self.a))
+        self.assertTrue(is_frozen(TestPointer.POINT))
 
     def test_set_contents(self):
         b = TestPointer.POINT(3, 4)
@@ -80,8 +80,8 @@ class TestArray(BaseObjectTest):
         super().__init__(*args, obj=TenPointsArrayType(), **kwargs)
 
     def test_point_immutable(self):
-        self.assertTrue(isfrozen(self.obj[0]))
-        self.assertTrue(isfrozen(TestArray.POINT))
+        self.assertTrue(is_frozen(self.obj[0]))
+        self.assertTrue(is_frozen(TestArray.POINT))
 
     def test_modify_item(self):
         with self.assertRaises(TypeError):

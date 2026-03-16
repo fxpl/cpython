@@ -8,13 +8,13 @@ from bz2 import BZ2Compressor, BZ2Decompressor
 
 
 class TestBZ2Compressor(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, obj=BZ2Compressor(), **kwargs)
+    def test_not_freezable(self):
+        self.check_not_freezable(BZ2Compressor())
 
 
 class TestBZ2Decompressor(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, obj=BZ2Decompressor(), **kwargs)
+    def test_not_freezable(self):
+        self.check_not_freezable(BZ2Decompressor())
 
 
 if __name__ == '__main__':

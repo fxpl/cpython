@@ -2,7 +2,7 @@
 
 import unittest
 from immutable import (
-    freeze, isfrozen, set_freezable,
+    freeze, is_frozen, set_freezable,
     FREEZABLE_EXPLICIT, FREEZABLE_NO, FREEZABLE_YES,
 )
 
@@ -23,21 +23,21 @@ class TestMultiFreezeBasic(unittest.TestCase):
         C = make_freezable_class()
         obj = C()
         freeze(obj)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
 
     def test_two_args(self):
         C = make_freezable_class()
         a, b = C(), C()
         freeze(a, b)
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
 
     def test_many_args(self):
         C = make_freezable_class()
         objs = [C() for _ in range(10)]
         freeze(*objs)
         for obj in objs:
-            self.assertTrue(isfrozen(obj))
+            self.assertTrue(is_frozen(obj))
 
     def test_zero_args_raises(self):
         with self.assertRaises(TypeError):
@@ -48,9 +48,9 @@ class TestMultiFreezeBasic(unittest.TestCase):
         C = make_freezable_class()
         a, b = C(), C()
         freeze(a)
-        self.assertTrue(isfrozen(a))
+        self.assertTrue(is_frozen(a))
         freeze(a, b)
-        self.assertTrue(isfrozen(b))
+        self.assertTrue(is_frozen(b))
 
     def test_all_already_frozen(self):
         """Calling freeze on objects that are all already frozen is a no-op."""
@@ -59,8 +59,8 @@ class TestMultiFreezeBasic(unittest.TestCase):
         freeze(a)
         freeze(b)
         freeze(a, b)  # should not raise
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
 
 
 class TestMultiFreezeSharedGraph(unittest.TestCase):
@@ -74,9 +74,9 @@ class TestMultiFreezeSharedGraph(unittest.TestCase):
         a.child = child
         b.child = child
         freeze(a, b)
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
-        self.assertTrue(isfrozen(child))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
+        self.assertTrue(is_frozen(child))
 
     def test_cross_references(self):
         """Roots that reference each other."""
@@ -85,8 +85,8 @@ class TestMultiFreezeSharedGraph(unittest.TestCase):
         a.other = b
         b.other = a
         freeze(a, b)
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
 
 
 class TestMultiFreezeExplicit(unittest.TestCase):
@@ -98,7 +98,7 @@ class TestMultiFreezeExplicit(unittest.TestCase):
         obj = C()
         set_freezable(obj, FREEZABLE_EXPLICIT)
         freeze(obj)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
 
     def test_explicit_as_child_fails(self):
         """EXPLICIT object reached as child (not a root) is rejected."""
@@ -108,7 +108,7 @@ class TestMultiFreezeExplicit(unittest.TestCase):
         set_freezable(child, FREEZABLE_EXPLICIT)
         with self.assertRaises(TypeError):
             freeze(parent)
-        self.assertFalse(isfrozen(child))
+        self.assertFalse(is_frozen(child))
 
     def test_explicit_as_one_of_multiple_roots(self):
         """EXPLICIT object listed as a root in multi-arg freeze succeeds."""
@@ -117,8 +117,8 @@ class TestMultiFreezeExplicit(unittest.TestCase):
         a.child = b
         set_freezable(b, FREEZABLE_EXPLICIT)
         freeze(a, b)
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
 
     def test_multiple_explicit_roots(self):
         """Multiple EXPLICIT objects all passed as roots."""
@@ -127,8 +127,8 @@ class TestMultiFreezeExplicit(unittest.TestCase):
         set_freezable(a, FREEZABLE_EXPLICIT)
         set_freezable(b, FREEZABLE_EXPLICIT)
         freeze(a, b)
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
 
     def test_explicit_child_not_in_roots_fails(self):
         """EXPLICIT child reachable from one root but not itself a root."""
@@ -139,7 +139,7 @@ class TestMultiFreezeExplicit(unittest.TestCase):
         # c is not in the roots list, so it should fail
         with self.assertRaises(TypeError):
             freeze(a, b)
-        self.assertFalse(isfrozen(c))
+        self.assertFalse(is_frozen(c))
 
 
 class TestMultiFreezeNotFreezable(unittest.TestCase):
@@ -171,8 +171,8 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(b, FREEZABLE_NO)
         with self.assertRaises(TypeError):
             freeze(a, b)
-        self.assertFalse(isfrozen(a))
-        self.assertFalse(isfrozen(b))
+        self.assertFalse(is_frozen(a))
+        self.assertFalse(is_frozen(b))
 
     def test_not_freezable_child_leaves_parent_unfrozen(self):
         """When a child is FREEZABLE_NO, the parent root stays unfrozen."""
@@ -182,8 +182,8 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
             freeze(parent)
-        self.assertFalse(isfrozen(parent))
-        self.assertFalse(isfrozen(child))
+        self.assertFalse(is_frozen(parent))
+        self.assertFalse(is_frozen(child))
 
     def test_not_freezable_child_leaves_all_roots_unfrozen(self):
         """Multi-root: one root's child is FREEZABLE_NO, all roots stay unfrozen."""
@@ -193,9 +193,9 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(bad_child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
             freeze(a, b)
-        self.assertFalse(isfrozen(a))
-        self.assertFalse(isfrozen(b))
-        self.assertFalse(isfrozen(bad_child))
+        self.assertFalse(is_frozen(a))
+        self.assertFalse(is_frozen(b))
+        self.assertFalse(is_frozen(bad_child))
 
     def test_not_freezable_child_bad_root_last(self):
         """Bad root listed last — good root traversed first, still rolled back."""
@@ -205,9 +205,9 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(bad_child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
             freeze(good, bad_parent)
-        self.assertFalse(isfrozen(good))
-        self.assertFalse(isfrozen(bad_parent))
-        self.assertFalse(isfrozen(bad_child))
+        self.assertFalse(is_frozen(good))
+        self.assertFalse(is_frozen(bad_parent))
+        self.assertFalse(is_frozen(bad_child))
 
     def test_not_freezable_child_bad_root_first(self):
         """Bad root listed first — good root traversed after, still rolled back."""
@@ -217,9 +217,9 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(bad_child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
             freeze(bad_parent, good)
-        self.assertFalse(isfrozen(good))
-        self.assertFalse(isfrozen(bad_parent))
-        self.assertFalse(isfrozen(bad_child))
+        self.assertFalse(is_frozen(good))
+        self.assertFalse(is_frozen(bad_parent))
+        self.assertFalse(is_frozen(bad_child))
 
     def test_explicit_child_not_root_leaves_all_unfrozen(self):
         """EXPLICIT child not listed as root blocks freeze; nothing frozen."""
@@ -229,9 +229,9 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(explicit_child, FREEZABLE_EXPLICIT)
         with self.assertRaises(TypeError):
             freeze(a, b)
-        self.assertFalse(isfrozen(a))
-        self.assertFalse(isfrozen(b))
-        self.assertFalse(isfrozen(explicit_child))
+        self.assertFalse(is_frozen(a))
+        self.assertFalse(is_frozen(b))
+        self.assertFalse(is_frozen(explicit_child))
 
     def test_explicit_child_bad_root_last(self):
         """EXPLICIT blocker's parent listed last — good root rolled back."""
@@ -241,9 +241,9 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(explicit_child, FREEZABLE_EXPLICIT)
         with self.assertRaises(TypeError):
             freeze(good, parent)
-        self.assertFalse(isfrozen(good))
-        self.assertFalse(isfrozen(parent))
-        self.assertFalse(isfrozen(explicit_child))
+        self.assertFalse(is_frozen(good))
+        self.assertFalse(is_frozen(parent))
+        self.assertFalse(is_frozen(explicit_child))
 
     def test_explicit_child_bad_root_first(self):
         """EXPLICIT blocker's parent listed first — good root rolled back."""
@@ -253,9 +253,9 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         set_freezable(explicit_child, FREEZABLE_EXPLICIT)
         with self.assertRaises(TypeError):
             freeze(parent, good)
-        self.assertFalse(isfrozen(good))
-        self.assertFalse(isfrozen(parent))
-        self.assertFalse(isfrozen(explicit_child))
+        self.assertFalse(is_frozen(good))
+        self.assertFalse(is_frozen(parent))
+        self.assertFalse(is_frozen(explicit_child))
 
     def test_many_roots_one_bad_none_frozen(self):
         """Many freezable roots plus one FREEZABLE_NO: none get frozen."""
@@ -266,8 +266,8 @@ class TestMultiFreezeAtomicity(unittest.TestCase):
         with self.assertRaises(TypeError):
             freeze(*good, bad)
         for obj in good:
-            self.assertFalse(isfrozen(obj))
-        self.assertFalse(isfrozen(bad))
+            self.assertFalse(is_frozen(obj))
+        self.assertFalse(is_frozen(bad))
 
 
 class TestMultiFreezeExplicitNested(unittest.TestCase):
@@ -282,8 +282,8 @@ class TestMultiFreezeExplicitNested(unittest.TestCase):
         set_freezable(inner, FREEZABLE_EXPLICIT)
         with self.assertRaises(TypeError):
             freeze(outer)
-        self.assertFalse(isfrozen(outer))
-        self.assertFalse(isfrozen(inner))
+        self.assertFalse(is_frozen(outer))
+        self.assertFalse(is_frozen(inner))
 
     def test_explicit_nested_in_root_and_also_root_succeeds(self):
         """An EXPLICIT child nested inside another root succeeds when also a root."""
@@ -293,8 +293,8 @@ class TestMultiFreezeExplicitNested(unittest.TestCase):
         outer.inner = inner
         set_freezable(inner, FREEZABLE_EXPLICIT)
         freeze(outer, inner)
-        self.assertTrue(isfrozen(outer))
-        self.assertTrue(isfrozen(inner))
+        self.assertTrue(is_frozen(outer))
+        self.assertTrue(is_frozen(inner))
 
     def test_explicit_deeply_nested_as_root_succeeds(self):
         """Deeply nested EXPLICIT object succeeds when listed as root."""
@@ -304,9 +304,9 @@ class TestMultiFreezeExplicitNested(unittest.TestCase):
         b.child = c
         set_freezable(c, FREEZABLE_EXPLICIT)
         freeze(a, c)
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
-        self.assertTrue(isfrozen(c))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
+        self.assertTrue(is_frozen(c))
 
     def test_explicit_deeply_nested_not_root_fails(self):
         """Deeply nested EXPLICIT object fails when not listed as root."""
@@ -317,9 +317,9 @@ class TestMultiFreezeExplicitNested(unittest.TestCase):
         set_freezable(c, FREEZABLE_EXPLICIT)
         with self.assertRaises(TypeError):
             freeze(a)
-        self.assertFalse(isfrozen(a))
-        self.assertFalse(isfrozen(b))
-        self.assertFalse(isfrozen(c))
+        self.assertFalse(is_frozen(a))
+        self.assertFalse(is_frozen(b))
+        self.assertFalse(is_frozen(c))
 
     def test_multiple_explicit_nested_all_roots(self):
         """Multiple EXPLICIT objects nested in a chain, all listed as roots."""
@@ -330,9 +330,9 @@ class TestMultiFreezeExplicitNested(unittest.TestCase):
         set_freezable(b, FREEZABLE_EXPLICIT)
         set_freezable(c, FREEZABLE_EXPLICIT)
         freeze(a, b, c)
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
-        self.assertTrue(isfrozen(c))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
+        self.assertTrue(is_frozen(c))
 
     def test_multiple_explicit_nested_one_missing_from_roots(self):
         """Two EXPLICIT in chain but only one is a root — freeze fails, nothing frozen."""
@@ -345,9 +345,9 @@ class TestMultiFreezeExplicitNested(unittest.TestCase):
         # b is a root but c is not
         with self.assertRaises(TypeError):
             freeze(a, b)
-        self.assertFalse(isfrozen(a))
-        self.assertFalse(isfrozen(b))
-        self.assertFalse(isfrozen(c))
+        self.assertFalse(is_frozen(a))
+        self.assertFalse(is_frozen(b))
+        self.assertFalse(is_frozen(c))
 
 
 class TestFreezeReturnValue(unittest.TestCase):

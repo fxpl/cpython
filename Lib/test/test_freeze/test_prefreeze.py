@@ -1,6 +1,6 @@
 import unittest
 
-from immutable import freeze, isfrozen, set_freezable, FREEZABLE_NO
+from immutable import freeze, is_frozen, set_freezable, FREEZABLE_NO
 
 
 class TestPreFreezeHook(unittest.TestCase):
@@ -16,7 +16,7 @@ class TestPreFreezeHook(unittest.TestCase):
         freeze(obj)
 
         self.assertEqual(obj.hook_calls, 1)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
 
     def test_prefreeze_hook_runs_before_object_is_frozen(self):
         class C:
@@ -24,13 +24,13 @@ class TestPreFreezeHook(unittest.TestCase):
                 self.was_frozen_inside_hook = None
 
             def __pre_freeze__(self):
-                self.was_frozen_inside_hook = isfrozen(obj)
+                self.was_frozen_inside_hook = is_frozen(obj)
 
         obj = C()
         freeze(obj)
 
         self.assertIs(obj.was_frozen_inside_hook, False)
-        self.assertTrue(isfrozen(obj))
+        self.assertTrue(is_frozen(obj))
 
     def test_prefreeze_hook_remains_called_after_failure(self):
         class C:
@@ -50,7 +50,7 @@ class TestPreFreezeHook(unittest.TestCase):
             freeze(obj)
 
         self.assertEqual(obj.hook_calls, 1)
-        self.assertFalse(isfrozen(obj))
+        self.assertFalse(is_frozen(obj))
 
     def test_nested_freeze(self):
         class A:
@@ -65,9 +65,9 @@ class TestPreFreezeHook(unittest.TestCase):
         freeze(a)
 
         # Objects frozen by nested freeze calls should remain frozen
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(a.field))
-        self.assertTrue(isfrozen(a.field.field))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(a.field))
+        self.assertTrue(is_frozen(a.field.field))
 
     def test_nested_cycle(self):
         class A:
@@ -88,11 +88,11 @@ class TestPreFreezeHook(unittest.TestCase):
         freeze(a)
 
         # Check the objects are frozen
-        self.assertTrue(isfrozen(a))
-        self.assertTrue(isfrozen(b))
-        self.assertTrue(isfrozen(c))
-        self.assertTrue(isfrozen(d))
-        self.assertTrue(isfrozen(e))
+        self.assertTrue(is_frozen(a))
+        self.assertTrue(is_frozen(b))
+        self.assertTrue(is_frozen(c))
+        self.assertTrue(is_frozen(d))
+        self.assertTrue(is_frozen(e))
 
     def test_nested_freeze_stays_frozen_on_fail(self):
         class A:
@@ -111,8 +111,8 @@ class TestPreFreezeHook(unittest.TestCase):
             freeze(a)
 
         # Objects frozen by nested freeze calls should remain frozen
-        self.assertFalse(isfrozen(a))
-        self.assertTrue(isfrozen(a.freezable))
+        self.assertFalse(is_frozen(a))
+        self.assertTrue(is_frozen(a.freezable))
 
     def test_pre_freeze_can_stop_freezing(self):
         class A:
@@ -126,12 +126,12 @@ class TestPreFreezeHook(unittest.TestCase):
         a = A(True)
         with self.assertRaises(ValueError):
             freeze(a)
-        self.assertFalse(isfrozen(a))
+        self.assertFalse(is_frozen(a))
 
         # This should succeed, since the pre-freeze succeeds
         a = A(False)
         freeze(a)
-        self.assertTrue(isfrozen(a))
+        self.assertTrue(is_frozen(a))
 
     def test_pre_freeze_self(self):
         class A:
@@ -149,8 +149,8 @@ class TestPreFreezeHook(unittest.TestCase):
             freeze(lst)
 
         # a should remain frozen due to its pre-freeze
-        self.assertTrue(isfrozen(a))
-        self.assertFalse(isfrozen(b))
+        self.assertTrue(is_frozen(a))
+        self.assertFalse(is_frozen(b))
 
 if __name__ == "__main__":
     unittest.main()

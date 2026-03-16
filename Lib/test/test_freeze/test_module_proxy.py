@@ -1,7 +1,7 @@
 import sys
 import unittest
 
-from immutable import freeze, isfrozen, ImmutableModule
+from immutable import freeze, is_frozen, ImmutableModule
 
 class TestModuleProxy(unittest.TestCase):
     def setUp(self):
@@ -10,7 +10,7 @@ class TestModuleProxy(unittest.TestCase):
 
     def test_freeze_function_with_random_module_creates_proxy(self):
         import random
-        self.assertFalse(isfrozen(random))
+        self.assertFalse(is_frozen(random))
 
         def coin():
             return random.random()
@@ -18,20 +18,20 @@ class TestModuleProxy(unittest.TestCase):
         freeze(coin)
 
         captured_random = coin.__closure__[0].cell_contents
-        self.assertTrue(isfrozen(captured_random))
-        self.assertTrue(isfrozen(random))
+        self.assertTrue(is_frozen(captured_random))
+        self.assertTrue(is_frozen(random))
         self.assertIsInstance(captured_random, ImmutableModule)
         self.assertIsInstance(random, ImmutableModule)
 
         self.assertIn("random", sys.mut_modules)
         mut_random = sys.mut_modules["random"]
         self.assertIsNot(mut_random, captured_random)
-        self.assertFalse(isfrozen(mut_random))
+        self.assertFalse(is_frozen(mut_random))
         self.assertIsInstance(mut_random, sys.__class__)
 
     def test_random_state_remains_mutable_via_proxy(self):
         import random
-        self.assertFalse(isfrozen(random))
+        self.assertFalse(is_frozen(random))
 
         def coin():
             return random.random()
@@ -48,7 +48,7 @@ class TestModuleProxy(unittest.TestCase):
 
     def test_proxy_attribute_writes_delegate_to_mutable_module(self):
         import random
-        self.assertFalse(isfrozen(random))
+        self.assertFalse(is_frozen(random))
 
         def coin():
             return random.random()

@@ -1,5 +1,5 @@
 import unittest
-from immutable import freeze, isfrozen, NotFreezable
+from immutable import freeze, is_frozen
 
 
 class BaseObjectTest(unittest.TestCase):
@@ -14,27 +14,29 @@ class BaseObjectTest(unittest.TestCase):
         freeze(self.obj)
 
     def test_immutable(self):
-        self.assertTrue(isfrozen(self.obj))
+        self.assertTrue(is_frozen(self.obj))
 
     def test_add_attribute(self):
         with self.assertRaises(TypeError):
             self.obj.new_attribute = 'value'
 
     def test_type_immutable(self):
-        self.assertTrue(isfrozen(self.obj))
-        self.assertTrue(isfrozen(type(self.obj)), "Type should be frozen when instance is frozen: {}".format(type(self.obj)))
+        self.assertTrue(is_frozen(self.obj))
+        self.assertTrue(is_frozen(type(self.obj)), "Type should be frozen when instance is frozen: {}".format(type(self.obj)))
 
 
 class BaseNotFreezableTest(unittest.TestCase):
-    def __init__(self, *args, obj=NotFreezable(), **kwargs):
+    def __init__(self, *args, obj=None, **kwargs):
         unittest.TestCase.__init__(self, *args, **kwargs)
         self.obj = obj
 
-    def test_not_freezable(self):
-        with self.assertRaises(TypeError):
-            freeze(self.obj)
+    def check_not_freezable(self, obj):
+        self.assertIsNotNone(obj)
 
-        self.assertFalse(isfrozen(self.obj))
+        with self.assertRaises(TypeError):
+            freeze(obj)
+
+        self.assertFalse(is_frozen(obj))
 
 
 if __name__ == '__main__':

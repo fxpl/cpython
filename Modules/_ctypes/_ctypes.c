@@ -6315,7 +6315,7 @@ _ctypes_add_types(PyObject *mod)
 #define REGISTER_FREEZEABLE(TYPE_EXPR) \
 do { \
     PyTypeObject *type = (TYPE_EXPR); \
-    if(_PyImmutability_RegisterFreezable(type) < 0){ \
+    if(_PyImmutability_SetFreezable(_PyObject_CAST(type), _Py_FREEZABLE_YES) < 0){ \
         return -1; \
     } \
 } while (0)

@@ -5,11 +5,11 @@ from .test_common import BaseNotFreezableTest
 
 
 class TestCSVReader(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, obj=csv.reader([]), **kwargs)
+    def test_not_freezable(self):
+        self.check_not_freezable(csv.reader([]))
 
 
 class TestCSVWriter(BaseNotFreezableTest):
-    def __init__(self, *args, **kwargs):
+    def test_not_freezable(self):
         self.buffer = BytesIO()
-        super().__init__(*args, obj=csv.writer(self.buffer), **kwargs)
+        self.check_not_freezable(csv.writer(self.buffer))

@@ -4,15 +4,6 @@ preserve
 
 #include "pycore_modsupport.h"    // _PyArg_CheckPositional()
 
-PyDoc_STRVAR(_immutable_register_freezable__doc__,
-"register_freezable($module, obj, /)\n"
-"--\n"
-"\n"
-"Register a type as freezable.");
-
-#define _IMMUTABLE_REGISTER_FREEZABLE_METHODDEF    \
-    {"register_freezable", (PyCFunction)_immutable_register_freezable, METH_O, _immutable_register_freezable__doc__},
-
 PyDoc_STRVAR(_immutable_freeze__doc__,
 "freeze($module, /, *args)\n"
 "--\n"
@@ -40,8 +31,8 @@ _immutable_freeze(PyObject *module, PyObject *const *args, Py_ssize_t nargs)
     return return_value;
 }
 
-PyDoc_STRVAR(_immutable_isfrozen__doc__,
-"isfrozen($module, obj, /)\n"
+PyDoc_STRVAR(_immutable_is_frozen__doc__,
+"is_frozen($module, obj, /)\n"
 "--\n"
 "\n"
 "Check if an object is frozen (or can be viewed as immutable).\n"
@@ -49,8 +40,8 @@ PyDoc_STRVAR(_immutable_isfrozen__doc__,
 "If the object graph can be viewed as immutable, it will be frozen as a\n"
 "side effect and True is returned.");
 
-#define _IMMUTABLE_ISFROZEN_METHODDEF    \
-    {"isfrozen", (PyCFunction)_immutable_isfrozen, METH_O, _immutable_isfrozen__doc__},
+#define _IMMUTABLE_IS_FROZEN_METHODDEF    \
+    {"is_frozen", (PyCFunction)_immutable_is_frozen, METH_O, _immutable_is_frozen__doc__},
 
 PyDoc_STRVAR(_immutable_set_freezable__doc__,
 "set_freezable($module, obj, status, /)\n"
@@ -61,7 +52,8 @@ PyDoc_STRVAR(_immutable_set_freezable__doc__,
 "Status values:\n"
 "  FREEZABLE_YES (0): always freezable\n"
 "  FREEZABLE_NO (1): never freezable\n"
-"  FREEZABLE_EXPLICIT (2): freezable only when freeze() is called directly on it\n"
+"  FREEZABLE_EXPLICIT (2): freezable only when freeze() is\n"
+"                          called directly on it\n"
 "  FREEZABLE_PROXY (3): reserved for future use");
 
 #define _IMMUTABLE_SET_FREEZABLE_METHODDEF    \
@@ -90,4 +82,4 @@ _immutable_set_freezable(PyObject *module, PyObject *const *args, Py_ssize_t nar
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=c6e7830815e38208 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=39afc4be55c6fa33 input=a9049054013a1b77]*/
