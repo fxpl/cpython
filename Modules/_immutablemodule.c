@@ -388,6 +388,10 @@ immutable_exec(PyObject *module) {
     if (module_state->interpreter_locals == NULL) {
         return -1;
     }
+    if (_PyImmutability_SetFreezable(
+            module_state->interpreter_locals, _Py_FREEZABLE_NO) < 0) {
+        return -1;
+    }
 
     if (PyModule_AddIntConstant(module, "FREEZABLE_YES",
                                 _Py_FREEZABLE_YES) != 0) {
