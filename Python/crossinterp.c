@@ -488,6 +488,7 @@ _get_xidata(PyThreadState *tstate,
         return -1;
     }
 
+    // Artifact[Implementation]: The branch that allows direct sharing for immutable object across sub-interpreters
     if (_Py_IsImmutable(obj)) {
         _Py_IncRef(obj);
         xidata->obj = obj;

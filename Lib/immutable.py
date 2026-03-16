@@ -27,6 +27,8 @@ SharedField = _c.SharedField
 # aliases it to `is_frozen`
 isfrozen = is_frozen
 
+
+# Artifact[Benchmarking]: The implementation of immutability related decorators
 def freezable(cls):
     """Class decorator: mark a class as always freezable."""
     set_freezable(cls, FREEZABLE_YES)

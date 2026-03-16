@@ -1554,6 +1554,7 @@ module_make_immutable_proxy(PyObject *self) {
     return 0;
 }
 
+// Artifact[Implementation]: The pre-freeze hook of module objects
 static int
 module_prefreeze(PyObject *self) {
     // TODO(immutable): Check if the module defines a custom pre-freeze hook:

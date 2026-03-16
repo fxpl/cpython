@@ -1205,6 +1205,7 @@ func_descr_get(PyObject *func, PyObject *obj, PyObject *type)
     return PyMethod_New(func, obj);
 }
 
+// Artifact[Implementation]: The pre-freeze hook of function objects
 /**
  * Special function for replacing globals and builtins with a copy of just what they use.
  *

@@ -142,6 +142,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 }
 #define _Py_IsImmutable(op) _Py_IsImmutable(_PyObject_CAST(op))
 
+// Artifact[Implementation]: The definition of the `Py_CHECKWRITE` macro
 // Check whether an object is writeable.
 // This check will always succeed during runtime finalization.
 #define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || _PyImmModule_Check(op) || Py_IsFinalizing()))
@@ -388,6 +389,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
             return;
         }
 #ifndef Py_LIMITED_API
+        // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
         if (_Py_IsImmutable(op)) {
             // Object is immutable.
             // Slight chance of overflow, and an issue here, so check, and
@@ -559,6 +561,7 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
             return;
         }
 #ifndef Py_LIMITED_API
+        // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_DECREF
         if (_Py_IsImmutable(op))
         {
             if (_Py_DecRef_Immutable(op)) {
