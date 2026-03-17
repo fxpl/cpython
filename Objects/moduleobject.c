@@ -1501,10 +1501,14 @@ static PyGetSetDef module_getsets[] = {
 static int
 module_reachable(PyObject *self, visitproc visit, void *arg)
 {
+    // FIXME(immutability): Allow modules to define their own custom
+    // `md_reachable` function. Currently, we're falling back on
+    // `md_traverse`
     Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
     return module_traverse(self, visit, arg);
 }
 
+// Artifact[Implementation]: This turns an existing ModuleObject into a proxy object:
 static int
 module_make_immutable_proxy(PyObject *self) {
     // Use cast, since we want this exact object
@@ -1554,13 +1558,19 @@ module_make_immutable_proxy(PyObject *self) {
     return 0;
 }
 
-// Artifact[Implementation]: The pre-freeze hook of module objects
 static int
 module_prefreeze(PyObject *self) {
-    // TODO(immutable): Check if the module defines a custom pre-freeze hook:
+    // FIXME(immutability): Modules can define their own pre-freeze hook
+    // and then delegate to this function to turn themself into a
+    // proxy object. While this works, it's a bit cumbersome. There should
+    // be an easier and more direct way
 
-    // TODO(immutable): Check if the module wants to be a proxy first:
-    return module_make_immutable_proxy(self);
+    _Py_freezable_status status = _PyImmutability_GetFreezable(self);
+    if (status == _Py_FREEZABLE_PROXY) {
+        return module_make_immutable_proxy(self);
+    }
+
+    return 0;
 }
 
 PyTypeObject PyModule_Type = {
