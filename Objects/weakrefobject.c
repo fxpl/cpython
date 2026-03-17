@@ -33,6 +33,7 @@
  */
 
 #else
+// Artifact[Implementation]: Explanation how weak references work for immutable objects
 /*
  * Thread-safety for immutable objects
  * ===================================

@@ -189,6 +189,7 @@ _immutable_unset_freezable(PyObject *module, PyObject *obj)
     Py_RETURN_NONE;
 }
 
+// Artifact[Implementation]: The implementation of the `InterpreterLocal` type
 /*
  * InterpreterLocal type
  *
@@ -360,6 +361,7 @@ static PyType_Spec interpreterlocal_spec = {
     .slots = interpreterlocal_slots,
 };
 
+// Artifact[Implementation]: The implementation of the `SharedField` type
 
 /*
  * SharedField type
@@ -373,7 +375,6 @@ static PyType_Spec interpreterlocal_spec = {
  * can be accessed concurrently from different sub-interpreters (each
  * with its own GIL).
  */
-
 typedef struct {
     PyObject_HEAD
     PyObject *value;   // Always frozen; guarded by lock

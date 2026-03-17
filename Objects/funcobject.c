@@ -1205,6 +1205,7 @@ func_descr_get(PyObject *func, PyObject *obj, PyObject *type)
     return PyMethod_New(func, obj);
 }
 
+// Artifact[Implementation]: The pre-freeze hook of function objects
 /**
  * Special function for replacing globals and builtins with a copy of just what they use.
  *
@@ -1737,6 +1738,7 @@ PyTypeObject PyClassMethod_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject *

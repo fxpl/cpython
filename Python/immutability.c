@@ -245,6 +245,7 @@ static PyObject* pop(PyObject* s){
 
 
 
+// Artifact[Implementation]: Explanation how a stack is used to implement the DFS based SCC algorithm
 /**
  * The DFS walk for SCC calculations needs to perform actions on both
  * the pre-order and post-order visits to an object.  To achieve this
@@ -290,6 +291,7 @@ static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
 }
 
+// Artifact[Implementation]: The state used to track a single freeze call and construct SCCs
 /**
  * Used to track the state of an in progress freeze operation.
  *
@@ -1468,8 +1470,8 @@ static int check_freezable(struct _Py_immutability_state *state, PyObject* obj,
             }
             goto error;
         case _Py_FREEZABLE_PROXY:
-            // Reserved for future use — fall through to existing checks.
-            break;
+            assert(PyModule_Check(obj) || obj == _PyObject_CAST(&PyModule_Type));
+            return 0;
         }
     }
 
@@ -2015,6 +2017,7 @@ static void make_weakrefs_safe(struct FreezeState* freeze_state)
 
 /* This undoes a freeze belonging to the given state */
 static void undo_freeze(struct FreezeState* state) {
+    // Artifact[Implementation]: The function that rolls back immutability on failure
     debug("Unfreezing all frozen objects belonging to %p\n", state);
 
     // Clear dfs stack
@@ -2237,6 +2240,15 @@ late_init(struct _Py_immutability_state *state)
 static int
 freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
 {
+    // Artifact[Implementation]: The entry point to the `freeze()` function in C
+    //
+    // This is the central function to the freeze algorithm that handles
+    // DFS traversal and calls into other functions to:
+    // - Checking freezability
+    // - Checking and calling the pre-freeze hook
+    // - Construct SCCs
+    // - Handle failures
+    // - Remove objects from the GC list
     struct _Py_immutability_state* imm_state = NULL;
     int result = 0;
     TRACE_MERMAID_START();
