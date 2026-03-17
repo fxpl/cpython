@@ -1501,6 +1501,9 @@ static PyGetSetDef module_getsets[] = {
 static int
 module_reachable(PyObject *self, visitproc visit, void *arg)
 {
+    // FIXME(immutability): Allow modules to define their own custom
+    // `md_reachable` function. Currently, we're falling back on
+    // `md_traverse`
     Py_VISIT(_PyObject_CAST(Py_TYPE(self)));
     return module_traverse(self, visit, arg);
 }
