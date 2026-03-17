@@ -174,6 +174,10 @@ int init_state(struct _Py_immutability_state *state)
             return -1;
         }
     }
+
+    if (_PyImmutability_SetFreezable((PyObject*)&PyModule_Type, _Py_FREEZABLE_PROXY)) {
+        return -1;
+    }
     return 0;
 }
 
@@ -1498,7 +1502,9 @@ int _PyImmutability_SetFreezable(PyObject *obj, _Py_freezable_status status)
         return -1;
     }
 
-    if (status == _Py_FREEZABLE_PROXY && !PyModule_Check(obj)) {
+    if (status == _Py_FREEZABLE_PROXY
+        && !(PyModule_Check(obj) || obj == _PyObject_CAST(&PyModule_Type))
+    ) {
         PyErr_SetString(PyExc_TypeError,
                         "FREEZABLE_PROXY can only be set on module objects");
         return -1;
