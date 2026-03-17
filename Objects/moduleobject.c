@@ -1563,7 +1563,7 @@ module_prefreeze(PyObject *self) {
     // be an easier and more direct way
 
     _Py_freezable_status status = _PyImmutability_GetFreezable(self);
-    if (status == _Py_FREEZABLE_PROXY || true) {
+    if (status == _Py_FREEZABLE_PROXY) {
         return module_make_immutable_proxy(self);
     }
 
