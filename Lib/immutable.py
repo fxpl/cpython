@@ -104,6 +104,26 @@ class FreezabilityOverride:
         return False
 
 
+class require_mutable(FreezabilityOverride):
+    """Context manager that ensures an object remains mutable (not freezable).
+
+    Raises TypeError if the object is already frozen.
+
+    Usage:
+        with require_mutable(obj):
+            obj.attr = value  # guaranteed not to be frozen during this block
+    """
+
+    def __init__(self, obj):
+        super().__init__(obj, FREEZABLE_NO)
+
+    def __enter__(self):
+        if is_frozen(self._obj):
+            raise TypeError(
+                "cannot require mutability: object is already frozen")
+        return super().__enter__()
+
+
 __all__ = [
     "freeze",
     "is_frozen",

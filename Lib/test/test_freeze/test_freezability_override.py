@@ -1,9 +1,9 @@
-"""Tests for the FreezabilityOverride context manager."""
+"""Tests for FreezabilityOverride and require_mutable context managers."""
 
 import unittest
 from immutable import (
     freeze, is_frozen, set_freezable, get_freezable,
-    FreezabilityOverride,
+    FreezabilityOverride, require_mutable,
     FREEZABLE_YES, FREEZABLE_NO, FREEZABLE_EXPLICIT,
 )
 
@@ -110,6 +110,48 @@ class TestFreezabilityOverride(unittest.TestCase):
         with FreezabilityOverride(C, FREEZABLE_NO):
             self.assertEqual(get_freezable(C), FREEZABLE_NO)
         self.assertEqual(get_freezable(C), FREEZABLE_YES)
+
+
+class TestRequireMutable(unittest.TestCase):
+    """Tests for the require_mutable context manager."""
+
+    def test_sets_freezable_no(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_YES)
+        with require_mutable(obj):
+            self.assertEqual(get_freezable(obj), FREEZABLE_NO)
+        self.assertEqual(get_freezable(obj), FREEZABLE_YES)
+
+    def test_prevents_freeze_inside(self):
+        C = make_freezable_class()
+        obj = C()
+        with require_mutable(obj):
+            with self.assertRaises(TypeError):
+                freeze(obj)
+
+    def test_raises_if_already_frozen(self):
+        C = make_freezable_class()
+        obj = C()
+        freeze(obj)
+        with self.assertRaises(TypeError):
+            with require_mutable(obj):
+                pass  # should never reach here
+
+    def test_restores_on_exception(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_YES)
+        with self.assertRaises(RuntimeError):
+            with require_mutable(obj):
+                raise RuntimeError("deliberate")
+        self.assertEqual(get_freezable(obj), FREEZABLE_YES)
+
+    def test_returns_obj_from_enter(self):
+        C = make_freezable_class()
+        obj = C()
+        with require_mutable(obj) as returned:
+            self.assertIs(returned, obj)
 
 
 if __name__ == '__main__':
