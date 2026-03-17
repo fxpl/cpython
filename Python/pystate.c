@@ -1373,6 +1373,28 @@ PyModuleObject* _PyInterpreterState_GetModuleState(PyObject *mod) {
         PyModuleObject *self = (PyModuleObject*) mod;
 
         if (!PyDict_Contains(is->mutable_modules, self->md_name)) {
+            // Get the `sys.modules` reference
+            PyObject* modules = _PyImport_GetModulesRef(is);
+            if (modules == Py_None) {
+                return NULL;
+            }
+
+            PyObject *modules_mod = NULL;
+            if (PyDict_GetItemRef(modules, self->md_name, &modules_mod) < 0) {
+                return 0;
+            }
+            if (modules_mod == mod) {
+                // The modules in `sys.modules` is this frozen mod but there is
+                // no mutable state in `sys.mut_modules`, probably because it was
+                // unimported? Either way: 
+                // Remove `mod` from `sys.modules` and trigger a reimport.
+                if (PyDict_DelItem(modules, self->md_name) < 0) {
+                    Py_DECREF(modules_mod);
+                    return NULL;
+                }
+            }
+            Py_XDECREF(modules_mod);
+
             // Importing the module will import the module or return the already
             // imported instance in `sys.modules`.
             PyObject *local_mod = PyImport_Import(self->md_name);
@@ -1392,10 +1414,6 @@ PyModuleObject* _PyInterpreterState_GetModuleState(PyObject *mod) {
             }
 
             // Place immutable proxy in `sys.modules[dict]`
-            PyObject* modules = _PyImport_GetModulesRef(is);
-            if (modules == Py_None) {
-                return NULL;
-            }
             res = PyDict_SetItem(modules, self->md_name, _PyObject_CAST(self));
             if (res != 0) {
                 return NULL;

@@ -70,6 +70,20 @@ class TestModuleProxy(unittest.TestCase):
             elif hasattr(mut_random, attr):
                 delattr(mut_random, attr)
 
+    def test_proxy_reimport(self):
+        import random
+        self.assertFalse(is_frozen(random))
+
+        freeze(random)
+
+        # Unimport "random"
+        old_mut_random = sys.mut_modules["random"]
+        del sys.mut_modules["random"]
+
+        # This should reimport the module
+        random.random()
+
+
 
 if __name__ == '__main__':
     unittest.main()
