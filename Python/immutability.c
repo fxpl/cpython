@@ -1549,6 +1549,47 @@ int _PyImmutability_SetFreezable(PyObject *obj, _Py_freezable_status status)
 }
 
 
+int _PyImmutability_UnsetFreezable(PyObject *obj)
+{
+    // Try deleting the __freezable__ attribute.
+    int rc = PyObject_SetAttr(obj, &_Py_ID(__freezable__), NULL);
+    if (rc == 0) {
+        goto clear_flags;
+    }
+
+    // If deletion failed with AttributeError/TypeError, the object
+    // doesn't support attributes — fall through to ob_flags.
+    if (PyErr_ExceptionMatches(PyExc_AttributeError) ||
+        PyErr_ExceptionMatches(PyExc_TypeError))
+    {
+        PyErr_Clear();
+    }
+    else {
+        return -1;
+    }
+
+    // The object doesn't support attributes; need ob_flags to clear.
+#if SIZEOF_VOID_P <= 4
+    // 32-bit builds do not have ob_flags for freezable status.
+    assert(0 && "unset_freezable ob_flags fallback not supported on 32-bit");
+    PyErr_SetString(PyExc_TypeError,
+                    "Cannot unset freezable status: object has no attribute "
+                    "support and ob_flags fallback is not available on 32-bit");
+    return -1;
+#endif
+
+clear_flags:
+#if SIZEOF_VOID_P > 4
+    {
+        uint16_t flags = obj->ob_flags;
+        flags &= ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
+        obj->ob_flags = flags;
+    }
+#endif
+    return 0;
+}
+
+
 // Read the freezable status from ob_flags (64-bit only).
 // Returns the status if set, or -1 if not set.
 static inline int

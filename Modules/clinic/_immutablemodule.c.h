@@ -82,4 +82,34 @@ _immutable_set_freezable(PyObject *module, PyObject *const *args, Py_ssize_t nar
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=39afc4be55c6fa33 input=a9049054013a1b77]*/
+
+PyDoc_STRVAR(_immutable_get_freezable__doc__,
+"get_freezable($module, obj, /)\n"
+"--\n"
+"\n"
+"Get the freezable status of an object.\n"
+"\n"
+"Returns the freezable status, or -1 if no status has been set.\n"
+"Status values:\n"
+"  FREEZABLE_YES (0): always freezable\n"
+"  FREEZABLE_NO (1): never freezable\n"
+"  FREEZABLE_EXPLICIT (2): freezable only when freeze() is\n"
+"                          called directly on it\n"
+"  FREEZABLE_PROXY (3): reserved for future use");
+
+#define _IMMUTABLE_GET_FREEZABLE_METHODDEF    \
+    {"get_freezable", (PyCFunction)_immutable_get_freezable, METH_O, _immutable_get_freezable__doc__},
+
+PyDoc_STRVAR(_immutable_unset_freezable__doc__,
+"unset_freezable($module, obj, /)\n"
+"--\n"
+"\n"
+"Remove any explicitly set freezable status from an object.\n"
+"\n"
+"After this call, get_freezable(obj) will no longer reflect a\n"
+"per-object status and will fall back to the type\'s status (or\n"
+"return -1 if neither has been set).");
+
+#define _IMMUTABLE_UNSET_FREEZABLE_METHODDEF    \
+    {"unset_freezable", (PyCFunction)_immutable_unset_freezable, METH_O, _immutable_unset_freezable__doc__},
+/*[clinic end generated code: output=fc9ce9e40597f581 input=a9049054013a1b77]*/
