@@ -2,7 +2,7 @@
 
 import unittest
 from immutable import (
-    freeze, is_frozen, set_freezable, get_freezable, unset_freezable,
+    set_freezable, get_freezable, unset_freezable,
     FREEZABLE_YES, FREEZABLE_NO, FREEZABLE_EXPLICIT,
 )
 
