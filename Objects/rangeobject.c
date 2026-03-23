@@ -67,8 +67,7 @@ make_range_object(PyTypeObject *type, PyObject *start,
             return NULL;
         }
     }
-    if(PyRegion_TakeRefs(obj, start, stop, step, length))
-    {   
+    if(PyRegion_TakeRefs(obj, start, stop, step, length)) {   
         assert(PyRegion_IsLocal(obj)); // No write barrier bc obj is newly created and being in the local region
         Py_DECREF(obj);
         PyRegion_RemoveLocalRef(length);
@@ -651,8 +650,7 @@ range_hash(PyObject *op)
 
     // len == 0 or not
     cmp_result = PyObject_Not(r->length);
-    if (cmp_result == -1)
-    {
+    if (cmp_result == -1) {
         goto end;
     }
 

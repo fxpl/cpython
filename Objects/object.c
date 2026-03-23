@@ -1596,9 +1596,7 @@ _PyObject_GetDictPtr(PyObject *obj)
 PyObject *
 PyObject_SelfIter(PyObject *obj)
 {
-    // Don't need a write barrier since it returns itself.
-    // _lrc should be increased from the assignment if the iter is in the region
-    return Py_NewRef(obj);
+    return PyRegion_NewRef(obj);
 }
 
 /* Helper used when the __next__ method is removed from a type:

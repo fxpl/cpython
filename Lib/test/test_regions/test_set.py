@@ -135,6 +135,42 @@ class TestRegionSet(unittest.TestCase):
         self.assertTrue(is_local(ab))
         self.assertTrue(is_local(ac))
 
+    def test_iterator(self):
+        """
+        Creating an iterator from a set that borrows from a region should
+        not increase the LRC, since the iterator itself does not hold
+        references to the elements (it borrows from the set).
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.arr = [r.word, r.word2]
+        s = set(r.arr)
+        base_lrc = r._lrc
+
+        r.it = iter(s)
+        self.assertEqual(r._lrc, base_lrc-1) # s is moved into the region.
+        it2 = iter(s)
+        self.assertEqual(r._lrc, base_lrc) 
+
+    def test_iterator2(self):
+        """
+        Creating an iterator from a set that borrows from a region should
+        not increase the LRC, since the iterator itself does not hold
+        references to the elements (it borrows from the set).
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.arr = [r.word, r.word2]
+        r.s = set(r.arr)
+        base_lrc = r._lrc
+
+        it = iter(r.s)
+        self.assertEqual(r._lrc, base_lrc+1) # r.s is moved into the region.
+        it2 = iter(r.s)
+        self.assertEqual(r._lrc, base_lrc+2) 
+
 
 class TestRegionSetDiscard(unittest.TestCase):
     """Tests for set discard/pop operations and their effect on LRC."""
