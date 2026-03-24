@@ -1366,6 +1366,54 @@ class TestRegionSetIterator(unittest.TestCase):
         it = iter(s)
         self.assertEqual(r._lrc, base_lrc)
 
+    def test_iter_creation_does_not_change_lrc_2(self):
+        """
+        Creating an iterator over a set should not by itself
+        change the LRC of the region.
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.arr = [r.word, r.word2]
+
+        s = set(r.arr)
+        base_lrc = r._lrc
+
+        r.it = iter(s)
+        self.assertEqual(r._lrc, base_lrc-1)
+
+    def test_iter_creation_does_not_change_lrc_3(self):
+        """
+        Creating an iterator over a set should not by itself
+        change the LRC of the region.
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.arr = [r.word, r.word2]
+
+        r.s = set(r.arr)
+        base_lrc = r._lrc
+
+        r.it = iter(r.s)
+        self.assertEqual(r._lrc, base_lrc)
+
+    def test_iter_creation_does_not_change_lrc_4(self):
+        """
+        Creating an iterator over a set should not by itself
+        change the LRC of the region.
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.arr = [r.word, r.word2]
+
+        r.s = set(r.arr)
+        base_lrc = r._lrc
+
+        it = iter(r.s) # iterator object points to the object in the region.
+        self.assertEqual(r._lrc, base_lrc+1)
+
     def test_next_on_iter_increases_lrc(self):
         """
         Calling next() on the iterator yields a borrowed reference,
@@ -1393,6 +1441,34 @@ class TestRegionSetIterator(unittest.TestCase):
 
         a4 = next(it)
         self.assertEqual(r._lrc, base_lrc + 3)
+
+    def test_next_on_iter_increases_lrc_2(self):
+        """
+        Calling next() on the iterator yields a borrowed reference,
+        increasing the LRC by 1.
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.word3 = self.A()
+        r.word4 = self.A()
+        r.arr = [r.word, r.word2, r.word3, r.word4]
+
+        s = set(r.arr)
+        r.it = iter(s)
+        base_lrc = r._lrc
+
+        r.a1 = next(r.it)
+        self.assertEqual(r._lrc, base_lrc)
+
+        r.a2 = next(r.it)
+        self.assertEqual(r._lrc, base_lrc)
+
+        r.a3 = next(r.it)
+        self.assertEqual(r._lrc, base_lrc)
+
+        r.a4 = next(r.it)
+        self.assertEqual(r._lrc, base_lrc)
 
     def test_iter_to_none_releases_lrc(self):
         """
@@ -1469,6 +1545,46 @@ class TestRegionSetIterator(unittest.TestCase):
         self.assertEqual(r._lrc, base_lrc+2) 
         r.it3 = iter(r.s)
         self.assertEqual(r._lrc, base_lrc+2)
+
+    def test_iterator_on_iterator(self):
+        """
+        Creating an iterator from a set that borrows from a region should
+        not increase the LRC, since the iterator itself does not hold
+        references to the elements (it borrows from the set).
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.arr = [r.word, r.word2]
+        s = set(r.arr)
+        base_lrc = r._lrc
+
+        r.it0 = iter(s)
+        self.assertEqual(r._lrc, base_lrc-1)
+        r.it = iter(r.it0)
+        self.assertEqual(r._lrc, base_lrc-1)
+        it2 = iter(r.it0)
+        self.assertEqual(r._lrc, base_lrc-1+1)
+
+    def test_iterator_on_iterator_2(self):
+        """
+        Creating an iterator from a set that borrows from a region should
+        not increase the LRC, since the iterator itself does not hold
+        references to the elements (it borrows from the set).
+        """
+        r = Region()
+        r.word = self.A()
+        r.word2 = self.A()
+        r.arr = [r.word, r.word2]
+        r.s = set(r.arr)
+        base_lrc = r._lrc
+
+        r.it0 = iter(r.s)
+        self.assertEqual(r._lrc, base_lrc)
+        r.it = iter(r.it0)
+        self.assertEqual(r._lrc, base_lrc)
+        it2 = iter(r.it0)
+        self.assertEqual(r._lrc, base_lrc+1)
 
 
 if __name__ == "__main__":
