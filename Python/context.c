@@ -269,7 +269,9 @@ PyContextVar_New(const char *name, PyObject *def)
     return (PyObject *)var;
 }
 
-
+/*
+Argument: the ContextVar Object, fallback value (or NULL), and output parameter for the value (which is set to NULL on error).
+*/
 int
 PyContextVar_Get(PyObject *ovar, PyObject *def, PyObject **val)
 {
