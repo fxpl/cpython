@@ -137,7 +137,7 @@ set_lookkey(PySetObject *so, PyObject *key, Py_hash_t hash)
 static int set_table_resize(PySetObject *, Py_ssize_t);
 
 static int
-set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
+set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash, bool take_ref)
 {
     setentry *table;
     setentry *freeslot;
@@ -200,7 +200,12 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
     if (freeslot == NULL)
         goto found_unused;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
-    if(PyRegion_TakeRef(so, key)) return -1;
+    if (take_ref) {
+        if (PyRegion_TakeRef(so, key)) {
+            return -1;
+        }
+    }
+    // if(PyRegion_TakeRef(so, key)) return -1;
     freeslot->key = key;
     freeslot->hash = hash;
     return 0;
@@ -208,7 +213,12 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
   found_unused:
     so->fill++;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
-    if(PyRegion_TakeRef(so, key)) return -1;
+    if (take_ref) {
+        if (PyRegion_TakeRef(so, key)) {
+            return -1;
+        }
+    }
+    // if(PyRegion_TakeRef(so, key)) return -1;
     entry->key = key;
     entry->hash = hash;
     if ((size_t)so->fill*5 < mask*3)
@@ -233,7 +243,7 @@ set_add_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
     if (PyRegion_AddLocalRef(key)) {
         return -1;
     }
-    return set_add_entry_takeref(so, Py_NewRef(key), hash);
+    return set_add_entry_takeref(so, Py_NewRef(key), hash, true);
 }
 
 static void
@@ -264,7 +274,7 @@ _PySet_AddTakeRef(PySetObject *so, PyObject *key)
     }
     // We don't pre-increment here, the caller holds a strong
     // reference to the object which we are stealing.
-    return set_add_entry_takeref(so, key, hash);
+    return set_add_entry_takeref(so, key, hash, false);
 }
 
 /*
