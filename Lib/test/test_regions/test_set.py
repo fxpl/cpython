@@ -10,6 +10,10 @@ class TestRegionSet(unittest.TestCase):
         class A: pass
         freeze(A())
         self.A = A
+    
+    def test_initial_lrc(self):
+        r = Region()
+        self.assertEqual(r._lrc, 1)
 
     def test_set_from_region_array_increases_lrc(self):
         """

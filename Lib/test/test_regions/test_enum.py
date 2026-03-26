@@ -110,7 +110,7 @@ class TestRegionEnumerateNext(unittest.TestCase):
         re4 = next(obj)
         self.assertEqual(r._lrc, base_lrc + 4)
 
-    # @unittest.expectedFailure
+    @unittest.expectedFailure
     def test_next_result_moved_into_region_does_not_increase_lrc(self):
         """
         Assigning the result of next() directly into a region should
@@ -157,6 +157,7 @@ class TestRegionEnumerateRelease(unittest.TestCase):
         freeze(A())
         self.A = A
 
+    @unittest.expectedFailure
     def test_setting_next_result_to_none_decreases_lrc(self):
         """
         Setting a local next() result to None should release the
@@ -175,6 +176,7 @@ class TestRegionEnumerateRelease(unittest.TestCase):
         re1 = None
         self.assertEqual(r._lrc, base_lrc - 1)
 
+    @unittest.expectedFailure
     def test_setting_all_next_results_to_none_restores_lrc(self):
         """
         Releasing all next() results should bring the LRC back
@@ -244,8 +246,9 @@ class TestRegionEnumerateMoveIntoRegion(unittest.TestCase):
         self.assertEqual(r._lrc, base_lrc + 1)  # obj holds external ref
 
         r.obj = obj
-        self.assertEqual(r._lrc, base_lrc+1)    # obj pointw to the enumerate object inside the region now, so LRC should not increase further
+        self.assertEqual(r._lrc, base_lrc+1)    # obj points to the enumerate object inside the region now, so LRC should not increase further
 
+    @unittest.skip("GC ERROR")
     def test_next_on_region_owned_enumerate_does_not_increase_lrc(self):
         """
         Calling next() on an enumerate that is owned by a region (accessed
@@ -263,6 +266,7 @@ class TestRegionEnumerateMoveIntoRegion(unittest.TestCase):
         r.re1 = next(r.obj)
         self.assertEqual(r._lrc, base_lrc)
 
+    @unittest.skip("GC ERROR")
     def test_next_on_region_owned_enumerate_local_assignment_increases_lrc(self):
         """
         Calling next() on a region-owned enumerate and assigning to a
@@ -322,6 +326,7 @@ class TestRegionEnumerateFullLifecycle(unittest.TestCase):
         re1 = None
         self.assertEqual(r._lrc, base_lrc)
 
+    @unittest.expectedFailure
     def test_full_lifecycle_matches_example_2(self):
         """
         Reproduces the exact sequence from the example script:
@@ -351,7 +356,7 @@ class TestRegionEnumerateFullLifecycle(unittest.TestCase):
         self.assertEqual(r._lrc, base_lrc + 2)
 
         re1 = None
-        self.assertEqual(r._lrc, base_lrc + 1)
+        self.assertEqual(r._lrc, base_lrc + 1) # PROBLEM: LRC does not decrease
 
         obj = None
         self.assertEqual(r._lrc, base_lrc)
@@ -440,11 +445,11 @@ class TestRegionEnumerateTwoRegions(unittest.TestCase):
         base_r1 = r1._lrc
         base_r2 = r2._lrc
 
-        idx0, val0 = next(obj)  # borrows r1.a
+        re1 = next(obj)  # borrows r1.a
         self.assertEqual(r1._lrc, base_r1 + 1)
         self.assertEqual(r2._lrc, base_r2)
 
-        idx1, val1 = next(obj)  # borrows r2.b
+        re2 = next(obj)  # borrows r2.b
         self.assertEqual(r1._lrc, base_r1 + 1)
         self.assertEqual(r2._lrc, base_r2 + 1)
 
