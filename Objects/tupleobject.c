@@ -1226,7 +1226,7 @@ tuple_iter(PyObject *seq)
 static inline int
 maybe_freelist_push(PyTupleObject *op)
 {
-    if (!Py_IS_TYPE(op, &PyTuple_Type)) {
+    if (!Py_IS_TYPE(op, &PyTuple_Type) || !PyRegion_IsLocal(op)) {
         return 0;
     }
     Py_ssize_t index = Py_SIZE(op) - 1;

@@ -1183,6 +1183,7 @@ PyNumber_Add(PyObject *v, PyObject *w)
     if (result != Py_NotImplemented) {
         return result;
     }
+    assert(PyRegion_IsLocal(result));
     Py_DECREF(result);
 
     PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;

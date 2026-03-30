@@ -56,6 +56,7 @@ enum_new_impl(PyTypeObject *type, PyObject *iterable, PyObject *start)
     if (start != NULL) {
         start = PyNumber_Index(start);
         if (start == NULL) {
+            PyRegion_RemoveLocalRef(en);
             Py_DECREF(en);
             return NULL;
         }
@@ -64,22 +65,41 @@ enum_new_impl(PyTypeObject *type, PyObject *iterable, PyObject *start)
         if (en->en_index == -1 && PyErr_Occurred()) {
             PyErr_Clear();
             en->en_index = PY_SSIZE_T_MAX;
+            if(PyRegion_TakeRef(en, start)) {
+                PyRegion_RemoveLocalRef(en);
+                Py_DECREF(en);
+                return NULL;
+            }
             en->en_longindex = start;
         } else {
             en->en_longindex = NULL;
+            PyRegion_RemoveLocalRef(start);
             Py_DECREF(start);
         }
     } else {
         en->en_index = 0;
         en->en_longindex = NULL;
     }
-    en->en_sit = PyObject_GetIter(iterable);
-    if (en->en_sit == NULL) {
+
+    // Internally call PyObject_SelfIter having PyRegion_NewRef, so TakeRef should be used
+    PyObject* itt = PyObject_GetIter(iterable);
+    if(PyRegion_TakeRef(en, itt)) {
+        PyRegion_RemoveLocalRef(en);
         Py_DECREF(en);
         return NULL;
     }
-    en->en_result = PyTuple_Pack(2, Py_None, Py_None);
+    en->en_sit = itt;
+    if (en->en_sit == NULL) {
+        PyRegion_RemoveLocalRef(en);
+        Py_DECREF(en);
+        return NULL;
+    }
+
+    PyObject* new_tuple = PyTuple_Pack(2, Py_None, Py_None);
+    assert(PyRegion_IsLocal(en) && PyRegion_IsLocal(new_tuple));
+    en->en_result = new_tuple;
     if (en->en_result == NULL) {
+        PyRegion_RemoveLocalRef(en);
         Py_DECREF(en);
         return NULL;
     }
@@ -157,6 +177,9 @@ enum_dealloc(PyObject *op)
 {
     enumobject *en = _enumobject_CAST(op);
     PyObject_GC_UnTrack(en);
+    PyRegion_RemoveRef(en, en->en_sit);
+    PyRegion_RemoveRef(en, en->en_result);
+    PyRegion_RemoveRef(en, en->en_longindex);
     Py_XDECREF(en->en_sit);
     Py_XDECREF(en->en_result);
     Py_XDECREF(en->en_longindex);
@@ -190,6 +213,7 @@ increment_longindex_lock_held(enumobject *en)
     if (stepped_up == NULL) {
         return NULL;
     }
+    // ASK FRED: Do I need TakeRef here?
     en->en_longindex = stepped_up;
     return next_index;
 }
@@ -207,25 +231,46 @@ enum_next_long(enumobject *en, PyObject* next_item)
     next_index = increment_longindex_lock_held(en);
     Py_END_CRITICAL_SECTION();
     if (next_index == NULL) {
+        PyRegion_RemoveLocalRef(next_item);
         Py_DECREF(next_item);
         return NULL;
     }
 
-    if (_PyObject_IsUniquelyReferenced(result)) {
-        Py_INCREF(result);
-        old_index = PyTuple_GET_ITEM(result, 0);
-        old_item = PyTuple_GET_ITEM(result, 1);
-        PyTuple_SET_ITEM(result, 0, next_index);
-        PyTuple_SET_ITEM(result, 1, next_item);
-        Py_DECREF(old_index);
-        Py_DECREF(old_item);
-        // bpo-42536: The GC may have untracked this result tuple. Since we're
-        // recycling it, make sure it's tracked again:
-        _PyTuple_Recycle(result);
-        return result;
+    if(result != NULL) {
+        if (_PyObject_IsUniquelyReferenced(result) && PyRegion_IsLocal(result)) {
+            if(PyRegion_AddLocalRef(result)){
+                PyRegion_RemoveLocalRef(next_item);
+                PyRegion_RemoveLocalRef(next_index);
+                Py_DECREF(next_index);
+                Py_DECREF(next_item);
+                return NULL;
+            }
+            Py_INCREF(result);
+            old_index = PyTuple_GET_ITEM(result, 0);
+            old_item = PyTuple_GET_ITEM(result, 1);
+            PyTuple_SET_ITEM(result, 0, next_index);
+            PyTuple_SET_ITEM(result, 1, next_item);
+            PyRegion_RemoveLocalRef(old_index);
+            PyRegion_RemoveLocalRef(old_item);
+            Py_DECREF(old_index);
+            Py_DECREF(old_item);
+            // bpo-42536: The GC may have untracked this result tuple. Since we're
+            // recycling it, make sure it's tracked again:
+            _PyTuple_Recycle(result);
+            return result;
+        }
+        else {
+            // PyRegion_RemoveRef(en, result);
+            // Py_DECREF(result);
+            // en->en_result = NULL;
+            PyRegion_CLEAR(en, en->en_result);
+        }
     }
+
     result = PyTuple_New(2);
     if (result == NULL) {
+        PyRegion_RemoveLocalRef(next_index);
+        PyRegion_RemoveLocalRef(next_item);
         Py_DECREF(next_index);
         Py_DECREF(next_item);
         return NULL;
@@ -256,26 +301,47 @@ enum_next(PyObject *op)
 
     next_index = PyLong_FromSsize_t(en_index);
     if (next_index == NULL) {
+        PyRegion_RemoveLocalRef(next_item);
         Py_DECREF(next_item);
         return NULL;
     }
     FT_ATOMIC_STORE_SSIZE_RELAXED(en->en_index, en_index + 1);
 
-    if (_PyObject_IsUniquelyReferenced(result)) {
-        Py_INCREF(result);
-        old_index = PyTuple_GET_ITEM(result, 0);
-        old_item = PyTuple_GET_ITEM(result, 1);
-        PyTuple_SET_ITEM(result, 0, next_index);
-        PyTuple_SET_ITEM(result, 1, next_item);
-        Py_DECREF(old_index);
-        Py_DECREF(old_item);
-        // bpo-42536: The GC may have untracked this result tuple. Since we're
-        // recycling it, make sure it's tracked again:
-        _PyTuple_Recycle(result);
-        return result;
+    if(result != NULL) {
+        if (_PyObject_IsUniquelyReferenced(result) && PyRegion_IsLocal(result)) {
+            if(PyRegion_AddLocalRef(result)){
+                PyRegion_RemoveLocalRef(next_item);
+                PyRegion_RemoveLocalRef(next_index);
+                Py_DECREF(next_index);
+                Py_DECREF(next_item);
+                return NULL;
+            }
+            Py_INCREF(result);
+            old_index = PyTuple_GET_ITEM(result, 0);
+            old_item = PyTuple_GET_ITEM(result, 1);
+            PyTuple_SET_ITEM(result, 0, next_index);
+            PyTuple_SET_ITEM(result, 1, next_item);
+            PyRegion_RemoveLocalRef(old_index);
+            PyRegion_RemoveLocalRef(old_item);
+            Py_DECREF(old_index);
+            Py_DECREF(old_item);
+            // bpo-42536: The GC may have untracked this result tuple. Since we're
+            // recycling it, make sure it's tracked again:
+            _PyTuple_Recycle(result);
+            return result;
+        }
+        else {
+            // PyRegion_RemoveRef(en, result);
+            // Py_DECREF(result);
+            // en->en_result = NULL;
+            PyRegion_CLEAR(en, en->en_result);
+        }
     }
+    
     result = PyTuple_New(2);
     if (result == NULL) {
+        PyRegion_RemoveLocalRef(next_index);
+        PyRegion_RemoveLocalRef(next_item);
         Py_DECREF(next_index);
         Py_DECREF(next_item);
         return NULL;
