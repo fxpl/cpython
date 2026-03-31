@@ -1231,6 +1231,7 @@ maybe_freelist_push(PyTupleObject *op)
     }
     Py_ssize_t index = Py_SIZE(op) - 1;
     if (index < PyTuple_MAXSAVESIZE) {
+        PyRegion_RecycleObject(op);
         return _Py_FREELIST_PUSH(tuples[index], op, Py_tuple_MAXFREELIST);
     }
     return 0;

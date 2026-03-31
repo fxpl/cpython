@@ -1839,6 +1839,7 @@ FutureIter_dealloc(PyObject *it)
     PyObject_GC_UnTrack(it);
     tp->tp_clear(it);
 
+    PyRegion_RecycleObject(it);
     if (!_Py_FREELIST_PUSH(futureiters, it, Py_futureiters_MAXFREELIST)) {
         PyObject_GC_Del(it);
         Py_DECREF(tp);

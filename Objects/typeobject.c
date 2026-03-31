@@ -17,7 +17,6 @@
 #include "pycore_pyatomic_ft_wrappers.h"
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
-#include "pycore_region.h"        // _PyRegion_SignalDealloc()
 #include "pycore_symtable.h"      // _Py_Mangle()
 #include "pycore_typeobject.h"    // struct type_cache
 #include "pycore_unicodeobject.h" // _PyUnicode_Copy

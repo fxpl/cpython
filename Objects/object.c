@@ -26,7 +26,6 @@
 #include "pycore_pyerrors.h"      // _PyErr_Occurred()
 #include "pycore_pymem.h"         // _PyMem_IsPtrFreed()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
-#include "pycore_region.h"        // _PyRegion_SignalDealloc
 #include "pycore_symtable.h"      // PySTEntry_Type
 #include "pycore_template.h"      // _PyTemplate_Type _PyTemplateIter_Type
 #include "pycore_tuple.h"         // _PyTuple_DebugMallocStats()
