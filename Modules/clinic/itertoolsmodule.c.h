@@ -84,6 +84,7 @@ batched_new(PyTypeObject *type, PyObject *args, PyObject *kwargs)
         PyObject *iobj = _PyNumber_Index(fastargs[1]);
         if (iobj != NULL) {
             ival = PyLong_AsSsize_t(iobj);
+            PyRegion_RemoveLocalRef(iobj);
             Py_DECREF(iobj);
         }
         if (ival == -1 && PyErr_Occurred()) {

@@ -157,10 +157,18 @@ batched_new_impl(PyTypeObject *type, PyObject *iterable, Py_ssize_t n,
     /* create batchedobject structure */
     bo = (batchedobject *)type->tp_alloc(type, 0);
     if (bo == NULL) {
+        PyRegion_RemoveLocalRef(it);
         Py_DECREF(it);
         return NULL;
     }
     bo->batch_size = n;
+    if(PyRegion_TakeRef(bo, it)) {
+        PyRegion_RemoveLocalRef(bo);
+        PyRegion_RemoveLocalRef(it);
+        Py_DECREF(bo);
+        Py_DECREF(it);
+        return NULL;
+    }
     bo->it = it;
     bo->strict = (bool) strict;
     return (PyObject *)bo;
@@ -172,8 +180,10 @@ batched_dealloc(PyObject *op)
     batchedobject *bo = batchedobject_CAST(op);
     PyTypeObject *tp = Py_TYPE(bo);
     PyObject_GC_UnTrack(bo);
+    PyRegion_RemoveRef(bo, bo->it);
     Py_XDECREF(bo->it);
     tp->tp_free(bo);
+    PyRegion_RemoveLocalRef(tp);
     Py_DECREF(tp);
 }
 
@@ -220,8 +230,9 @@ batched_next(PyObject *op)
             /* Input raised an exception other than StopIteration */
             FT_ATOMIC_STORE_SSIZE_RELAXED(bo->batch_size, -1);
 #ifndef Py_GIL_DISABLED
-            Py_CLEAR(bo->it);
+            PyRegion_CLEAR(bo, bo->it);
 #endif
+            PyRegion_RemoveLocalRef(result);
             Py_DECREF(result);
             return NULL;
         }
@@ -230,16 +241,18 @@ batched_next(PyObject *op)
     if (i == 0) {
         FT_ATOMIC_STORE_SSIZE_RELAXED(bo->batch_size, -1);
 #ifndef Py_GIL_DISABLED
-        Py_CLEAR(bo->it);
+        PyRegion_CLEAR(bo, bo->it);
 #endif
+        PyRegion_RemoveLocalRef(result);
         Py_DECREF(result);
         return NULL;
     }
     if (bo->strict) {
         FT_ATOMIC_STORE_SSIZE_RELAXED(bo->batch_size, -1);
 #ifndef Py_GIL_DISABLED
-        Py_CLEAR(bo->it);
+        PyRegion_CLEAR(bo, bo->it);
 #endif
+        PyRegion_RemoveLocalRef(result);
         Py_DECREF(result);
         PyErr_SetString(PyExc_ValueError, "batched(): incomplete batch");
         return NULL;
@@ -305,6 +318,14 @@ pairwise_new_impl(PyTypeObject *type, PyObject *iterable)
     }
     po = (pairwiseobject *)type->tp_alloc(type, 0);
     if (po == NULL) {
+        PyRegion_RemoveLocalRef(it);
+        Py_DECREF(it);
+        return NULL;
+    }
+    if(PyRegion_TakeRef(po, it)) {
+        PyRegion_RemoveLocalRef(po);
+        PyRegion_RemoveLocalRef(it);
+        Py_DECREF(po);
         Py_DECREF(it);
         return NULL;
     }
@@ -312,6 +333,7 @@ pairwise_new_impl(PyTypeObject *type, PyObject *iterable)
     po->old = NULL;
     po->result = PyTuple_Pack(2, Py_None, Py_None);
     if (po->result == NULL) {
+        PyRegion_RemoveLocalRef(po);
         Py_DECREF(po);
         return NULL;
     }
@@ -324,10 +346,14 @@ pairwise_dealloc(PyObject *op)
     pairwiseobject *po = pairwiseobject_CAST(op);
     PyTypeObject *tp = Py_TYPE(po);
     PyObject_GC_UnTrack(po);
+    PyRegion_RemoveRef(po, po->it);
+    PyRegion_RemoveRef(po, po->old);
+    PyRegion_RemoveRef(po, po->result);
     Py_XDECREF(po->it);
     Py_XDECREF(po->old);
     Py_XDECREF(po->result);
     tp->tp_free(po);
+    PyRegion_RemoveLocalRef(tp);
     Py_DECREF(tp);
 }
 
@@ -355,34 +381,57 @@ pairwise_next(PyObject *op)
     }
     if (old == NULL) {
         old = (*Py_TYPE(it)->tp_iternext)(it);
-        Py_XSETREF(po->old, old);
+        PyRegion_XSETREF(po, po->old, old);
+        // Py_XSETREF(po->old, old);
         if (old == NULL) {
-            Py_CLEAR(po->it);
+            PyRegion_CLEAR(po, po->it);
             return NULL;
         }
         it = po->it;
         if (it == NULL) {
-            Py_CLEAR(po->old);
+            PyRegion_CLEAR(po, po->old);
             return NULL;
         }
     }
+    PyRegion_AddLocalRef(old);
     Py_INCREF(old);
     new = (*Py_TYPE(it)->tp_iternext)(it);
     if (new == NULL) {
-        Py_CLEAR(po->it);
-        Py_CLEAR(po->old);
+        PyRegion_CLEAR(po, po->it);
+        PyRegion_CLEAR(po, po->old);
+        PyRegion_RemoveLocalRef(old);
         Py_DECREF(old);
         return NULL;
     }
 
     result = po->result;
-    if (Py_REFCNT(result) == 1) {
+    if (Py_REFCNT(result) == 1 && PyRegion_IsLocal(result)) {
+        if(PyRegion_AddLocalRef(result)) {
+            PyRegion_RemoveLocalRef(old);
+            PyRegion_RemoveLocalRef(new);
+            Py_DECREF(old);
+            Py_DECREF(new);
+            return NULL;
+        }
         Py_INCREF(result);
         PyObject *last_old = PyTuple_GET_ITEM(result, 0);
         PyObject *last_new = PyTuple_GET_ITEM(result, 1);
-        PyTuple_SET_ITEM(result, 0, Py_NewRef(old));
-        PyTuple_SET_ITEM(result, 1, Py_NewRef(new));
+        PyObject *old_region = PyRegion_NewRef(old);
+        PyObject *new_region = PyRegion_NewRef(new);
+        if(PyRegion_TakeRefs(result, old_region, new_region)) {
+            PyRegion_RemoveLocalRef(old_region);
+            PyRegion_RemoveLocalRef(new_region);
+            Py_DECREF(old_region);
+            Py_DECREF(new_region);
+            PyRegion_RemoveLocalRef(result);
+            Py_DECREF(result);
+            return NULL;
+        }
+        PyTuple_SET_ITEM(result, 0, old_region);
+        PyTuple_SET_ITEM(result, 1, new_region);
+        PyRegion_RemoveLocalRef(last_old);
         Py_DECREF(last_old);
+        PyRegion_RemoveLocalRef(last_new);
         Py_DECREF(last_new);
         // bpo-42536: The GC may have untracked this result tuple. Since we're
         // recycling it, make sure it's tracked again:
@@ -391,12 +440,24 @@ pairwise_next(PyObject *op)
     else {
         result = PyTuple_New(2);
         if (result != NULL) {
-            PyTuple_SET_ITEM(result, 0, Py_NewRef(old));
-            PyTuple_SET_ITEM(result, 1, Py_NewRef(new));
+            PyObject *old_region = PyRegion_NewRef(old);
+            PyObject *new_region = PyRegion_NewRef(new);
+            if(PyRegion_TakeRefs(result, old_region, new_region)) {
+                PyRegion_RemoveLocalRef(old_region);
+                PyRegion_RemoveLocalRef(new_region);
+                Py_DECREF(old_region);
+                Py_DECREF(new_region);
+                PyRegion_RemoveLocalRef(result);
+                Py_DECREF(result);
+                return NULL;
+            }
+            PyTuple_SET_ITEM(result, 0, old_region);
+            PyTuple_SET_ITEM(result, 1, new_region);
         }
     }
-
-    Py_XSETREF(po->old, new);
+    PyRegion_XSETREF(po, po->old, new);
+    // Py_XSETREF(po->old, new);
+    PyRegion_RemoveLocalRef(old);
     Py_DECREF(old);
     return result;
 }
@@ -4004,6 +4065,28 @@ static int
 itertoolsmodule_clear(PyObject *mod)
 {
     itertools_state *state = get_module_state(mod);
+    PyRegion_RemoveLocalRef(state->accumulate_type);
+    PyRegion_RemoveLocalRef(state->batched_type);
+    PyRegion_RemoveLocalRef(state->chain_type);
+    PyRegion_RemoveLocalRef(state->combinations_type);
+    PyRegion_RemoveLocalRef(state->compress_type);
+    PyRegion_RemoveLocalRef(state->count_type);
+    PyRegion_RemoveLocalRef(state->cwr_type);
+    PyRegion_RemoveLocalRef(state->cycle_type);
+    PyRegion_RemoveLocalRef(state->dropwhile_type);
+    PyRegion_RemoveLocalRef(state->filterfalse_type);
+    PyRegion_RemoveLocalRef(state->groupby_type);
+    PyRegion_RemoveLocalRef(state->_grouper_type);
+    PyRegion_RemoveLocalRef(state->islice_type);
+    PyRegion_RemoveLocalRef(state->pairwise_type);
+    PyRegion_RemoveLocalRef(state->permutations_type);
+    PyRegion_RemoveLocalRef(state->product_type);
+    PyRegion_RemoveLocalRef(state->repeat_type);
+    PyRegion_RemoveLocalRef(state->starmap_type);
+    PyRegion_RemoveLocalRef(state->takewhile_type);
+    PyRegion_RemoveLocalRef(state->tee_type);
+    PyRegion_RemoveLocalRef(state->teedataobject_type);
+    PyRegion_RemoveLocalRef(state->ziplongest_type);
     Py_CLEAR(state->accumulate_type);
     Py_CLEAR(state->batched_type);
     Py_CLEAR(state->chain_type);
