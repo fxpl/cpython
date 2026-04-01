@@ -14,10 +14,6 @@ r.c = A()
 r.d = A()
 r.e = A()
 
-# arr = [r.a, r.b, r.c, r.d, r.e]
-# print(f"Region r after creating arr: {r}")
-# r.arr = arr
-# print(f"Region r after moving arr: {r}")
 
 #------------------Problem with LRC should not be increases------------------
 # print(f"Region r: {r}")
@@ -45,28 +41,36 @@ r.e = A()
 # print(f"Region r after deleting obj: {r}")
 
 #------------------Problem with LRC not being decreased------------------
-# print(f"Region r: {r}")
-# r.arr = [r.a, r.b]
-# print(f"Region r after creating arr: {r}")
-# # input("Press Enter to create enum...")
-# r.it_arr = iter(r.arr)
-# print(f"Region r after creating iterator: {r}")
-# # input("Press Enter to create enum...")
-# obj = enumerate(r.it_arr) # LRC +1 since obj points to r.it_arr
-# print(f"Region r after creating enum: {r}")
-# # input("Press Enter to create enum...")
-# re1 = next(obj)
-# print(f"{is_local(obj)}")
-# print(f"Region r after getting next from enum: {r}")
-# # input("Press Enter to create enum...")
-# re2 = next(obj)
-# print(f"Region r after getting next from enum: {r}")
-# re1 = None # PROBLEM: LRC does not decrease, which should not be since we remove ref.
-# print(f"Region r after deleting re1: {r}")
-# re2 = None
-# print(f"Region r after deleting re2: {r}")
-# obj = None
-# print(f"Region r after deleting obj: {r}")
+print(f"Region r: {r}")
+r.arr = [r.a, r.b, r.c, r.d]
+print(f"Region r after creating arr: {r}")
+# input("Press Enter to create enum...")
+r.it_arr = iter(r.arr)
+print(f"Region r after creating iterator: {r}")
+# input("Press Enter to create enum...")
+obj = enumerate(r.it_arr) # LRC +1 since obj points to r.it_arr
+print(f"Region r after creating enum: {r}")
+# input("Press Enter to create enum...")
+r.re1 = next(obj)
+print(f"{is_local(obj)}")
+print(f"Region r after getting next from enum: {r}")
+# input("Press Enter to create enum...")
+re2 = next(obj)
+print(f"Region r after getting next from enum: {r}")
+r.re3 = next(obj)
+print(f"Region r after getting next from enum: {r}")
+re4 = next(obj)
+print(f"Region r after getting next from enum: {r}")
+r.re1 = None 
+print(f"Region r after deleting re1: {r}")
+re2 = None
+print(f"Region r after deleting re2: {r}")
+r.re3 = None
+print(f"Region r after deleting re3: {r}")
+re4 = None
+print(f"Region r after deleting re4: {r}")
+obj = None
+print(f"Region r after deleting obj: {r}")
 
 #------------------Problem with GC------------------
 # print(f"Region r: {r}")

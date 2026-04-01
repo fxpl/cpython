@@ -374,7 +374,8 @@ pairwise_next(PyObject *op)
     pairwiseobject *po = pairwiseobject_CAST(op);
     PyObject *it = po->it;
     PyObject *old = po->old;
-    PyObject *new, *result;
+    PyObject *new;
+    PyObject *result = po->result;
 
     if (it == NULL) {
         return NULL;
@@ -404,42 +405,18 @@ pairwise_next(PyObject *op)
         return NULL;
     }
 
-    result = po->result;
-    if (Py_REFCNT(result) == 1 && PyRegion_IsLocal(result)) {
-        if(PyRegion_AddLocalRef(result)) {
-            PyRegion_RemoveLocalRef(old);
-            PyRegion_RemoveLocalRef(new);
-            Py_DECREF(old);
-            Py_DECREF(new);
-            return NULL;
-        }
-        Py_INCREF(result);
-        PyObject *last_old = PyTuple_GET_ITEM(result, 0);
-        PyObject *last_new = PyTuple_GET_ITEM(result, 1);
-        PyObject *old_region = PyRegion_NewRef(old);
-        PyObject *new_region = PyRegion_NewRef(new);
-        if(PyRegion_TakeRefs(result, old_region, new_region)) {
-            PyRegion_RemoveLocalRef(old_region);
-            PyRegion_RemoveLocalRef(new_region);
-            Py_DECREF(old_region);
-            Py_DECREF(new_region);
-            PyRegion_RemoveLocalRef(result);
-            Py_DECREF(result);
-            return NULL;
-        }
-        PyTuple_SET_ITEM(result, 0, old_region);
-        PyTuple_SET_ITEM(result, 1, new_region);
-        PyRegion_RemoveLocalRef(last_old);
-        Py_DECREF(last_old);
-        PyRegion_RemoveLocalRef(last_new);
-        Py_DECREF(last_new);
-        // bpo-42536: The GC may have untracked this result tuple. Since we're
-        // recycling it, make sure it's tracked again:
-        _PyTuple_Recycle(result);
-    }
-    else {
-        result = PyTuple_New(2);
-        if (result != NULL) {
+    if(result != NULL) {
+        if (Py_REFCNT(result) == 1 && PyRegion_IsLocal(result)) {
+            if(PyRegion_AddLocalRef(result)) {
+                PyRegion_RemoveLocalRef(old);
+                PyRegion_RemoveLocalRef(new);
+                Py_DECREF(old);
+                Py_DECREF(new);
+                return NULL;
+            }
+            Py_INCREF(result);
+            PyObject *last_old = PyTuple_GET_ITEM(result, 0);
+            PyObject *last_new = PyTuple_GET_ITEM(result, 1);
             PyObject *old_region = PyRegion_NewRef(old);
             PyObject *new_region = PyRegion_NewRef(new);
             if(PyRegion_TakeRefs(result, old_region, new_region)) {
@@ -453,13 +430,44 @@ pairwise_next(PyObject *op)
             }
             PyTuple_SET_ITEM(result, 0, old_region);
             PyTuple_SET_ITEM(result, 1, new_region);
+            PyRegion_RemoveLocalRef(last_old);
+            Py_DECREF(last_old);
+            PyRegion_RemoveLocalRef(last_new);
+            Py_DECREF(last_new);
+            // bpo-42536: The GC may have untracked this result tuple. Since we're
+            // recycling it, make sure it's tracked again:
+            _PyTuple_Recycle(result);
+            goto end;
+        }
+        else {
+            PyRegion_CLEAR(po, po->result);
         }
     }
-    PyRegion_XSETREF(po, po->old, new);
-    // Py_XSETREF(po->old, new);
-    PyRegion_RemoveLocalRef(old);
-    Py_DECREF(old);
-    return result;
+
+    result = PyTuple_New(2);
+    if (result != NULL) {
+        PyObject *old_region = PyRegion_NewRef(old);
+        PyObject *new_region = PyRegion_NewRef(new);
+        if(PyRegion_TakeRefs(result, old_region, new_region)) {
+            PyRegion_RemoveLocalRef(old_region);
+            PyRegion_RemoveLocalRef(new_region);
+            Py_DECREF(old_region);
+            Py_DECREF(new_region);
+            PyRegion_RemoveLocalRef(result);
+            Py_DECREF(result);
+            return NULL;
+        }
+        PyTuple_SET_ITEM(result, 0, old_region);
+        PyTuple_SET_ITEM(result, 1, new_region);
+        goto end;
+    }
+
+    end:
+        PyRegion_XSETREF(po, po->old, new);
+        // Py_XSETREF(po->old, new);
+        PyRegion_RemoveLocalRef(old);
+        Py_DECREF(old);
+        return result;
 }
 
 static PyType_Slot pairwise_slots[] = {
