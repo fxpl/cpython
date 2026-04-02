@@ -1386,7 +1386,7 @@ PyModuleObject* _PyInterpreterState_GetModuleState(PyObject *mod) {
             if (modules_mod == mod) {
                 // The modules in `sys.modules` is this frozen mod but there is
                 // no mutable state in `sys.mut_modules`, probably because it was
-                // unimported? Either way: 
+                // unimported? Either way:
                 // Remove `mod` from `sys.modules` and trigger a reimport.
                 if (PyDict_DelItem(modules, self->md_name) < 0) {
                     Py_DECREF(modules_mod);

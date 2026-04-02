@@ -8,12 +8,10 @@ extern "C" {
 #  error "Py_BUILD_CORE must be defined to include this header"
 #endif
 
-typedef struct _Py_hashtable_t _Py_hashtable_t;
-
 struct _Py_immutability_state {
     int late_init_done;
-    _Py_hashtable_t *shallow_immutable_types;
-    _Py_hashtable_t *warned_types;
+    struct _Py_hashtable_t *shallow_immutable_types;
+    struct _Py_hashtable_t *warned_types;
     // With the pre-freeze hook it can happen that freeze calls are
     // nested. This is stack of the enclosing freeze states.
     struct FreezeState *freeze_stack;
