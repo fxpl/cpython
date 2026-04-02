@@ -1657,7 +1657,7 @@ PyTypeObject _PyImmModule_Type = {
     0,                                          /* tp_dictoffset */
     module___init__,                            /* tp_init */
     0,                                          /* tp_alloc */
-    .tp_new = NULL, /* Intentionally NULL since it should not be instanciated. */
+    .tp_new = NULL, /* Intentionally NULL since it should not be instantiated. */
     .tp_free = PyObject_GC_Del,                            /* tp_free */
     .tp_reachable = module_reachable,
 };
