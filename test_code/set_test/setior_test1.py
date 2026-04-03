@@ -40,3 +40,14 @@ r.s1 |= s2
 # r.s1.update(s2)
 print(f"Region after creating set or: {r}")
 print(f"Or result: {r.s1}")
+
+# r1 = Region()
+# r1.a = {1, 2}
+# r2 = Region()
+# r2.b = {2, 3}
+
+# print(f"r1: {r1}")
+# print(f"r2: {r2}")
+# r1.a |= r2.b
+# print(f"r1: {r1}")
+# print(f"r2: {r2}")

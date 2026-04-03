@@ -1027,16 +1027,23 @@ static PyObject *setiter_iternext(PyObject *self)
         i++;
     }
     if (i <= mask) {
-        key = PyRegion_NewRef(entry[i].key);
+        // key = PyRegion_NewRef(entry[i].key); // Incorrect since we want to return NULL immediately, not set key to NULL.
         // key = Py_NewRef(entry[i].key);
+        key = entry[i].key;
+        if (PyRegion_AddLocalRef(key)) {
+            return NULL;
+        }
+        Py_INCREF(key);
     }
     // Cannot return before unlocking
     Py_END_CRITICAL_SECTION();
     si->si_pos = i+1;
     if (key == NULL) {
-        si->si_set = NULL;
-        PyRegion_RemoveLocalRef(so);
-        Py_DECREF(so);
+        PyRegion_CLEAR(si, si->si_set);
+        // Since so is si->si_set, PyRegion_RemoveRef should be used, not PyRegion_RemoveLocalRef
+        // PyRegion_RemoveRef(si, so);
+        // si->si_set = NULL;
+        // Py_DECREF(so);
         return NULL;
     }
     si->len--;
