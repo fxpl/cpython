@@ -831,6 +831,8 @@ dummy_func(
             assert(Py_REFCNT(left_o) >= 2 || !PyStackRef_IsHeapSafe(left));
             PyStackRef_CLOSE_SPECIALIZED(left, _PyUnicode_ExactDealloc);
             DEAD(left);
+            // REGIONS: No write barrier needed, since these are all unicode
+            // objects and therefore immutable when observed
             PyObject *temp = PyStackRef_AsPyObjectSteal(*target_local);
             PyObject *right_o = PyStackRef_AsPyObjectSteal(right);
             PyUnicode_Append(&temp, right_o);
@@ -882,6 +884,7 @@ dummy_func(
         }
 
         op(_BINARY_SLICE, (container, start, stop -- res)) {
+            // REGIONS: Write barrier called inside `_PyBuildSlice_ConsumeRefs`
             PyObject *slice = _PyBuildSlice_ConsumeRefs(PyStackRef_AsPyObjectSteal(start),
                                                         PyStackRef_AsPyObjectSteal(stop));
             PyObject *res_o;
@@ -892,6 +895,8 @@ dummy_func(
             }
             else {
                 res_o = PyObject_GetItem(PyStackRef_AsPyObjectBorrow(container), slice);
+                // REGIONS: No barrier needed, since slice is local
+                assert(PyRegion_IsLocal(slice));
                 Py_DECREF(slice);
             }
             PyStackRef_CLOSE(container);
@@ -909,6 +914,7 @@ dummy_func(
         }
 
         op(_STORE_SLICE, (v, container, start, stop -- )) {
+            // Regions: Write barrier called inside the function
             PyObject *slice = _PyBuildSlice_ConsumeRefs(PyStackRef_AsPyObjectSteal(start),
                                                         PyStackRef_AsPyObjectSteal(stop));
             int err;
@@ -917,6 +923,7 @@ dummy_func(
             }
             else {
                 err = PyObject_SetItem(PyStackRef_AsPyObjectBorrow(container), slice, PyStackRef_AsPyObjectBorrow(v));
+                assert(PyRegion_IsLocal(slice));
                 Py_DECREF(slice);
             }
             DECREF_INPUTS();
@@ -1088,12 +1095,14 @@ dummy_func(
             _PUSH_FRAME;
 
         inst(LIST_APPEND, (list, unused[oparg-1], v -- list, unused[oparg-1])) {
+            // REGIONS: The write barrier is called in the function
             int err = _PyList_AppendTakeRef((PyListObject *)PyStackRef_AsPyObjectBorrow(list),
                                            PyStackRef_AsPyObjectSteal(v));
             ERROR_IF(err < 0);
         }
 
         inst(SET_ADD, (set, unused[oparg-1], v -- set, unused[oparg-1])) {
+            // REGIONS: The write barrier is called in the function
             int err = _PySet_AddTakeRef((PySetObject *)PyStackRef_AsPyObjectBorrow(set),
                                         PyStackRef_AsPyObjectSteal(v));
             ERROR_IF(err);
@@ -1138,6 +1147,7 @@ dummy_func(
             // Ensure nonnegative, zero-or-one-digit ints.
             DEOPT_IF(!_PyLong_IsNonNegativeCompact((PyLongObject *)sub));
             Py_ssize_t index = ((PyLongObject*)sub)->long_value.ob_digit[0];
+            DEOPT_IF(!PyRegion_IsLocal(list));
             DEOPT_IF(!LOCK_OBJECT(list));
             // Ensure index < len(list)
             if (index >= PyList_GET_SIZE(list)) {
@@ -1154,6 +1164,7 @@ dummy_func(
             PyStackRef_CLOSE_SPECIALIZED(sub_st, _PyLong_ExactDealloc);
             DEAD(sub_st);
             PyStackRef_CLOSE(list_st);
+            PyRegion_RemoveLocalRef(old_value);
             Py_DECREF(old_value);
         }
 
@@ -1165,6 +1176,7 @@ dummy_func(
 
             assert(PyDict_CheckExact(dict));
             STAT_INC(STORE_SUBSCR, hit);
+            // REGIONS: The write barrier is called inside the function
             int err = _PyDict_SetItem_Take2((PyDictObject *)dict,
                                             PyStackRef_AsPyObjectSteal(sub),
                                             PyStackRef_AsPyObjectSteal(value));
@@ -1460,6 +1472,7 @@ dummy_func(
 
         inst(POP_EXCEPT, (exc_value -- )) {
             _PyErr_StackItem *exc_info = tstate->exc_info;
+            // Regions: `exc_info->exc_value` is local
             Py_XSETREF(exc_info->exc_value,
                    PyStackRef_IsNone(exc_value)
                     ? NULL : PyStackRef_AsPyObjectSteal(exc_value));
@@ -1467,6 +1480,7 @@ dummy_func(
 
         tier1 inst(RERAISE, (values[oparg], exc_st -- values[oparg])) {
             PyObject *exc = PyStackRef_AsPyObjectSteal(exc_st);
+            assert(PyRegion_IsLocal(exc));
 
             assert(oparg >= 0 && oparg <= 2);
             if (oparg) {
@@ -1605,8 +1619,10 @@ dummy_func(
         }
 
         op(_UNPACK_SEQUENCE, (seq -- unused[oparg], top[0])) {
+            // Regions: seq_o is local, the LRC is increased by the steal
             PyObject *seq_o = PyStackRef_AsPyObjectSteal(seq);
             int res = _PyEval_UnpackIterableStackRef(tstate, seq_o, oparg, -1, top);
+            PyRegion_RemoveLocalRef(seq_o);
             Py_DECREF(seq_o);
             ERROR_IF(res == 0);
         }
@@ -1663,8 +1679,10 @@ dummy_func(
         }
 
         inst(UNPACK_EX, (seq -- unused[oparg & 0xFF], unused, unused[oparg >> 8], top[0])) {
+            // Regions: seq_o is local, the LRC is increased by the steal
             PyObject *seq_o = PyStackRef_AsPyObjectSteal(seq);
             int res = _PyEval_UnpackIterableStackRef(tstate, seq_o, oparg & 0xFF, oparg >> 8, top);
+            PyRegion_AddLocalRef(seq_o);
             Py_DECREF(seq_o);
             ERROR_IF(res == 0);
         }
@@ -2640,16 +2658,29 @@ dummy_func(
                 ERROR_IF(true);
             }
             assert(_PyObject_GetManagedDict(owner_o) == NULL);
+            PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+            DEOPT_IF(!PyRegion_IsLocal(owner_o) && !PyRegion_SameRegion(owner_o, value_o));
+            // This call can't escape, due to the DEOPT_IF guard above.
+            // As is, it should only update the LRC and or be a noop. In
+            // the worst case, it should only may mark a region as dirty.
+            if (PyRegion_AddRef(owner_o, value_o)) {
+                UNLOCK_OBJECT(owner_o);
+                DECREF_INPUTS();
+                ERROR_IF(true);
+            }
             PyObject **value_ptr = (PyObject**)(((char *)owner_o) + offset);
             PyObject *old_value = *value_ptr;
-            FT_ATOMIC_STORE_PTR_RELEASE(*value_ptr, PyStackRef_AsPyObjectSteal(value));
+            FT_ATOMIC_STORE_PTR_RELEASE(*value_ptr, Py_NewRef(value_o));
             if (old_value == NULL) {
                 PyDictValues *values = _PyObject_InlineValues(owner_o);
                 Py_ssize_t index = value_ptr - values->values;
                 _PyDictValues_AddToInsertionOrder(values, index);
+            } else {
+                PyRegion_RemoveRef(owner_o, old_value);
             }
             UNLOCK_OBJECT(owner_o);
             PyStackRef_CLOSE(owner);
+            PyStackRef_CLOSE(value);
             Py_XDECREF(old_value);
         }
 
@@ -2664,6 +2695,7 @@ dummy_func(
             assert(Py_TYPE(owner_o)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
             PyDictObject *dict = _PyObject_GetManagedDict(owner_o);
             DEOPT_IF(dict == NULL);
+            DEOPT_IF(!PyRegion_IsLocal(dict));
             DEOPT_IF(!LOCK_OBJECT(dict));
             if (!Py_CHECKWRITE(owner_o))
             {
@@ -2709,6 +2741,7 @@ dummy_func(
         op(_STORE_ATTR_SLOT, (index/1, value, owner --)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
 
+            DEOPT_IF(!PyRegion_IsLocal(owner_o));
             DEOPT_IF(!LOCK_OBJECT(owner_o));
             // TODO(Immutable) If the dictionary object has been made and is immutable, then this should fail,
             // but we aren't finding the dictionary object here?  Can we do this efficiently enough?
@@ -4989,9 +5022,19 @@ dummy_func(
 
         inst(SET_FUNCTION_ATTRIBUTE, (attr_st, func_in -- func_out)) {
             PyObject *func = PyStackRef_AsPyObjectBorrow(func_in);
+            if (!Py_CHECKWRITE(func))
+            {
+                _PyEval_FormatExcNotWriteable(tstate, _PyFrame_GetCode(frame), oparg);
+                DECREF_INPUTS();
+                ERROR_IF(true);
+            }
             PyObject *attr = PyStackRef_AsPyObjectSteal(attr_st);
             func_out = func_in;
             DEAD(func_in);
+            if (PyRegion_AddRef(func, attr)) {
+                DECREF_INPUTS();
+                ERROR_IF(true);
+            }
             assert(PyFunction_Check(func));
             size_t offset = _Py_FunctionAttributeOffsets[oparg];
             assert(offset != 0);

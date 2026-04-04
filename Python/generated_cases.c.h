@@ -1141,6 +1141,9 @@
                     assert(WITHIN_STACK_BOUNDS());
                     _PyFrame_SetStackPointer(frame, stack_pointer);
                     res_o = PyObject_GetItem(PyStackRef_AsPyObjectBorrow(container), slice);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    assert(PyRegion_IsLocal(slice));
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
                     Py_DECREF(slice);
                     stack_pointer = _PyFrame_GetStackPointer(frame);
                     stack_pointer += 2;
@@ -10211,6 +10214,7 @@
             exc_st = stack_pointer[-1];
             values = &stack_pointer[-1 - oparg];
             PyObject *exc = PyStackRef_AsPyObjectSteal(exc_st);
+            assert(PyRegion_IsLocal(exc));
             assert(oparg >= 0 && oparg <= 2);
             if (oparg) {
                 frame->instr_ptr = _PyFrame_GetBytecode(frame) + PyStackRef_UntagInt(values[0]);
@@ -10679,8 +10683,28 @@
             func_in = stack_pointer[-1];
             attr_st = stack_pointer[-2];
             PyObject *func = PyStackRef_AsPyObjectBorrow(func_in);
+            if (!Py_CHECKWRITE(func))
+            {
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                _PyEval_FormatExcNotWriteable(tstate, _PyFrame_GetCode(frame), oparg);
+                _PyStackRef tmp = func_in;
+                func_in = PyStackRef_NULL;
+                stack_pointer[-1] = func_in;
+                PyStackRef_CLOSE(tmp);
+                tmp = attr_st;
+                attr_st = PyStackRef_NULL;
+                stack_pointer[-2] = attr_st;
+                PyStackRef_CLOSE(tmp);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                stack_pointer += -2;
+                assert(WITHIN_STACK_BOUNDS());
+                JUMP_TO_LABEL(error);
+            }
             PyObject *attr = PyStackRef_AsPyObjectSteal(attr_st);
             func_out = func_in;
+            if (PyRegion_AddRef(func, attr)) {
+                JUMP_TO_LABEL(pop_2_error);
+            }
             assert(PyFunction_Check(func));
             size_t offset = _Py_FunctionAttributeOffsets[oparg];
             assert(offset != 0);
@@ -10852,19 +10876,50 @@
                     JUMP_TO_LABEL(error);
                 }
                 assert(_PyObject_GetManagedDict(owner_o) == NULL);
+                PyObject *value_o = PyStackRef_AsPyObjectBorrow(value);
+                if (!PyRegion_IsLocal(owner_o) && !PyRegion_SameRegion(owner_o, value_o)) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                if (PyRegion_AddRef(owner_o, value_o)) {
+                    UNLOCK_OBJECT(owner_o);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    _PyStackRef tmp = owner;
+                    owner = PyStackRef_NULL;
+                    stack_pointer[-1] = owner;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = value;
+                    value = PyStackRef_NULL;
+                    stack_pointer[-2] = value;
+                    PyStackRef_CLOSE(tmp);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -2;
+                    assert(WITHIN_STACK_BOUNDS());
+                    JUMP_TO_LABEL(error);
+                }
                 PyObject **value_ptr = (PyObject**)(((char *)owner_o) + offset);
                 PyObject *old_value = *value_ptr;
-                FT_ATOMIC_STORE_PTR_RELEASE(*value_ptr, PyStackRef_AsPyObjectSteal(value));
+                FT_ATOMIC_STORE_PTR_RELEASE(*value_ptr, Py_NewRef(value_o));
                 if (old_value == NULL) {
                     PyDictValues *values = _PyObject_InlineValues(owner_o);
                     Py_ssize_t index = value_ptr - values->values;
                     _PyDictValues_AddToInsertionOrder(values, index);
+                } else {
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    PyRegion_RemoveRef(owner_o, old_value);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
                 }
                 UNLOCK_OBJECT(owner_o);
-                stack_pointer += -2;
+                stack_pointer += -1;
                 assert(WITHIN_STACK_BOUNDS());
                 _PyFrame_SetStackPointer(frame, stack_pointer);
                 PyStackRef_CLOSE(owner);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                stack_pointer += -1;
+                assert(WITHIN_STACK_BOUNDS());
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyStackRef_CLOSE(value);
                 Py_XDECREF(old_value);
                 stack_pointer = _PyFrame_GetStackPointer(frame);
             }
@@ -10902,6 +10957,11 @@
                 value = stack_pointer[-2];
                 uint16_t index = read_u16(&this_instr[4].cache);
                 PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+                if (!PyRegion_IsLocal(owner_o)) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
                 if (!LOCK_OBJECT(owner_o)) {
                     UPDATE_MISS_STATS(STORE_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
@@ -10973,6 +11033,11 @@
                 assert(Py_TYPE(owner_o)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
                 PyDictObject *dict = _PyObject_GetManagedDict(owner_o);
                 if (dict == NULL) {
+                    UPDATE_MISS_STATS(STORE_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
+                    JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                if (!PyRegion_IsLocal(dict)) {
                     UPDATE_MISS_STATS(STORE_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
@@ -11255,6 +11320,9 @@
                     assert(WITHIN_STACK_BOUNDS());
                     _PyFrame_SetStackPointer(frame, stack_pointer);
                     err = PyObject_SetItem(PyStackRef_AsPyObjectBorrow(container), slice, PyStackRef_AsPyObjectBorrow(v));
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    assert(PyRegion_IsLocal(slice));
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
                     Py_DECREF(slice);
                     stack_pointer = _PyFrame_GetStackPointer(frame);
                     stack_pointer += 2;
@@ -11439,6 +11507,11 @@
                     JUMP_TO_PREDICTED(STORE_SUBSCR);
                 }
                 Py_ssize_t index = ((PyLongObject*)sub)->long_value.ob_digit[0];
+                if (!PyRegion_IsLocal(list)) {
+                    UPDATE_MISS_STATS(STORE_SUBSCR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_SUBSCR));
+                    JUMP_TO_PREDICTED(STORE_SUBSCR);
+                }
                 if (!LOCK_OBJECT(list)) {
                     UPDATE_MISS_STATS(STORE_SUBSCR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_SUBSCR));
@@ -11463,6 +11536,7 @@
                 assert(WITHIN_STACK_BOUNDS());
                 _PyFrame_SetStackPointer(frame, stack_pointer);
                 PyStackRef_CLOSE(list_st);
+                PyRegion_RemoveLocalRef(old_value);
                 Py_DECREF(old_value);
                 stack_pointer = _PyFrame_GetStackPointer(frame);
             }
@@ -11859,6 +11933,7 @@
             assert(WITHIN_STACK_BOUNDS());
             _PyFrame_SetStackPointer(frame, stack_pointer);
             int res = _PyEval_UnpackIterableStackRef(tstate, seq_o, oparg & 0xFF, oparg >> 8, top);
+            PyRegion_AddLocalRef(seq_o);
             Py_DECREF(seq_o);
             stack_pointer = _PyFrame_GetStackPointer(frame);
             if (res == 0) {
@@ -11909,6 +11984,7 @@
                 assert(WITHIN_STACK_BOUNDS());
                 _PyFrame_SetStackPointer(frame, stack_pointer);
                 int res = _PyEval_UnpackIterableStackRef(tstate, seq_o, oparg, -1, top);
+                PyRegion_RemoveLocalRef(seq_o);
                 Py_DECREF(seq_o);
                 stack_pointer = _PyFrame_GetStackPointer(frame);
                 if (res == 0) {

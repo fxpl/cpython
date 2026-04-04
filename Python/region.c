@@ -15,6 +15,23 @@
 
 #include <stdbool.h>
 
+// #define REGION_TRACING
+
+#ifdef REGION_TRACING
+#define if_trace(...) __VA_ARGS__
+#define trace_arg(arg) , (Py_uintptr_t)(arg)
+#define trace(msg, region, ...) \
+    do { \
+        printf(msg "\n", (Py_region_t)(region) __VA_OPT__(,) __VA_ARGS__); \
+    } while(0)
+#define trace_lrc(...) trace(__VA_ARGS__)
+#else
+#define if_trace(...)
+#define trace_arg(...)
+#define trace(...)
+#define trace_lrc(...)
+#endif
+
 /* Macro that jumps to error, if the expression `x` does not succeed. */
 #define SUCCEEDS(x) do { int r = (x); if (r != 0) goto error; } while (0)
 
@@ -56,8 +73,8 @@
 #define STAGED_AS_PTR(staged)           (staged & STAGED_PTR_MASK)
 
 // Prototypes
-static int regiondata_inc_osc(Py_region_t region);
-static void regiondata_dec_osc(Py_region_t region);
+static int regiondata_inc_osc(Py_region_t region if_trace(, Py_uintptr_t reason));
+static void regiondata_dec_osc(Py_region_t region if_trace(, Py_uintptr_t reason));
 static int regiondata_is_open(Py_region_t data);
 static Py_region_t regiondata_get_parent(Py_region_t region);
 static Py_region_t regiondata_get_parent_follow_pending(Py_region_t region);
@@ -490,7 +507,7 @@ static int regiondata_union_merge(
     bool cleanup_inc_osc = false;
     if (regiondata_is_open(target)) {
         // Inc OSC can't fail here, since `target` is already open
-        regiondata_inc_osc(target);
+        regiondata_inc_osc(target trace_arg(source));
         cleanup_inc_osc = true;
     }
 
@@ -534,6 +551,9 @@ static int regiondata_union_merge(
     // Merge stats into the `target`
     if (HAS_DATA(target)) {
         _Py_region_data *target_data = (_Py_region_data*)target;
+        trace("  - %lx: Merging %lx into %zx", source, source, target);
+        trace("    - %lx: Merge adjusts LRC += %ld", source, source_data->lrc);
+        trace("    - %lx: Merge adjusts OSC += %ld", source, source_data->osc);
         target_data->lrc += source_data->lrc;
         target_data->osc += source_data->osc;
         // Do a region merge, which keeps the bridge objects at the start
@@ -547,7 +567,7 @@ static int regiondata_union_merge(
             // puts target into the right state.
             target_data->open_tick = source_data->open_tick;
             if (source_data->open_tick != OPEN_TICK_CLOSED) {
-                regiondata_inc_osc(regiondata_get_parent(target));
+                regiondata_inc_osc(regiondata_get_parent(target) trace_arg(NULL));
             }
         } else if (source_data->open_tick == OPEN_TICK_CLOSED) {
             // It's fine if the target is open but source is closed
@@ -562,9 +582,12 @@ static int regiondata_union_merge(
         // Check if the region can be opened or closed.
         regiondata_check_status(target);
     } else if (IS_LOCAL_REGION(target)) {
+        trace("%lx: Dissolving %lx into the local region", source, source);
         // The function below also bumps the LRC of the sub-regions
         // meaning this should be all covered now.
         gc_region_list_dissolve(&(source_data->gc_list));
+    } else {
+        trace("%lx: Merging %lx into %lx", source, source, target);
     }
 
     // Remove information from `source`
@@ -579,13 +602,14 @@ static int regiondata_union_merge(
     goto cleanup;
 
 error:
+    trace("%lx: Merging %lx into %lx failed", source, source, target);
     result = 1;
 
 cleanup:
     // This returns the OSC which was acquired earlier to keep it open during
     // this merge.
     if (cleanup_inc_osc) {
-        regiondata_dec_osc(target);
+        regiondata_dec_osc(target trace_arg(NULL));
     }
 
     // Decrement the `target` RC again
@@ -619,6 +643,7 @@ static int regiondata_open(Py_region_t region) {
     // Mark the region as open.
     _Py_region_data *data = (_Py_region_data*)region;
     data->open_tick = _PyOwnership_get_open_region_tick();
+    trace("  - %lx: is now open", data);
 
     // Check if opening the region was successful
     if (data->open_tick == OPEN_TICK_CLOSED) {
@@ -641,13 +666,14 @@ static int regiondata_open(Py_region_t region) {
     } else if (regiondata_get_parent(region) != 0) {
         Py_region_t parent = regiondata_get_parent(region);
         SUCCEEDS(regiondata_open(parent));
-        SUCCEEDS(regiondata_inc_osc(parent));
+        SUCCEEDS(regiondata_inc_osc(parent trace_arg(region)));
     }
 
     // Check for failure, which would leave the region closed
     return 0;
 
 error:
+    trace("  - %lx: opening failed", region);
     // Mark the region as closed on failure.
     data->open_tick = OPEN_TICK_CLOSED;
     return 1;
@@ -680,6 +706,7 @@ static void regiondata_mark_as_dirty(Py_region_t region) {
     // Mark region as dirty
     _Py_region_data* data = (_Py_region_data*)region;
     data->open_tick = OPEN_TICK_DIRTY;
+    trace("  - %lx: is now dirty", region);
 }
 
 static int regiondata_is_dirty(Py_region_t region) {
@@ -740,6 +767,7 @@ static int regiondata_close(Py_region_t region) {
     // Mark the region as closed.
     _Py_region_data *data = (_Py_region_data*)region;
     data->open_tick = OPEN_TICK_CLOSED;
+    trace("  - %lx: is now closed", region);
 
     // Notify the owner
     if (HAS_OWNER_TAG(region, OWNER_TAG_COWN)) {
@@ -748,14 +776,11 @@ static int regiondata_close(Py_region_t region) {
         // from error paths.
     } else if (regiondata_get_parent(region) != 0) {
         Py_region_t parent = regiondata_get_parent(region);
-        regiondata_dec_osc(parent);
-        SUCCEEDS(regiondata_check_status(parent));
+        regiondata_dec_osc(parent trace_arg(region));
     }
 
     // Check for failure, which would leave the region closed
     return 0;
-error:
-    return -1;
 }
 
 static int regiondata_closes_after_lrc(Py_region_t region, Py_ssize_t lrc) {
@@ -845,7 +870,7 @@ static int regiondata_check_status(Py_region_t region) {
  * This might open this and parent regions, which can fail. See
  * `regiondata_open` for possible failures.
  * */
-static int regiondata_inc_lrc(Py_region_t region) {
+static int regiondata_inc_lrc(Py_region_t region if_trace(, Py_uintptr_t reason)) {
     // Invariant:
     ASSERT_IS_UNION_ROOT(region);
 
@@ -862,6 +887,7 @@ static int regiondata_inc_lrc(Py_region_t region) {
     // Update the LRC, once the region is open
     _Py_region_data *data = (_Py_region_data*)region;
     data->lrc += 1;
+    trace_lrc("%lx: LRC++ for %lx", region, reason);
 
     return 0;
 }
@@ -869,7 +895,7 @@ static int regiondata_inc_lrc(Py_region_t region) {
 /* This decreases the local reference count.
  *
  * */
-static void regiondata_dec_lrc(Py_region_t region) {
+static void regiondata_dec_lrc(Py_region_t region if_trace(, Py_uintptr_t reason)) {
     // Invariant:
     ASSERT_IS_UNION_ROOT(region);
 
@@ -881,6 +907,7 @@ static void regiondata_dec_lrc(Py_region_t region) {
     // Update the LRC
     _Py_region_data *data = (_Py_region_data*)region;
     if (data->lrc == 0) {
+        trace("%lx: LRC-- for %lx, but the LRC is 0", region, reason);
         // Try to open the region to mark it as dirty
         //
         // This can fail if the region is owned by a cown which
@@ -896,6 +923,7 @@ static void regiondata_dec_lrc(Py_region_t region) {
         }
     } else {
         data->lrc -= 1;
+        trace_lrc("%lx: LRC-- for %lx", region, reason);
 
         // Check the region state to determine if it should be closed.
         SUCCEEDS(regiondata_check_close(region));
@@ -915,7 +943,7 @@ error:
  * This might open this and parent regions, which can fail. See
  * `regiondata_open` for possible failures.
  * */
-static int regiondata_inc_osc(Py_region_t region) {
+static int regiondata_inc_osc(Py_region_t region if_trace(, Py_uintptr_t reason)) {
     // Invariant:
     ASSERT_IS_UNION_ROOT(region);
 
@@ -932,16 +960,14 @@ static int regiondata_inc_osc(Py_region_t region) {
     // Update the OSC, once the region is open
     _Py_region_data *data = (_Py_region_data*)region;
     data->osc += 1;
+    trace_lrc("%lx: OSC++ for %lx", region, reason);
 
     return 0;
 }
 
 /* This decreases the open-subregion count. (This does not update RC)
- *
- * This might close this and parent regions, which can fail. See
- * `regiondata_close` for possible failures.
  * */
-static void regiondata_dec_osc(Py_region_t region) {
+static void regiondata_dec_osc(Py_region_t region if_trace(, Py_uintptr_t reason)) {
     // Invariant:
     ASSERT_IS_UNION_ROOT(region);
 
@@ -953,6 +979,7 @@ static void regiondata_dec_osc(Py_region_t region) {
     // Update the OSC
     _Py_region_data *data = (_Py_region_data*)region;
     data->osc -= 1;
+    trace_lrc("%lx: OSC-- for %lx", region, reason);
 
     // Check the region state to determine if it should be closed.
     SUCCEEDS(regiondata_check_close(region));
@@ -969,9 +996,6 @@ error:
 
 /* Setting the parent of an open region, might open the new parent region
  * and close the old parent region.
- *
- * This can fail, see `regiondata_open` and `regiondata_close` for possible
- * failures.
  * */
 static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent) {
     // Check invariant:
@@ -988,11 +1012,11 @@ static int regiondata_set_parent(Py_region_t region, Py_region_t new_parent) {
 
     // Notify the parents, if this region is open.
     if (regiondata_is_open(region)) {
-        if (regiondata_inc_osc(new_parent)) {
+        if (regiondata_inc_osc(new_parent trace_arg(region))) {
             return 1;
         }
 
-        regiondata_dec_osc(old_parent);
+        regiondata_dec_osc(old_parent trace_arg(region));
     }
 
     // Make sure the sub-region is removed from the old parent and added to the
@@ -1286,13 +1310,15 @@ typedef struct AddRegionState {
 
 static
 int _add_to_region_check_obj(PyObject *obj, void *state_void) {
+    trace("  - %lx: traversing %p", ((AddRegionState*)state_void)->merge_region, obj);
+
     // Sanity Check, all objects given to this function should act like they're
     // in the subject region
     assert(_PyRegion_Get(obj) == ((AddRegionState*)state_void)->merge_region);
     assert(_PyRegion_GetFollowPending(obj) == ((AddRegionState*)state_void)->subject_region);
 
     // `_add_to_region_visit` already does the filtering and ensures that only
-    // new objects are traversed. This is therefore a no-op indicateing that
+    // new objects are traversed. This is therefore a no-op indicating that
     // the object should be traversed.
     return Py_OWNERSHIP_TRAVERSE_VISIT;
 }
@@ -1343,15 +1369,19 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     // Take ownership of local objects
     _Py_region_data *merge_data = (_Py_region_data*)state->merge_region;
     if (IS_LOCAL_REGION(tgt_region)) {
-        // Add incoming references to the LRC
-        //
-        // FIXME(regions): xFrednet: Handle weak references
-        merge_data->lrc += Py_REFCNT(tgt);
+        Py_ssize_t lrc_change = Py_REFCNT(tgt);
 
         // -1 if the RC accounts for a now intra-region reference
         if (!state->add_ref_target) {
-            merge_data->lrc -= 1;
+            lrc_change -= 1;
         }
+
+        trace("    - %lx: %p -> %p: Moving local target (LRC += %zd)", merge_data, src, tgt, lrc_change);
+
+        // Add incoming references to the LRC
+        //
+        // FIXME(regions): xFrednet: Handle weak references
+        merge_data->lrc += lrc_change;
 
         // Add the object to the merge region, this will also prevent it
         // from being traversed again.
@@ -1365,6 +1395,7 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     // added to the merge region by a previous iteration. This therefore only
     // adjusts the LRC
     if (tgt_region == state->subject_region) {
+        trace("    - %lx: %p -> %p: Intra-region reference (LRC--)", merge_data, src, tgt);
         // The LRC of the merge region can go negative by this operation as
         // this also includes references which should be subtract from the
         // LRC of the subject region.
@@ -1471,6 +1502,7 @@ static PyRegion_staged_ref_t regiondata_stage_objects(
     _Py_region_data* merge_data = (_Py_region_data*)add_state.merge_region;
     regiondata_inc_rc(subject_region);
     merge_data->owner = (subject_region | OWNER_TAG_MERGE_PENDING);
+    trace("%lx: Staging %d references from %p in %zx", subject_region, tgt_count, src, add_state.merge_region);
 
     for (int tgt_i = 0; tgt_i < tgt_count; tgt_i += 1) {
         PyObject *tgt = targets[tgt_i];
@@ -1511,6 +1543,7 @@ static PyRegion_staged_ref_t regiondata_stage_objects(
     goto finally;
 
 error:
+    trace("  %lx: Staging failed", subject_region);
     if (HAS_OWNER_TAG(add_state.merge_region, OWNER_TAG_MERGE_PENDING)) {
         // Merge the region into local, to undo any ownership changes
         regiondata_union_merge(add_state.merge_region, _Py_LOCAL_REGION);
@@ -1542,7 +1575,7 @@ static void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
         // and the one below is not the root of the union root? There is an
         // assert for this in `regiondata_dec_lrc`
         Py_region_t region = STAGED_AS_PTR(staged_ref);
-        regiondata_dec_lrc(region);
+        regiondata_dec_lrc(region trace_arg(staged_ref));
         regiondata_dec_rc(region);
         return;
     }
@@ -1557,7 +1590,7 @@ static void staged_ref_reset(PyRegion_staged_ref_t staged_ref) {
             Py_region_t region = regions[i];
 
             // Decrement the LRC
-            regiondata_dec_lrc(region);
+            regiondata_dec_lrc(region trace_arg(staged_ref));
             regiondata_dec_rc(region);
 
             i += 1;
@@ -1663,7 +1696,7 @@ static int regiondata_clean(PyObject* bridge) {
 
     // Incrementing the RC of the bridge will ensure that we don't
     // accidentally release a cown early
-    if (regiondata_inc_lrc(_PyRegion_Get(bridge))) {
+    if (regiondata_inc_lrc(_PyRegion_Get(bridge) trace_arg(bridge))) {
         return -1;
     }
     Py_INCREF(bridge);
@@ -1739,7 +1772,7 @@ static int regiondata_clean(PyObject* bridge) {
         // these would add a reference, expect cases when the region has been merged
         // into the local region. But then we should never have a reference to it.
         if (owner != 0) {
-            regiondata_dec_lrc(clean_region);
+            regiondata_dec_lrc(clean_region trace_arg(item));
         }
 
         // The region should now be marked as clean
@@ -1751,7 +1784,7 @@ static int regiondata_clean(PyObject* bridge) {
         clean_region_data->bridge = _PyRegionObject_CAST(item);
         clean_region_data->bridge->region = clean_region; // Move RC ownership
         if (!was_open && regiondata_is_open(clean_region)) {
-            regiondata_inc_osc(clean_region);
+            regiondata_inc_osc(clean_region trace_arg(clean_region));
         }
 
         // Increase the number of regions which have been cleaned
@@ -1766,7 +1799,7 @@ finally:
     // Decrease the LRC, which was incremented at the start to keep the region
     // open. This shoudln't close the region, since the bridge object should
     // only be borrowed.
-    regiondata_dec_lrc(_PyRegion_Get(bridge));
+    regiondata_dec_lrc(_PyRegion_Get(bridge) trace_arg(bridge));
     Py_DECREF(bridge);
     Py_XDECREF(pending_list);
     // Resume invariant
@@ -1850,7 +1883,7 @@ _Py_movable_status _PyRegion_GetMoveability(PyObject *obj) {
     if (PyFunction_Check(obj)) {
         return Py_MOVABLE_FREEZE;
     }
-    
+
     // CWrappers can't really be owned, but need some special handling since
     // interpreters could still race on their RC. Solution, throw them in the
     // freezer
@@ -1870,6 +1903,16 @@ _Py_movable_status _PyRegion_GetMoveability(PyObject *obj) {
         || PyAsyncGen_CheckExact(obj)
         || PyAsyncGenASend_CheckExact(obj)
     ) {
+        return Py_MOVABLE_NO;
+    }
+
+    // Exceptions don't hold anything obviously problematic preventing them
+    // from being moved into a region. The actual problem is that the runtime
+    // stores references to them and that these are already emitted on an
+    // error path. Moving them into a region could add more problems.
+    // We should discuss how to handle these, maybe freezing is the correct
+    // approach?
+    if (PyExceptionInstance_Check(obj)) {
         return Py_MOVABLE_NO;
     }
 
@@ -1895,10 +1938,6 @@ int _PyRegion_New(_PyRegionObject *bridge) {
     data->bridge = bridge;
     bridge->region = region;
     assert(data->rc == 1);
-
-    // The region starts with an LRC of 1, due to the local reference to the
-    // bridge object
-    // regiondata_inc_lrc(region);
 
     // This should never fail but might if the given bridge object has
     // some object which can't be moved.
@@ -2127,7 +2166,7 @@ int _PyRegion_AddRef(PyObject *src, PyObject *tgt) {
 
     if (IS_LOCAL_REGION(src_region)) {
         // References from the local region are allowed, but need to be registered
-        return regiondata_inc_lrc(tgt_region);
+        return regiondata_inc_lrc(tgt_region trace_arg(tgt));
     }
 
     // Attempt to slurp the target object into the source region
@@ -2146,7 +2185,7 @@ static int _add_local_refs(PyObject *src, int tgt_count, PyObject **targets) {
 
     for (arg_i = 0; arg_i < tgt_count; arg_i += 1) {
         PyObject* tgt = targets[arg_i];
-        result = regiondata_inc_lrc(_PyRegion_Get(tgt));
+        result = regiondata_inc_lrc(_PyRegion_Get(tgt) trace_arg(tgt));
 
         if (result != 0) {
             goto error;
@@ -2158,7 +2197,7 @@ static int _add_local_refs(PyObject *src, int tgt_count, PyObject **targets) {
 error:
     for (int undo_i = 0; undo_i < arg_i; undo_i += 1) {
         PyObject* tgt = targets[undo_i];
-        regiondata_dec_lrc(_PyRegion_Get(tgt));
+        regiondata_dec_lrc(_PyRegion_Get(tgt) trace_arg(tgt));
     }
     return result;
 }
@@ -2167,7 +2206,7 @@ static PyRegion_staged_ref_t _stage_local_refs(PyObject *src, int argc, PyObject
     // Fast/No-allocation path for single local references
     if (argc == 1) {
         Py_region_t tgt_region = _PyRegion_Get(targets[0]);
-        if (regiondata_inc_lrc(tgt_region)) {
+        if (regiondata_inc_lrc(tgt_region trace_arg(targets[0]))) {
             return PyRegion_staged_ref_ERR;
         }
         regiondata_inc_rc(tgt_region);
@@ -2190,7 +2229,7 @@ static PyRegion_staged_ref_t _stage_local_refs(PyObject *src, int argc, PyObject
         Py_region_t tgt_region = _PyRegion_Get(targets[i]);
 
         // LRC += 1
-        if (regiondata_inc_lrc(tgt_region)) {
+        if (regiondata_inc_lrc(tgt_region trace_arg(targets[i]))) {
             goto error;
         }
 
@@ -2350,7 +2389,7 @@ void _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
     if (IS_LOCAL_REGION(src_region)) {
         // Decrease the target region LRC since this reference came from
         // the local region
-        regiondata_dec_lrc(_PyRegion_Get(tgt));
+        regiondata_dec_lrc(_PyRegion_Get(tgt) trace_arg(tgt));
         return;
     }
 
@@ -2380,7 +2419,7 @@ void _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
 }
 
 int _PyRegion_AddLocalRef(PyObject *tgt) {
-    return regiondata_inc_lrc(_PyRegion_Get(tgt));
+    return regiondata_inc_lrc(_PyRegion_Get(tgt) trace_arg(tgt));
 }
 
 int _PyRegion_AddLocalRefs(int argc, ...) {
@@ -2415,7 +2454,7 @@ int _PyRegion_AddLocalRefs(int argc, ...) {
 }
 
 void _PyRegion_RemoveLocalRef(PyObject *tgt) {
-    regiondata_dec_lrc(_PyRegion_Get(tgt));
+    regiondata_dec_lrc(_PyRegion_Get(tgt) trace_arg(tgt));
 }
 
 int _PyRegion_TakeRefs(PyObject *src, int argc, ...) {

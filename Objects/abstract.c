@@ -166,6 +166,7 @@ PyObject_GetItem(PyObject *o, PyObject *key)
 
     PyMappingMethods *m = Py_TYPE(o)->tp_as_mapping;
     if (m && m->mp_subscript) {
+        // TODO(regions): PyRegion_NotifyTypeUse(Py_TYPE(o));
         PyObject *item = m->mp_subscript(o, key);
         assert(_Py_CheckSlotResult(o, "__getitem__", item != NULL));
         return item;
@@ -199,10 +200,10 @@ PyObject_GetItem(PyObject *o, PyObject *key)
         }
         if (meth && meth != Py_None) {
             result = PyObject_CallOneArg(meth, key);
-            Py_DECREF(meth);
+            PyRegion_CLEARLOCAL(meth);
             return result;
         }
-        Py_XDECREF(meth);
+        PyRegion_CLEARLOCAL(meth);
         PyErr_Format(PyExc_TypeError, "type '%.200s' is not subscriptable",
                      ((PyTypeObject *)o)->tp_name);
         return NULL;
@@ -2906,12 +2907,13 @@ PyObject_GetIter(PyObject *o)
         return type_error("'%.200s' object is not iterable", o);
     }
     else {
+        // FIXME(regions): xFrednet: PyRegion_NotifyTypeUse(t);
         PyObject *res = (*f)(o);
         if (res != NULL && !PyIter_Check(res)) {
             PyErr_Format(PyExc_TypeError,
                          "%T.__iter__() must return an iterator, not %T",
                          o, res);
-            Py_SETREF(res, NULL);
+            PyRegion_CLEARLOCAL(res);
         }
         return res;
     }
@@ -2957,11 +2959,8 @@ static int
 iternext(PyObject *iter, PyObject **item)
 {
     iternextfunc tp_iternext = Py_TYPE(iter)->tp_iternext;
-    // Check if the type is Pyrona aware, otherwise, mark all open
-    // regions as dirty
-    // FIXME(regions): Enable this check, which currently almost always triggers
-    // PyRegion_NotifyTypeUse(Py_TYPE(iter));
 
+    // FIXME(regions): PyRegion_NotifyTypeUse(Py_TYPE(iter));
     if ((*item = tp_iternext(iter))) {
         return 1;
     }
