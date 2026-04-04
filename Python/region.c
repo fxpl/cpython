@@ -1883,7 +1883,7 @@ _Py_movable_status _PyRegion_GetMoveability(PyObject *obj) {
     if (PyFunction_Check(obj)) {
         return Py_MOVABLE_FREEZE;
     }
-    
+
     // CWrappers can't really be owned, but need some special handling since
     // interpreters could still race on their RC. Solution, throw them in the
     // freezer
@@ -1903,6 +1903,16 @@ _Py_movable_status _PyRegion_GetMoveability(PyObject *obj) {
         || PyAsyncGen_CheckExact(obj)
         || PyAsyncGenASend_CheckExact(obj)
     ) {
+        return Py_MOVABLE_NO;
+    }
+
+    // Exceptions don't hold anything obviously problematic preventing them
+    // from being moved into a region. The actual problem is that the runtime
+    // stores references to them and that these are already emitted on an
+    // error path. Moving them into a region could add more problems.
+    // We should discuss how to handle these, maybe freezing is the correct
+    // approach?
+    if (PyExceptionInstance_Check(obj)) {
         return Py_MOVABLE_NO;
     }
 

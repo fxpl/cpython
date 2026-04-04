@@ -2347,10 +2347,10 @@ _PyEval_UnpackIterableStackRef(PyThreadState *tstate, PyObject *v,
         if (w == NULL) {
             if (_PyErr_Occurred(tstate))
                 goto Error;
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             return 1;
         }
-        Py_DECREF(w);
+        PyRegion_CLEARLOCAL(w);
 
         if (PyList_CheckExact(v) || PyTuple_CheckExact(v)
               || PyDict_CheckExact(v)) {
@@ -2388,14 +2388,14 @@ _PyEval_UnpackIterableStackRef(PyThreadState *tstate, PyObject *v,
     }
     /* Resize the list. */
     Py_SET_SIZE(l, ll - argcntafter);
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return 1;
 
 Error:
     for (; i > 0; i--, sp++) {
         PyStackRef_CLOSE(*sp);
     }
-    Py_XDECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return 0;
 }
 
