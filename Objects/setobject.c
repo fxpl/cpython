@@ -637,6 +637,7 @@ set_repr_lock_held(PySetObject *so)
     while (set_next(so, &pos, &entry)) {
         PyObject *entry_key = PyRegion_NewRef(entry->key);
         if(entry_key == NULL) {
+            assert(PyRegion_IsLocal(keys));
             Py_DECREF(keys);
             goto done;
         }
@@ -1716,7 +1717,11 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
             Py_DECREF(result);
             return NULL;
         }
-        PyRegion_XSETLOCALREF(result, newresult);
+        if(PyRegion_XSETLOCALREF(result, newresult)) {
+            PyRegion_RemoveLocalRef(result);
+            Py_DECREF(result);
+            return NULL;
+        }
         // Py_SETREF(result, newresult);
     }
     return result;

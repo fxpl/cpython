@@ -382,7 +382,9 @@ pairwise_next(PyObject *op)
     }
     if (old == NULL) {
         old = (*Py_TYPE(it)->tp_iternext)(it);
-        PyRegion_XSETREF(po, po->old, old);
+        if(PyRegion_XSETREF(po, po->old, old)) {
+            return NULL;
+        }
         // Py_XSETREF(po->old, old);
         if (old == NULL) {
             PyRegion_CLEAR(po, po->it);
@@ -463,7 +465,11 @@ pairwise_next(PyObject *op)
     }
 
     end:
-        PyRegion_XSETREF(po, po->old, new);
+        if(PyRegion_XSETREF(po, po->old, new)) {
+            PyRegion_RemoveLocalRef(new);
+            Py_DECREF(new);
+            return NULL;
+        }
         // Py_XSETREF(po->old, new);
         PyRegion_RemoveLocalRef(old);
         Py_DECREF(old);

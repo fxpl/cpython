@@ -476,7 +476,11 @@ get_field_object(SubString *input, PyObject *args, PyObject *kwargs,
             goto error;
 
         /* assign to obj */
-        PyRegion_XSETLOCALREF(obj, tmp);
+        if(PyRegion_XSETLOCALREF(obj, tmp)) {
+            PyRegion_RemoveLocalRef(tmp);
+            Py_DECREF(tmp);
+            goto error;
+        }
         // Py_SETREF(obj, tmp);
     }
     /* end of iterator, this is the non-error case */
@@ -829,7 +833,11 @@ output_markup(SubString *field_name, SubString *format_spec,
             goto done;
 
         /* do the assignment, transferring ownership: fieldobj = tmp */
-        PyRegion_XSETLOCALREF(fieldobj, tmp);
+        if(PyRegion_XSETLOCALREF(fieldobj, tmp)) {
+            PyRegion_RemoveLocalRef(tmp);
+            Py_DECREF(tmp);
+            goto done;
+        }
         // Py_SETREF(fieldobj, tmp);
         tmp = NULL;
     }
