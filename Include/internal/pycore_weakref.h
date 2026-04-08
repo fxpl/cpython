@@ -174,6 +174,10 @@ extern Py_ssize_t _PyWeakref_GetWeakrefCount(PyObject *obj);
 // intact.
 extern void _PyWeakref_ClearWeakRefsNoCallbacks(PyObject *obj);
 
+// Same, but every weak reference listed in `keep` survives. The table is keyed
+// by the weak reference objects themselves, not by their referents.
+extern void _PyWeakref_ClearWeakRefsExcept(PyObject *obj, _Py_hashtable_t *keep);
+
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 PyAPI_FUNC(void) _PyWeakref_OnObjectFreeze(PyObject *object);
 PyAPI_FUNC(void) _PyImmutability_ClearWeakRefsWithCallback(PyObject *object, PyWeakReference **callbacks);

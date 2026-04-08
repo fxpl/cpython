@@ -134,6 +134,7 @@
     <ClCompile Include="..\Objects\classobject.c" />
     <ClCompile Include="..\Objects\codeobject.c" />
     <ClCompile Include="..\Objects\complexobject.c" />
+    <ClCompile Include="..\Objects\cownobject.c" />
     <ClCompile Include="..\Objects\descrobject.c" />
     <ClCompile Include="..\Objects\dictobject.c" />
     <ClCompile Include="..\Objects\enumobject.c" />
@@ -161,6 +162,7 @@
     <ClCompile Include="..\Objects\sliceobject.c" />
     <ClCompile Include="..\Objects\structseq.c" />
     <ClCompile Include="..\Objects\templateobject.c" />
+    <ClCompile Include="..\Objects\tracingregionobject.c" />
     <ClCompile Include="..\Objects\tupleobject.c" />
     <ClCompile Include="..\Objects\typeobject.c" />
     <ClCompile Include="..\Objects\typevarobject.c" />

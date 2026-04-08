@@ -8,6 +8,10 @@ extern "C" {
 #  error "Py_BUILD_CORE must be defined to include this header"
 #endif
 
+PyAPI_DATA(PyTypeObject) _PyTracingRegion_Type;
+PyAPI_FUNC(int) _PyTracingRegion_Close(PyObject* region);
+PyAPI_FUNC(int) _PyTracingRegion_IsClosed(PyObject* region);
+
 struct _Py_immutability_state {
     // FIXME(immutability): We probably need to lock any reads and writes. And
     // we probably want a read write lock for this.

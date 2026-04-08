@@ -1,0 +1,29 @@
+#ifndef Py_INTERNAL_COWN_H
+#define Py_INTERNAL_COWN_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifndef Py_BUILD_CORE
+#  error "Py_BUILD_CORE must be defined to include this header"
+#endif
+
+#include "object.h"
+#include "exports.h"
+
+typedef struct _PyCownObject _PyCownObject;
+#define _PyCownObject_CAST(op) _Py_CAST(_PyCownObject*, op)
+
+PyAPI_DATA(PyTypeObject) _PyCown_Type;
+
+typedef uint64_t _PyCown_ipid_t;
+typedef uint64_t _PyCown_thread_id_t;
+
+PyAPI_FUNC(_PyCown_ipid_t) _PyCown_ThisInterpreterId(void);
+PyAPI_FUNC(_PyCown_thread_id_t) _PyCown_ThisThreadId(void);
+
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* !Py_INTERNAL_COWN_H */
