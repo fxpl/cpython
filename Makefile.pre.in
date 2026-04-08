@@ -555,6 +555,7 @@ OBJECT_OBJS=	\
 		Objects/sliceobject.o \
 		Objects/structseq.o \
 		Objects/templateobject.o \
+		Objects/tracingregionobject.o \
 		Objects/tupleobject.o \
 		Objects/typeobject.o \
 		Objects/typevarobject.o \

@@ -650,6 +650,14 @@ immutable_exec(PyObject *module) {
         return -1;
     }
 
+    if (PyModule_AddType(module, &_PyTracingRegion_Type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_SetFreezable(
+            (PyObject*)&_PyTracingRegion_Type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+
     if (PyModule_AddIntConstant(module, "FREEZABLE_YES",
                                 _Py_FREEZABLE_YES) != 0) {
         return -1;
