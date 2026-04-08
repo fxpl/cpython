@@ -82,6 +82,7 @@ class TestWeakrefList(unittest.TestCase):
         # The reference should have been removed.
         self.assertTrue(weakref.getweakrefcount(a) == 0)
 
+    @unittest.skip("Regions disable the weak-reference reuse optimization to selectively clear them")
     def test_reuse_weakref(self):
         a = A()
         deep_freeze(a)

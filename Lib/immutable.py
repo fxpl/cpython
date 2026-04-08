@@ -45,6 +45,9 @@ FREEZABLE_EXPLICIT = _c.FREEZABLE_EXPLICIT
 FREEZABLE_PROXY = _c.FREEZABLE_PROXY
 InterpreterLocal = _c.InterpreterLocal
 SharedField = _c.SharedField
+TracingRegion = _c.TracingRegion
+Cown = _c.Cown
+RegionRef = _c.RegionRef
 
 # True when this build can share deeply frozen objects between interpreters.
 _cross_interpreter_sharing = _c._cross_interpreter_sharing
@@ -167,6 +170,9 @@ __all__ = [
     "FREEZABLE_PROXY",
     "InterpreterLocal",
     "SharedField",
+    "TracingRegion",
+    "Cown",
+    "RegionRef",
     "freezable",
     "unfreezable",
     "explicitlyFreezable",
