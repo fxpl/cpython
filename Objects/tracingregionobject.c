@@ -9,16 +9,14 @@
 #ifdef REGION_TRACING
 #define if_trace(...) __VA_ARGS__
 #define trace_arg(arg) , (Py_uintptr_t)(arg)
-#define trace(msg, region, ...) \
+#define trace(msg, ...) \
     do { \
-        printf(msg "\n", (Py_region_t)(region) __VA_OPT__(,) __VA_ARGS__); \
+        printf(msg "\n" __VA_OPT__(,) __VA_ARGS__); \
     } while(0)
-#define trace_lrc(...) trace(__VA_ARGS__)
 #else
 #define if_trace(...)
 #define trace_arg(...)
 #define trace(...)
-#define trace_lrc(...)
 #endif
 
 /* Macro that jumps to error, if the expression `x` does not succeed. */
@@ -114,6 +112,24 @@ gc_clear_collecting(PyGC_Head *g)
 // Copied from regions-main
 // ###################################################################
 
+static PyObject* list_pop(PyObject* s){
+    PyObject* item;
+    Py_ssize_t size = PyList_Size(s);
+    if(size == 0){
+        return NULL;
+    }
+    item = PyList_GetItem(s, size - 1);
+    if(item == NULL){
+        return NULL;
+    }
+    // This should never fail, since we shrink the size
+    if(PyList_SetSlice(s, size - 1, size, NULL)){
+        Py_DECREF(item);
+        return NULL;
+    }
+    return item;
+}
+
 typedef enum {
     Py_MOVABLE_YES = 0,
     Py_MOVABLE_NO = 1,
@@ -196,22 +212,296 @@ movable_status get_movable_status(PyObject *obj) {
     return Py_MOVABLE_YES;
 }
 
+// This uses the given arguments to create and throw a `RegionError`
+static void throw_region_error(
+    const char *format_str, const char *tp_name,
+    PyObject* src, PyObject* tgt)
+{
+    // Don't stomp existing exception
+    PyThreadState *tstate = PyThreadState_Get();
+    if (_PyErr_Occurred(tstate)) {
+        return;
+    }
+
+    PyErr_Format(PyExc_RuntimeError, format_str, tp_name);
+
+    // Set source and target fields
+    // Get the current exception (should be a RuntimeError)
+    PyObject *exc = PyErr_GetRaisedException();
+    assert(exc && PyObject_TypeCheck(exc, (PyTypeObject *)PyExc_RuntimeError));
+
+    // Add 'source' and 'target' attributes to the exception
+    PyObject_SetAttr(exc, &_Py_ID(source), src ? src : Py_None);
+    PyObject_SetAttr(exc, &_Py_ID(target), tgt ? tgt : Py_None);
+
+    PyErr_SetRaisedException((PyObject*)exc);
+}
+
+// Wrapper around tp_traverse that also visits the type object.
+static int
+traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *state)
+{
+    PyTypeObject *tp = Py_TYPE(obj);
+
+    // Visit the type with traverse
+    traverseproc traverse = tp->tp_traverse;
+    if (traverse != NULL) {
+        int err = traverse(obj, visit, state);
+        if (err) {
+            return err;
+        }
+    }
+
+
+    // Most `tp_traverse` don't visit the type even though they should.
+    // Here it won't hurt to potentially visit it twice, since types
+    // are non-movable but will be frozen.
+    return visit((PyObject *)Py_TYPE(obj), state);
+}
+
+// Returns the appropriate traversal function for reaching all references
+// from an object. Prefers tp_reachable, falls back to tp_traverse wrapped
+// to also visit the type. Emits a warning once per type on fallback.
+static traverseproc
+get_reachable_proc(PyTypeObject *tp)
+{
+    if (tp->tp_reachable != NULL) {
+        return tp->tp_reachable;
+    }
+
+    if (tp->tp_traverse != NULL) {
+        PySys_FormatStderr(
+            "regions: type '%.100s' has tp_traverse but no tp_reachable\n",
+            tp->tp_name);
+    } else {
+        PySys_FormatStderr(
+            "regions: type '%.100s' has no tp_traverse and no tp_reachable\n",
+            tp->tp_name);
+    }
+
+    // Always return the wrapper; even when tp_traverse is NULL, the wrapper
+    // will still visit the type object which tp_reachable is expected to do.
+    return traverse_via_tp_traverse;
+}
+
 // ###################################################################
 // Tracing Impl
 // ###################################################################
 
+static void
+gc_list_dissolve(PyGC_Head *list) {
+    struct _gc_runtime_state* gc_state = get_gc_state();
+    // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
+    gc_list_merge(list, &(gc_state->old[0].head));
+}
+
+typedef struct {
+    /// A list of all visited objects
+    _Py_hashtable_t *visited;
+    /// The number of refs coming into this object graph
+    Py_ssize_t external_rc;
+    // This is set if an object was frozen and the trace needs to restart to be valid
+    bool restart;
+    // The GC list used for this trace
+    PyGC_Head* gc_list;
+    // The source of the reference, this is used for error reporting
+    PyObject *src;
+    // List of pending objects that are not GC
+    PyObject *pending;
+} trace_state;
+
+static void trace_state_destroy(trace_state* state, bool dissolve_gc) {
+    if (state->visited) {
+        _Py_hashtable_destroy(state->visited);
+        state->visited = NULL;
+    }
+    if (state->pending) {
+        Py_DECREF(state->pending);
+        state->pending = NULL;
+    }
+
+    if (dissolve_gc) {
+        gc_list_dissolve(state->gc_list);
+    }
+}
+static int trace_state_init(trace_state* state, PyGC_Head *gc_list) {
+    assert(gc_list_is_empty(gc_list));
+
+    state->visited = NULL;
+    state->pending = NULL;
+
+    state->visited = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+    if (state->visited == NULL) {
+        goto error;
+    }
+
+    state->pending = PyList_New(0);
+    if (state->pending == NULL) {
+        goto error;
+    }
+
+    state->external_rc = 0;
+    state->restart = false;
+    state->gc_list = gc_list;
+    state->src = NULL;
+
+    return 0;
+error:
+    trace_state_destroy(state, false);
+    return -1;
+}
+
 typedef struct {
     Py_ssize_t objs;
     Py_ssize_t incoming_refs;
-} trace_res;
+} trace_result;
 
-static trace_res trace_object(PyObject* obj) {
-    trace_res res = {
-        .objs = 1,
-        .incoming_refs = 2,
-    };
+const int TRACE_RES_ERR = -1;
+const int TRACE_RES_DONE = 0;
+const int TRACE_RES_RESTART = 1;
 
+static int _move_obj(PyObject* obj, trace_state* state) {
+    // Check the movability of the object:
+    movable_status status = get_movable_status(obj);
+    switch (status) {
+    case Py_MOVABLE_YES:
+        break;
+    case Py_MOVABLE_NO:
+        trace("    - %p is not movable", obj);
+        throw_region_error(
+            "Instances of type '%s' are not movable", Py_TYPE(obj)->tp_name,
+            state->src, obj);
+        return TRACE_RES_ERR;
+    case Py_MOVABLE_FREEZE:
+        // Freeze the object, this can invalidate our `external_rc`, we restart after this trace
+        trace("    - freezing %p", obj);
+        if (_PyImmutability_Freeze(obj)) {
+            return TRACE_RES_ERR;
+        }
+
+        state->restart = true;
+        return 0;
+    default:
+        assert(false);
+        break;
+    }
+
+    // Move the object
+    Py_ssize_t lrc_change = Py_REFCNT(obj);
+    if (state->src != NULL) {
+        // -1 for the reference we just followed
+        lrc_change -= 1;
+    }
+    trace("    - moving %p; LRC += %zd", obj, lrc_change);
+    state->external_rc += lrc_change;
+
+    if (_Py_hashtable_set(state->visited, obj, obj) == -1) {
+        return -1;
+    }
+
+    // This makes sure the object is removed from the local GC list.
+    if (PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
+        // This flag may be set if the region is constructed as part of
+        // a finalizer. If the flag remains set, for an object removed
+        // from its GC list bad things can happen.
+        gc_clear_collecting(_Py_AS_GC(obj));
+        // Clearing the space flag makes it easy to merge this list back
+        // into the local GC lists
+        gc_set_old_space(_Py_AS_GC(obj), 0);
+        gc_list_move(_Py_AS_GC(obj), state->gc_list);
+    }
+
+    if (PyList_Append(state->pending, obj)) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int _trace_visit(PyObject* obj, trace_state* state) {
+    // References to immutable objects are allowed
+    if (_PyImmutability_CanViewAsImmutable(obj)) {
+        assert(_Py_IsImmutable(obj));
+        return 0;
+    }
+
+    // Check if the object is already part of the region
+    if (_Py_hashtable_get(state->visited, (void*)obj)) {
+        trace("    - Internal reference to %p; LRC -= 1", obj);
+        state->external_rc -= 1;
+        return 0;
+    }
+
+    return _move_obj(obj, state);
+}
+
+static int _trace_once(PyObject* obj, trace_result* result, PyGC_Head *gc_list) {
+    trace("  - starting trace from %p", obj);
+    int res = TRACE_RES_DONE;
+
+    // Make sure gc_list is valid
+    PyGC_Head local_gc_list;
+    bool dissolve_gc = false;
+    if (gc_list == NULL) {
+        gc_list_init(&local_gc_list);
+        gc_list = &local_gc_list;
+        dissolve_gc = true;
+    }
+
+    // init the trace state
+    trace_state state;
+    if (trace_state_init(&state, gc_list)) {
+        return TRACE_RES_ERR;
+    }
+
+    SUCCEEDS(_move_obj(obj, &state));
+
+    while (PyList_GET_SIZE(state.pending) > 0) {
+        // Find the next pending item:
+        PyObject *item = list_pop(state.pending);
+
+        // Traverse item
+        state.src = item;
+        trace("  - traversing %p", item);
+        traverseproc proc = get_reachable_proc(Py_TYPE(item));
+        SUCCEEDS(proc(item, (visitproc)_trace_visit, (void*)&state));
+    }
+
+    if (state.restart) {
+        res = TRACE_RES_RESTART;
+    }
+
+    goto finally;
+error:
+    dissolve_gc = true;
+    res = TRACE_RES_ERR;
+finally:
+    result->incoming_refs = state.external_rc;
+    result->objs = _Py_hashtable_len(state.visited);
+    trace_state_destroy(&state, dissolve_gc);
     return res;
+}
+
+static int trace_object(PyObject* obj, trace_result* result, PyGC_Head *gc_list) {
+    const int TRIES = 2;
+    trace("Starting trace for %p", obj);
+    for (int i = 0; i < TRIES; i++) {
+        // Reset trace
+        result->objs = 0;
+        result->incoming_refs = 0;
+
+        // Trace object
+        int res = _trace_once(obj, result, gc_list);
+        if (res == TRACE_RES_RESTART) {
+            trace("- restarting trace for %p", obj);
+            continue;
+        }
+        return res;
+    }
+
+    return TRACE_RES_DONE;
 }
 
 // ###################################################################
@@ -221,34 +511,42 @@ static trace_res trace_object(PyObject* obj) {
 typedef struct {
     PyObject_HEAD
     PyObject *dict;
+    // The GC list containing all objects, used during transfer
+    PyGC_Head gc_list;
 } TracingRegionObject;
 
 static int
-TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg)
-{
+TracingRegion_init(TracingRegionObject *self, PyObject *args, PyObject *kwargs) {
+    gc_list_init(&self->gc_list);
+    return 0;
+}
+
+static int
+TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
     Py_VISIT(self->dict);
     return 0;
 }
 
 static int
-TracingRegion_clear(TracingRegionObject *self)
-{
+TracingRegion_clear(TracingRegionObject *self) {
     Py_CLEAR(self->dict);
     return 0;
 }
 
 static void
-TracingRegion_dealloc(TracingRegionObject *self)
-{
+TracingRegion_dealloc(TracingRegionObject *self) {
     PyObject_GC_UnTrack(self);
     TracingRegion_clear(self);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 static PyObject* TracingRegion_trace(PyObject *op) {
-    trace_res res = trace_object(op);
+    trace_result result;
+    if (trace_object(op, &result, NULL)) {
+        return NULL;  // propagate Python exception
+    }
 
-    PyObject *t = Py_BuildValue("(ii)", res.objs, res.incoming_refs);
+    PyObject *t = Py_BuildValue("(ii)", result.objs, result.incoming_refs);
     if (t == NULL) {
         return NULL;  // propagate Python exception
     }
@@ -278,6 +576,7 @@ PyTypeObject _PyTracingRegion_Type = {
     .tp_members = TracingRegion_members,
     .tp_methods = TracingRegion_methods,
     .tp_dictoffset = offsetof(TracingRegionObject, dict),
+    .tp_init = (initproc)TracingRegion_init,
     .tp_new = PyType_GenericNew,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
