@@ -291,8 +291,7 @@ get_reachable_proc(PyTypeObject *tp)
 static void
 gc_list_dissolve(PyGC_Head *list) {
     struct _gc_runtime_state* gc_state = get_gc_state();
-    // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
-    gc_list_merge(list, &(gc_state->old[0].head));
+    gc_list_merge(list, &(gc_state->young.head));
 }
 
 typedef struct {
@@ -310,7 +309,7 @@ typedef struct {
     PyObject *pending;
 } trace_state;
 
-static void trace_state_destroy(trace_state* state, bool dissolve_gc) {
+static void trace_state_destroy(trace_state* state) {
     if (state->visited) {
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
@@ -319,13 +318,9 @@ static void trace_state_destroy(trace_state* state, bool dissolve_gc) {
         Py_DECREF(state->pending);
         state->pending = NULL;
     }
-
-    if (dissolve_gc) {
-        gc_list_dissolve(state->gc_list);
-    }
 }
 static int trace_state_init(trace_state* state, PyGC_Head *gc_list) {
-    assert(gc_list_is_empty(gc_list));
+    assert(gc_list == NULL || gc_list_is_empty(gc_list));
 
     state->visited = NULL;
     state->pending = NULL;
@@ -349,7 +344,7 @@ static int trace_state_init(trace_state* state, PyGC_Head *gc_list) {
 
     return 0;
 error:
-    trace_state_destroy(state, false);
+    trace_state_destroy(state);
     return -1;
 }
 
@@ -401,8 +396,8 @@ static int _move_obj(PyObject* obj, trace_state* state) {
         return -1;
     }
 
-    // This makes sure the object is removed from the local GC list.
-    if (PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
+    // This moves the object into the region list, if provided.
+    if (state->gc_list && PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
         // This flag may be set if the region is constructed as part of
         // a finalizer. If the flag remains set, for an object removed
         // from its GC list bad things can happen.
@@ -441,15 +436,6 @@ static int _trace_once(PyObject* obj, trace_result* result, PyGC_Head *gc_list) 
     trace("  - starting trace from %p", obj);
     int res = TRACE_RES_DONE;
 
-    // Make sure gc_list is valid
-    PyGC_Head local_gc_list;
-    bool dissolve_gc = false;
-    if (gc_list == NULL) {
-        gc_list_init(&local_gc_list);
-        gc_list = &local_gc_list;
-        dissolve_gc = true;
-    }
-
     // init the trace state
     trace_state state;
     if (trace_state_init(&state, gc_list)) {
@@ -475,12 +461,11 @@ static int _trace_once(PyObject* obj, trace_result* result, PyGC_Head *gc_list) 
 
     goto finally;
 error:
-    dissolve_gc = true;
     res = TRACE_RES_ERR;
 finally:
     result->incoming_refs = state.external_rc;
     result->objs = _Py_hashtable_len(state.visited);
-    trace_state_destroy(&state, dissolve_gc);
+    trace_state_destroy(&state);
     return res;
 }
 
@@ -494,8 +479,14 @@ static int trace_object(PyObject* obj, trace_result* result, PyGC_Head *gc_list)
 
         // Trace object
         int res = _trace_once(obj, result, gc_list);
+
+        // Restart trace on demand
         if (res == TRACE_RES_RESTART) {
             trace("- restarting trace for %p", obj);
+            if (gc_list != NULL) {
+                gc_list_dissolve(gc_list);
+                assert(gc_list_is_empty(gc_list));
+            }
             continue;
         }
         return res;
@@ -530,6 +521,10 @@ TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
 static int
 TracingRegion_clear(TracingRegionObject *self) {
     Py_CLEAR(self->dict);
+    // This is deallocating a closed region, we just dissolve it
+    if (!gc_list_is_empty(&self->gc_list)) {
+        gc_list_dissolve(&self->gc_list);
+    }
     return 0;
 }
 
@@ -552,6 +547,51 @@ static PyObject* TracingRegion_trace(PyObject *op) {
     }
 
     return t;
+}
+
+/* This method traces the region and closes it if the caller has the only
+ * owning reference into the graph. The reference passed into this function
+ * needs to be borrowed.
+ *
+ * This function requires the GIL to be held.
+ *
+ * Returns -1 if an exception was raised. 0 if the region couldn't be closed
+ * and 1 if the region was closed.
+ */
+int _PyTracingRegion_Close(PyObject* op) {
+    TracingRegionObject *self = (TracingRegionObject*)op;
+    assert(gc_list_is_empty(&self->gc_list));
+
+    trace_result result;
+    if (trace_object(op, &result, &self->gc_list)) {
+        return -1;  // propagate Python exception
+    }
+
+    // Keep the region open, if the there are more incoming references
+    // besides the expected owning one
+    if (result.incoming_refs > 1) {
+        trace("- Failed to close region %p, there are %zd incoming references", self, result.incoming_refs);
+        gc_list_dissolve(&self->gc_list);
+        assert(gc_list_is_empty(&self->gc_list));
+        return 1;
+    }
+
+    trace("- Closed region %p", self);
+    assert(!gc_list_is_empty(&self->gc_list));
+    return 0;
+}
+
+/* This method opens the region by dissolving it and all objects into the
+ * local GC list.
+ *
+ * This function requires the GIL to be held.
+ */
+int _PyTracingRegion_Open(PyObject* op) {
+    TracingRegionObject *self = (TracingRegionObject*)op;
+    assert(!gc_list_is_empty(&self->gc_list));
+    gc_list_dissolve(&self->gc_list);
+    assert(gc_list_is_empty(&self->gc_list));
+    return 0;
 }
 
 static PyMethodDef TracingRegion_methods[] = {
@@ -581,4 +621,6 @@ PyTypeObject _PyTracingRegion_Type = {
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
-
+// TODO: Weak-references pointing into the trace are not handled
+// TODO: Weak-references part of the trace are not handled
+//
