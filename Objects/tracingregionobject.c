@@ -3,6 +3,7 @@
 #include "pycore_gc.h"            // _PyObject_GC_IS_TRACKED()
 #include "pycore_object.h"        // _PyObject_GC_TRACK(), _PyDebugAllocatorStats()
 #include "pycore_descrobject.h"
+#include "pycore_weakref.h"
 
 // #define REGION_TRACING
 
@@ -370,13 +371,18 @@ static int _move_obj(PyObject* obj, trace_state* state) {
             state->src, obj);
         return TRACE_RES_ERR;
     case Py_MOVABLE_FREEZE:
-        // Freeze the object, this can invalidate our `external_rc`, we restart after this trace
+        // Freeze the object, this can invalidate our `external_rc`,
+        // we restart after this trace
         trace("    - freezing %p", obj);
         if (_PyImmutability_Freeze(obj)) {
             return TRACE_RES_ERR;
         }
 
         state->restart = true;
+        // Setting the gc_list to NULL will stop objects from being moved
+        // between GC lists. Just a small thing we can avoid. The next (full)
+        // trace will have this set again.
+        state->gc_list = NULL;
         return 0;
     default:
         assert(false);
@@ -453,6 +459,9 @@ static int _trace_once(PyObject* obj, trace_result* result, PyGC_Head *gc_list) 
         trace("  - traversing %p", item);
         traverseproc proc = get_reachable_proc(Py_TYPE(item));
         SUCCEEDS(proc(item, (visitproc)_trace_visit, (void*)&state));
+
+        // Weak refs need special handling
+        assert(!PyWeakref_Check(item));
     }
 
     if (state.restart) {
@@ -493,6 +502,20 @@ static int trace_object(PyObject* obj, trace_result* result, PyGC_Head *gc_list)
     }
 
     return TRACE_RES_DONE;
+}
+
+static void detach_weak_refs(PyGC_Head *gc_list) {
+    PyGC_Head *current = GC_NEXT(gc_list);
+    while (current != gc_list) {
+        PyObject *item = _Py_FROM_GC(current);
+#ifdef PY_DEBUG
+        Py_ssize_t weak_ctn = _PyWeakref_GetWeakrefCount(item);
+        if (weak_ctn) {
+            trace("- Clearing %zd weak references to %p", weak_ctn, item);
+        }
+#endif
+        _PyWeakref_ClearWeakRefsNoCallbacks(item);
+    }
 }
 
 // ###################################################################
@@ -576,6 +599,10 @@ int _PyTracingRegion_Close(PyObject* op) {
         return 1;
     }
 
+    // FIXME: This can be optimized, for example by inserting all objects
+    // with weak refs in the beginning.
+    detach_weak_refs(&self->gc_list);
+
     trace("- Closed region %p", self);
     assert(!gc_list_is_empty(&self->gc_list));
     return 0;
@@ -621,6 +648,4 @@ PyTypeObject _PyTracingRegion_Type = {
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
-// TODO: Weak-references pointing into the trace are not handled
 // TODO: Weak-references part of the trace are not handled
-//
