@@ -8,6 +8,7 @@
 
 #include "Python.h"
 #include <stdbool.h>
+#include "pycore_cown.h"
 #include "pycore_object.h"
 #include "pycore_immutability.h"
 #include "pycore_critical_section.h"
@@ -655,6 +656,13 @@ immutable_exec(PyObject *module) {
     }
     if (_PyImmutability_SetFreezable(
             (PyObject*)&_PyTracingRegion_Type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, &_PyCown_Type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_SetFreezable((PyObject*)&_PyCown_Type, _Py_FREEZABLE_YES) < 0) {
         return -1;
     }
 

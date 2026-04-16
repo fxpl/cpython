@@ -238,6 +238,7 @@
     <ClInclude Include="..\Include\internal\pycore_critical_section.h" />
     <ClInclude Include="..\Include\internal\pycore_crossinterp.h" />
     <ClInclude Include="..\Include\internal\pycore_crossinterp_data_registry.h" />
+    <ClInclude Include="..\Include\internal\pycore_cown.h" />
     <ClInclude Include="..\Include\internal\pycore_debug_offsets.h" />
     <ClInclude Include="..\Include\internal\pycore_descrobject.h" />
     <ClInclude Include="..\Include\internal\pycore_dict.h" />
@@ -532,6 +533,7 @@
     <ClCompile Include="..\Objects\classobject.c" />
     <ClCompile Include="..\Objects\codeobject.c" />
     <ClCompile Include="..\Objects\complexobject.c" />
+    <ClCompile Include="..\Objects\cownobject.c" />
     <ClCompile Include="..\Objects\descrobject.c" />
     <ClCompile Include="..\Objects\dictobject.c" />
     <ClCompile Include="..\Objects\enumobject.c" />

@@ -514,7 +514,11 @@ static void detach_weak_refs(PyGC_Head *gc_list) {
             trace("- Clearing %zd weak references to %p", weak_ctn, item);
         }
 #endif
-        _PyWeakref_ClearWeakRefsNoCallbacks(item);
+        if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(item))) {
+            _PyWeakref_ClearWeakRefsNoCallbacks(item);
+        }
+
+        current = GC_NEXT(current);
     }
 }
 
@@ -596,7 +600,7 @@ int _PyTracingRegion_Close(PyObject* op) {
         trace("- Failed to close region %p, there are %zd incoming references", self, result.incoming_refs);
         gc_list_dissolve(&self->gc_list);
         assert(gc_list_is_empty(&self->gc_list));
-        return 1;
+        return 0;
     }
 
     // FIXME: This can be optimized, for example by inserting all objects
@@ -605,7 +609,7 @@ int _PyTracingRegion_Close(PyObject* op) {
 
     trace("- Closed region %p", self);
     assert(!gc_list_is_empty(&self->gc_list));
-    return 0;
+    return 1;
 }
 
 /* This method opens the region by dissolving it and all objects into the
