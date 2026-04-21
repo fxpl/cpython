@@ -1666,7 +1666,6 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(coro));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(count));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(covariant));
-    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(cown));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(ctx));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(cwd));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(d_parameter_type));
@@ -1990,6 +1989,7 @@ _PyStaticObjects_CheckRefcnt(PyInterpreterState *interp) {
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(readonly));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(real));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(reducer_override));
+    _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(region));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(registry));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(rel_tol));
     _PyStaticObject_CheckRefcnt((PyObject *)&_Py_ID(release));

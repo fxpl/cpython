@@ -531,10 +531,18 @@ static PyObject *CownObject_get_value(_PyCownObject *self, void *closure) {
     return PyRegion_NewRef(self->value);
 }
 
+PyObject *_PyCown_GetValue(_PyCownObject* self) {
+    return CownObject_get_value(self, NULL);
+}
+
 static int CownObject_set_value(_PyCownObject *self, PyObject *value, void *closure) {
     BAIL_UNLESS_OWNED(self, -1);
 
     return cown_set_value(self, value);
+}
+
+int _PyCown_SetValue(_PyCownObject* self, PyObject* value) {
+    return CownObject_set_value(self, value, NULL);
 }
 
 static PyGetSetDef PyCownObject_getset[] = {

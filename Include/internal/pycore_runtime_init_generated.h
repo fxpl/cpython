@@ -1664,7 +1664,6 @@ extern "C" {
     INIT_ID(coro), \
     INIT_ID(count), \
     INIT_ID(covariant), \
-    INIT_ID(cown), \
     INIT_ID(ctx), \
     INIT_ID(cwd), \
     INIT_ID(d_parameter_type), \
@@ -1988,6 +1987,7 @@ extern "C" {
     INIT_ID(readonly), \
     INIT_ID(real), \
     INIT_ID(reducer_override), \
+    INIT_ID(region), \
     INIT_ID(registry), \
     INIT_ID(rel_tol), \
     INIT_ID(release), \

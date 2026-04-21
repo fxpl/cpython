@@ -96,21 +96,22 @@ gc_collect_impl(PyObject *module, int generation)
 /*[clinic input]
 gc.collect_region -> Py_ssize_t
 
-    cown: object
+    region: object
 
 Run the garbage collector on a specific region.
 
-The argument should be a released Cown object holding the region to collect.
+The argument should be either a Region object
+or an acquired Cown object holding the region to collect.
 
 The number of unreachable objects is returned.
 [clinic start generated code]*/
 
 static Py_ssize_t
-gc_collect_region_impl(PyObject *module, PyObject *cown)
-/*[clinic end generated code: output=47f1a91aff062e6c input=58d8161ceff6c23a]*/
+gc_collect_region_impl(PyObject *module, PyObject *region)
+/*[clinic end generated code: output=16b435a6dab62cc1 input=da1f6879e70ac5a4]*/
 {
     PyThreadState *tstate = _PyThreadState_GET();
-    return _PyGC_CollectRegion(tstate, cown, _Py_GC_REASON_MANUAL);
+    return _PyGC_CollectRegion(tstate, region, _Py_GC_REASON_MANUAL);
 }
 
 

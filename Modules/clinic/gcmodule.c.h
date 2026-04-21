@@ -151,12 +151,13 @@ exit:
 }
 
 PyDoc_STRVAR(gc_collect_region__doc__,
-"collect_region($module, /, cown)\n"
+"collect_region($module, /, region)\n"
 "--\n"
 "\n"
 "Run the garbage collector on a specific region.\n"
 "\n"
-"The argument should be a released Cown object holding the region to collect.\n"
+"The argument should be either a Region object\n"
+"or an acquired Cown object holding the region to collect.\n"
 "\n"
 "The number of unreachable objects is returned.");
 
@@ -164,7 +165,7 @@ PyDoc_STRVAR(gc_collect_region__doc__,
     {"collect_region", _PyCFunction_CAST(gc_collect_region), METH_FASTCALL|METH_KEYWORDS, gc_collect_region__doc__},
 
 static Py_ssize_t
-gc_collect_region_impl(PyObject *module, PyObject *cown);
+gc_collect_region_impl(PyObject *module, PyObject *region);
 
 static PyObject *
 gc_collect_region(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames)
@@ -181,7 +182,7 @@ gc_collect_region(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyO
     } _kwtuple = {
         .ob_base = PyVarObject_HEAD_INIT(&PyTuple_Type, NUM_KEYWORDS)
         .ob_hash = -1,
-        .ob_item = { &_Py_ID(cown), },
+        .ob_item = { &_Py_ID(region), },
     };
     #undef NUM_KEYWORDS
     #define KWTUPLE (&_kwtuple.ob_base.ob_base)
@@ -190,7 +191,7 @@ gc_collect_region(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyO
     #  define KWTUPLE NULL
     #endif  // !Py_BUILD_CORE
 
-    static const char * const _keywords[] = {"cown", NULL};
+    static const char * const _keywords[] = {"region", NULL};
     static _PyArg_Parser _parser = {
         .keywords = _keywords,
         .fname = "collect_region",
@@ -198,7 +199,7 @@ gc_collect_region(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyO
     };
     #undef KWTUPLE
     PyObject *argsbuf[1];
-    PyObject *cown;
+    PyObject *region;
     Py_ssize_t _return_value;
 
     args = _PyArg_UnpackKeywords(args, nargs, NULL, kwnames, &_parser,
@@ -206,8 +207,8 @@ gc_collect_region(PyObject *module, PyObject *const *args, Py_ssize_t nargs, PyO
     if (!args) {
         goto exit;
     }
-    cown = args[0];
-    _return_value = gc_collect_region_impl(module, cown);
+    region = args[0];
+    _return_value = gc_collect_region_impl(module, region);
     if ((_return_value == -1) && PyErr_Occurred()) {
         goto exit;
     }
@@ -650,4 +651,4 @@ gc_get_freeze_count(PyObject *module, PyObject *Py_UNUSED(ignored))
 exit:
     return return_value;
 }
-/*[clinic end generated code: output=bd7ec0973b947c02 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=fdd862c312de4482 input=a9049054013a1b77]*/
