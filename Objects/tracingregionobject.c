@@ -292,7 +292,8 @@ get_reachable_proc(PyTypeObject *tp)
 static void
 gc_list_dissolve(PyGC_Head *list) {
     struct _gc_runtime_state* gc_state = get_gc_state();
-    gc_list_merge(list, &(gc_state->young.head));
+    //gc_list_merge(list, &(gc_state->young.head));
+    gc_list_merge(list, &(gc_state->old[0].head));
 }
 
 typedef struct {
