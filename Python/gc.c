@@ -1851,6 +1851,28 @@ gc_collect_chunk(PyThreadState *tstate,
     validate_list(to, collecting_clear_unreachable_clear);
 }
 
+static PyObject*
+region_get_name(_PyRegionObject *bridge)
+{
+    PyObject *name = bridge->name;
+    if (name == NULL || !PyUnicode_Check(name)) {
+        return NULL;
+    }
+    return name;
+}
+
+static void
+debug_region_collection(const char *message, _PyRegionObject *bridge)
+{
+    PyObject *name = region_get_name(bridge);
+    if (name == NULL) {
+        PySys_FormatStderr("gc: %s at %p\n", message, bridge);
+    }
+    else {
+        PySys_FormatStderr("gc: %s '%U' at %p\n", message, name, bridge);
+    }
+}
+
 static void
 region_list_split(PyGC_Head *list, PyGC_Head *contained)
 {
@@ -1881,21 +1903,32 @@ region_list_split(PyGC_Head *list, PyGC_Head *contained)
     validate_list(contained, collecting_clear_unreachable_clear);
 }
 
+/* Collect garbage in a region and its tree.
+ * The caller must ensure that the region data will not be deallocated
+ * during the collection, even if the region gets cleaned.
+ */
 static void
 gc_collect_region(PyThreadState *tstate,
-                  Py_region_t region,
+                  Py_region_t region_id,
                   struct gc_collection_stats *stats)
 {
-    if (region == _Py_LOCAL_REGION
-        || region == _Py_IMMUTABLE_REGION
-        || region == _Py_COWN_REGION) {
-        return;
-    }
-
-    _Py_region_data *data = _Py_region_data_CAST(region);
     PyGC_Head *gc;
     GCState *gcstate = &tstate->interp->gc;
+    _Py_region_data *data = _Py_region_data_CAST(region_id);
     assert(!_PyErr_Occurred(tstate));
+
+    /* Create an artificial local reference to keep the region open,
+     * preventing Python code from sharing it with other interpreters.
+     */
+    PyObject *bridge = PyRegion_XNewRef(data->bridge);
+    if (bridge == NULL) {
+        // Nothing to do.
+        assert(gc_list_is_empty(&data->gc_list));
+        return;
+    }
+    if (gcstate->debug & _PyGC_DEBUG_STATS) {
+        debug_region_collection("handling garbage in region", _PyRegionObject_CAST(bridge));
+    }
 
     /* Separate child regions from contained objects.
      * Finalizers need them to be in the GC list, at the start of the list.
@@ -1904,12 +1937,11 @@ gc_collect_region(PyThreadState *tstate,
     gc_list_init(&contained);
     region_list_split(&data->gc_list, &contained);
 
-    PyGC_Head unreachable; /* non-problematic unreachable trash */
+    /* Identify unreachable objects. */
+    PyGC_Head unreachable;
     gc_list_init(&unreachable);
     deduce_unreachable(&contained, &unreachable);
     untrack_tuples(&contained);
-
-    /* Clear NEXT_MASK_UNREACHABLE manually. */
     clear_unreachable_mask(&unreachable);
 
     /* Print debugging information. */
@@ -1945,10 +1977,39 @@ gc_collect_region(PyThreadState *tstate,
     stats->collected += gc_list_size(&final_unreachable);
     delete_garbage(tstate, gcstate, &final_unreachable, &contained);
 
-    /* Restore the GC list. Make sure child regions come first. */
-    gc_list_merge(&contained, &data->gc_list);
+    if (data->bridge == NULL) {
+        /* The region has been cleaned.
+         * In the process, objects reachable from the bridge have already
+         * been moved from our temporary GC lists to the region GC list.
+         * The remaining objects can be returned to the local GC.
+         */
+        gc_list_set_space(&contained, gcstate->visited_space);
+        gc_list_merge(&contained, &gcstate->young.head);
+    }
+    else {
+        /* No cleaning happened, so the region still has the same data block.
+         * We return the reachable objects to the region GC list,
+         * making sure child regions come first.
+         * Objects in the region GC list always use old space 0.
+         */
+        gc_list_validate_space(&contained, 0);
+        gc_list_merge(&contained, &data->gc_list);
+    }
 
-    /* Collect child regions. */
+    /* Remove the artificial local reference now
+     * to allow child regions to use the optimization for closed regions.
+     */
+    PyRegion_RemoveLocalRef(bridge);
+    Py_DECREF(bridge);
+
+    /* Collect child regions.
+     *
+     * TODO(regions):
+     * If the region has been cleaned, previously open child regions
+     * have already been collected. We should still collect
+     * the remaining child regions, but we currently don't.
+     * The GC list will be empty and this loop will not do anything.
+     */
     gc = GC_NEXT(&data->gc_list);
     while (gc != &data->gc_list) {
         // Stop looping if this is not a bridge
@@ -1956,8 +2017,18 @@ gc_collect_region(PyThreadState *tstate,
         if (Py_TYPE(obj) != &_PyRegion_Type) {
             break;
         }
-        Py_region_t child = _PyRegion_Get(obj);
-        gc_collect_region(tstate, child, stats);
+        Py_region_t child_id = _PyRegion_Get(obj);
+        _PyRegion_IncRc(child_id);
+        gc_collect_region(tstate, child_id, stats);
+        bool is_still_child = _PyRegion_GetParent(child_id) == region_id;
+        _PyRegion_DecRc(child_id);
+        if (!is_still_child) {
+            /* The region hierarchy has changed.
+             * Following the next pointer would take us who knows where.
+             * Give up collecting the remaining child regions.
+             */
+            break;
+        }
         gc = GC_NEXT(gc);
     }
 }
@@ -2268,19 +2339,6 @@ _PyGC_CollectNoFail(PyThreadState *tstate)
     _PyGC_Collect(_PyThreadState_GET(), 2, _Py_GC_REASON_SHUTDOWN);
 }
 
-static const char *
-get_region_name(_PyRegionObject* bridge) {
-    PyObject *name = bridge->name;
-    if (name == NULL || !PyUnicode_Check(name)) {
-        return NULL;
-    }
-    const char *name_str = PyUnicode_AsUTF8(name);
-    if (name_str == NULL) {
-        return NULL;
-    }
-    return name_str;
-}
-
 Py_ssize_t
 _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason)
 {
@@ -2298,22 +2356,19 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason
     if (!Py_IS_TYPE(region, &_PyRegion_Type)) {
         goto error;
     }
-    Py_region_t region_id = _PyRegion_Get(region);
-    // TODO(regions-gc): gc callback
+
     GCState *gcstate = &tstate->interp->gc;
-    struct gc_collection_stats stats = { 0 };
+    // TODO(regions-gc): gc callback
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
-        _PyRegionObject* bridge = _Py_region_data_CAST(region_id)->bridge;
-        const char *name = get_region_name(bridge);
-        if (name == NULL) {
-            PySys_WriteStderr("gc: collecting region at %p\n", bridge);
-        }
-        else {
-            PySys_WriteStderr("gc: collecting region '%s' at %p\n", name, bridge);
-        }
+        debug_region_collection("collecting region tree with root", _PyRegionObject_CAST(region));
     }
+
+    struct gc_collection_stats stats = { 0 };
+    Py_region_t region_id = _PyRegion_Get(region);
     PyObject *exc = _PyErr_GetRaisedException(tstate);
+    _PyRegion_IncRc(region_id);
     gc_collect_region(tstate, region_id, &stats);
+    _PyRegion_DecRc(region_id);
     _PyErr_SetRaisedException(tstate, exc);
     return stats.collected;
 

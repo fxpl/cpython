@@ -133,6 +133,7 @@ static inline Py_region_t __PyRegion_Get(PyObject *obj, int follow_pending) {
 
 PyAPI_FUNC(int) _PyRegion_New(_PyRegionObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
+PyAPI_FUNC(void) _PyRegion_IncRc(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
 
 PyAPI_FUNC(Py_ssize_t) _PyRegion_GetLrc(Py_region_t region);

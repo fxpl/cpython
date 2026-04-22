@@ -1963,6 +1963,12 @@ int _PyRegion_Dissolve(Py_region_t region) {
     return regiondata_union_merge(region, _Py_LOCAL_REGION);
 }
 
+/* Increments the reference count of the region.
+ */
+void _PyRegion_IncRc(Py_region_t region) {
+    regiondata_inc_rc(region);
+}
+
 /* Decrements the reference count of the region. This may deallocate the region.
  */
 void _PyRegion_DecRc(Py_region_t region) {
