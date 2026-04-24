@@ -98,6 +98,9 @@ typedef struct _Py_region_data {
      */
     PyGC_Head gc_list;
 
+    /* List of unreachable objects in the region, saved to be deleted later. */
+    PyGC_Head unreachable;
+
 #ifdef Py_OWNERSHIP_INVARIANT
     _Py_ownership_invariant_region_data invariant_data;
 #endif

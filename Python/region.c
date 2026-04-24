@@ -290,6 +290,12 @@ static int gc_list_for_each_subregion(PyGC_Head *list, gc_list_callback_t callba
     return 0;
 }
 
+static void gc_list_return_to_local(PyGC_Head *list) {
+    struct _gc_runtime_state* gc_state = get_gc_state();
+    // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
+    gc_list_merge(list, &(gc_state->old[0].head));
+}
+
 static int _gc_region_list_dissolve_callback(Py_region_t region, void* _ignore) {
     PyObject* obj = _PyRegion_GetBridge(region);
     // Bump LRC for the reference which was previously owning this
@@ -305,10 +311,7 @@ static int _gc_region_list_dissolve_callback(Py_region_t region, void* _ignore) 
 
 static void gc_region_list_dissolve(PyGC_Head *list) {
     gc_list_for_each_subregion(list, (gc_list_callback_t)_gc_region_list_dissolve_callback, NULL);
-
-    struct _gc_runtime_state* gc_state = get_gc_state();
-    // Use `old[0]` here, we are setting the visited space to 0 in add_visited_set().
-    gc_list_merge(list, &(gc_state->old[0].head));
+    gc_list_return_to_local(list);
 }
 
 // **********************************************************************
@@ -345,6 +348,7 @@ static Py_region_t regiondata_new(void) {
     }
 
     gc_list_init(&data->gc_list);
+    gc_list_init(&data->unreachable);
     data->rc = 1;
     return (Py_region_t)data;
 }
@@ -559,6 +563,7 @@ static int regiondata_union_merge(
         // Do a region merge, which keeps the bridge objects at the start
         // of the list and the contained objects at the end
         gc_region_list_merge(&source_data->gc_list, &target_data->gc_list);
+        gc_list_merge(&source_data->unreachable, &target_data->unreachable);
 
         // Check how the `open_tick` should be updated
         if (target_data->open_tick == OPEN_TICK_CLOSED) {
@@ -586,6 +591,7 @@ static int regiondata_union_merge(
         // The function below also bumps the LRC of the sub-regions
         // meaning this should be all covered now.
         gc_region_list_dissolve(&(source_data->gc_list));
+        gc_list_return_to_local(&(source_data->unreachable));
     } else {
         trace("%lx: Merging %lx into %lx", source, source, target);
     }
@@ -597,6 +603,7 @@ static int regiondata_union_merge(
     source_data->open_tick = OPEN_TICK_CLOSED;
 
     assert(gc_list_is_empty(&source_data->gc_list));
+    assert(gc_list_is_empty(&source_data->unreachable));
 
     // Skip the error label and run the normal cleanup code
     goto cleanup;

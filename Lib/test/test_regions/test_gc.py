@@ -87,13 +87,12 @@ class TestRegionGC(unittest.TestCase):
         r.a.child = self.build_region_with_unreachable_cycle()
         r.a = None
 
-        # The cycle inside the parent region should be collected,
-        # and the child region should be dissolved into the local region,
-        # allowing the cycle inside it to be collected by the local GC.
+        # Both cycles should be collected.
         # Note that the bridge object is never counted;
         # perhaps not ideal, but it would be difficult to implement otherwise.
-        self.assertEqual(gc.collect_region(r), 2)
-        self.assertEqual(gc.collect(), 2)
+        self.assertEqual(gc.collect_region(r), 4)
+        # Nothing should have been dissolved.
+        self.assertEqual(gc.collect(), 0)
 
     def test_finalizer(self):
         class Resurrectable:
