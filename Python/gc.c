@@ -2036,19 +2036,41 @@ region_handle_garbage(PyThreadState *tstate,
 static void
 gc_collect_region_tree(PyThreadState *tstate,
                        Py_region_t root_id,
+                       _PyCownObject *cown,
                        struct gc_collection_stats *stats)
 {
     assert(!_PyErr_Occurred(tstate));
     _PyRegionObject *root = _Py_region_data_CAST(root_id)->bridge;
 
-    // TODO(regions-gc): Drop the GIL if the region is closed.
+    /* If the region is closed, nobody can interfere with unreachable
+     * object identification, and this section can run without the GIL.
+     * To prevent the current interpreter from opening the region,
+     * we switch the cown's owner to a special owner representing the GC.
+     */
+    bool release_gil = cown != NULL && !_PyRegion_IsOpen(root_id);
+    PyThreadState *_save;
+    if (release_gil) {
+        Py_region_t contained;
+        int res = _PyCown_SwitchFromIpToGc(cown, &contained);
+        assert(res == 0);
+        assert(contained == root_id);
+        Py_UNBLOCK_THREADS
+    }
     region_list_build_dfs(root);
     for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
         region_extract_unreachable(_PyRegion_Get(curr));
-        /* Create an artificial local reference to the bridge to:
-         * 1. ensure it will not go away,
-         * 2. prevent Python code from sharing it with other interpreters.
-         */
+    }
+    if (release_gil) {
+        Py_BLOCK_THREADS
+        int res = _PyCown_SwitchFromGcToIp(cown);
+        assert(res == 0);
+    }
+
+    /* Create artificial local references to the bridges to:
+     * 1. ensure they will not go away,
+     * 2. prevent Python code from sharing them with other interpreters.
+     */
+    for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
         PyRegion_NewRef(curr);
     }
 
@@ -2382,9 +2404,11 @@ _PyGC_CollectNoFail(PyThreadState *tstate)
 Py_ssize_t
 _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason)
 {
+    _PyCownObject *cown = NULL;
     // We accept cowns to allow passing a closed region.
     if (Py_IS_TYPE(region, &_PyCown_Type)) {
-        PyObject *value = _PyCown_GetValue(_PyCownObject_CAST(region));
+        cown = _PyCownObject_CAST(region);
+        PyObject *value = _PyCown_GetValue(cown);
         if (value == NULL) {
             goto error;
         }
@@ -2406,7 +2430,7 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason
     struct gc_collection_stats stats = { 0 };
     Py_region_t region_id = _PyRegion_Get(region);
     PyObject *exc = _PyErr_GetRaisedException(tstate);
-    gc_collect_region_tree(tstate, region_id, &stats);
+    gc_collect_region_tree(tstate, region_id, cown, &stats);
     _PyErr_SetRaisedException(tstate, exc);
     return stats.collected;
 
