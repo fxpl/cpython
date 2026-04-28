@@ -548,11 +548,11 @@ TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
 
 static int
 TracingRegion_clear(TracingRegionObject *self) {
-    Py_CLEAR(self->dict);
     // This is deallocating a closed region, we just dissolve it
     if (!gc_list_is_empty(&self->gc_list)) {
         gc_list_dissolve(&self->gc_list);
     }
+    Py_CLEAR(self->dict);
     return 0;
 }
 
