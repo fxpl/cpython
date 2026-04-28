@@ -29,15 +29,16 @@ r.arr2 = [r.b, r.c, r.f, r.e]
 # print(f"Region after creating set or: {r}")
 # print(f"Or result: {s1}")
 
-r.s1 = set(r.arr1)
+# r.s1 = set(r.arr1)
+r.s1 = set()
 print(f"Region after creating set1: {r}")
 # print(f"{r.s1}")
 s2 = set(r.arr2)
 print(f"Region after creating set2: {r}")
 # print(f"{s2}")
 input("Press Enter to create set or...")
-r.s1 |= s2
-# r.s1.update(s2)
+# r.s1 |= s2
+r.s1.update(s2)
 print(f"Region after creating set or: {r}")
 print(f"Or result: {r.s1}")
 

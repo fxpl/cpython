@@ -189,6 +189,38 @@ class TestRegionSetDiscard(unittest.TestCase):
 
         s1.discard(r.a)   # already gone, should be no change
         self.assertEqual(r._lrc, base_lrc - 1)
+    
+    def test_pop_from_set_decreases_lrc(self):
+        """
+        Popping an element from a set should decrease the LRC.
+        """
+        r = Region()
+        r.a = self.A()
+        r.b = self.A()
+        r.c = self.A()
+        r.arr = [r.a, r.b, r.c]
+        base_lrc = r._lrc
+        s = set(r.arr)
+        self.assertEqual(r._lrc, base_lrc + 3)
+        popped = s.pop()
+        self.assertEqual(r._lrc, base_lrc + 3) # Although the popped element is removed from the set, it still holds a reference to it until it's released, so LRC should not change until we release the popped element.
+        popped = None
+        self.assertEqual(r._lrc, base_lrc + 2) # Now that the popped element is released, LRC should decrease by 1.
+    
+    def test_pop_from_set_inside_region_object_outsude_region_decreases_lrc(self):
+        """
+        Popping an element from a set that is inside a region should decrease the LRC of the region.
+        """
+        r = Region()
+        a = self.A()
+        b = self.A()
+        c = self.A()
+        arr = [a, b, c]
+        base_lrc = r._lrc
+        r.s = set(arr)
+        self.assertEqual(r._lrc, base_lrc + 6)
+        popped = r.s.pop()
+        self.assertEqual(r._lrc, base_lrc + 6 + 1) 
 
 
 class TestRegionSetDifference(unittest.TestCase):
