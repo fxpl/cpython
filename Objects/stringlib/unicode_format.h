@@ -418,6 +418,7 @@ get_field_object(SubString *input, PyObject *args, PyObject *kwargs,
         }
         if (kwargs == NULL) {
             PyErr_SetObject(PyExc_KeyError, key);
+            assert(PyRegion_IsLocal(key));
             Py_DECREF(key);
             goto error;
         }
@@ -425,6 +426,7 @@ get_field_object(SubString *input, PyObject *args, PyObject *kwargs,
            code is no longer just used with kwargs. It might be passed
            a non-dict when called through format_map. */
         obj = PyObject_GetItem(kwargs, key);
+        assert(PyRegion_IsLocal(key));
         Py_DECREF(key);
         if (obj == NULL) {
             goto error;
@@ -474,12 +476,18 @@ get_field_object(SubString *input, PyObject *args, PyObject *kwargs,
             goto error;
 
         /* assign to obj */
-        Py_SETREF(obj, tmp);
+        if(PyRegion_XSETLOCALREF(obj, tmp)) {
+            PyRegion_RemoveLocalRef(tmp);
+            Py_DECREF(tmp);
+            goto error;
+        }
+        // Py_SETREF(obj, tmp);
     }
     /* end of iterator, this is the non-error case */
     if (ok == 1)
         return obj;
 error:
+    PyRegion_RemoveLocalRef(obj);
     Py_XDECREF(obj);
     return NULL;
 }
@@ -825,7 +833,12 @@ output_markup(SubString *field_name, SubString *format_spec,
             goto done;
 
         /* do the assignment, transferring ownership: fieldobj = tmp */
-        Py_SETREF(fieldobj, tmp);
+        if(PyRegion_XSETLOCALREF(fieldobj, tmp)) {
+            PyRegion_RemoveLocalRef(tmp);
+            Py_DECREF(tmp);
+            goto done;
+        }
+        // Py_SETREF(fieldobj, tmp);
         tmp = NULL;
     }
 
@@ -851,6 +864,8 @@ output_markup(SubString *field_name, SubString *format_spec,
     result = 1;
 
 done:
+    PyRegion_RemoveLocalRef(fieldobj);
+    PyRegion_RemoveLocalRef(tmp);
     Py_XDECREF(fieldobj);
     Py_XDECREF(tmp);
 
