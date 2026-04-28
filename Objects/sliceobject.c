@@ -128,19 +128,24 @@ _PyBuildSlice_Consume2(PyObject *start, PyObject *stop, PyObject *step)
         }
     }
 
-    PyRegion_TakeRefs(obj, start, stop);
+    // This LRC/RC bump is needed to use one `TakeRefs` for
+    // all three objects.
+    if (PyRegion_NewRef(step) == NULL) {
+        goto error;
+    }
+    if (PyRegion_TakeRefs(obj, start, stop, step)) {
+        PyRegion_CLEARLOCAL(step);
+        goto error;
+    }
     obj->start = start;
     obj->stop = stop;
-    PyRegion_AddRef(obj, step);
-    obj->step = Py_NewRef(step);
+    obj->step = step;
 
     _PyObject_GC_TRACK(obj);
     return obj;
 error:
-    PyRegion_RemoveRef(obj, start);
-    PyRegion_RemoveRef(obj, stop);
-    Py_DECREF(start);
-    Py_DECREF(stop);
+    PyRegion_CLEARLOCAL(start);
+    PyRegion_CLEARLOCAL(stop);
     return NULL;
 }
 
@@ -156,8 +161,11 @@ PySlice_New(PyObject *start, PyObject *stop, PyObject *step)
     if (stop == NULL) {
         stop = Py_None;
     }
-    return (PyObject *)_PyBuildSlice_Consume2(PyRegion_NewRef(start),
-                                              PyRegion_NewRef(stop), step);
+    if (PyRegion_AddLocalRefs(start, stop)) {
+        return NULL;
+    }
+    return (PyObject *)_PyBuildSlice_Consume2(Py_NewRef(start),
+                                              Py_NewRef(stop), step);
 }
 
 PyObject *
