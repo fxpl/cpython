@@ -578,6 +578,7 @@ NON_ESCAPING_FUNCTIONS = (
     "PyLong_FromSsize_t",
     "PyRegion_IsLocal",
     "PyRegion_SameRegion",
+    "PyRegion_NeedsReadBarrier",
     "PySlice_New",
     "PyStackRef_AsPyObjectBorrow",
     "PyStackRef_AsPyObjectNew",

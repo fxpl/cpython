@@ -719,6 +719,11 @@
                 PyObject *list = PyStackRef_AsPyObjectBorrow(list_st);
                 assert(PyLong_CheckExact(sub));
                 assert(PyList_CheckExact(list));
+                if (PyRegion_NeedsReadBarrier(list)) {
+                    UPDATE_MISS_STATS(BINARY_OP);
+                    assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
+                    JUMP_TO_PREDICTED(BINARY_OP);
+                }
                 if (!_PyLong_IsNonNegativeCompact((PyLongObject *)sub)) {
                     UPDATE_MISS_STATS(BINARY_OP);
                     assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
@@ -959,6 +964,11 @@
                 PyObject *tuple = PyStackRef_AsPyObjectBorrow(tuple_st);
                 assert(PyLong_CheckExact(sub));
                 assert(PyTuple_CheckExact(tuple));
+                if (PyRegion_NeedsReadBarrier(tuple)) {
+                    UPDATE_MISS_STATS(BINARY_OP);
+                    assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
+                    JUMP_TO_PREDICTED(BINARY_OP);
+                }
                 if (!_PyLong_IsNonNegativeCompact((PyLongObject *)sub)) {
                     UPDATE_MISS_STATS(BINARY_OP);
                     assert(_PyOpcode_Deopt[opcode] == (BINARY_OP));
@@ -3483,6 +3493,11 @@
                     assert(_PyOpcode_Deopt[opcode] == (CALL));
                     JUMP_TO_PREDICTED(CALL);
                 }
+                if (PyRegion_NeedsReadBarrier(self_o)) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
                 STAT_INC(CALL, hit);
                 int err = _PyList_AppendTakeRef((PyListObject *)self_o, PyStackRef_AsPyObjectSteal(arg));
                 UNLOCK_OBJECT(self_o);
@@ -5702,6 +5717,11 @@
             {
                 iter = stack_pointer[-2];
                 PyGenObject *gen = (PyGenObject *)PyStackRef_AsPyObjectBorrow(iter);
+                if (PyRegion_NeedsReadBarrier(gen)) {
+                    UPDATE_MISS_STATS(FOR_ITER);
+                    assert(_PyOpcode_Deopt[opcode] == (FOR_ITER));
+                    JUMP_TO_PREDICTED(FOR_ITER);
+                }
                 if (Py_TYPE(gen) != &PyGen_Type) {
                     UPDATE_MISS_STATS(FOR_ITER);
                     assert(_PyOpcode_Deopt[opcode] == (FOR_ITER));
@@ -5799,6 +5819,11 @@
             // _ITER_NEXT_LIST
             {
                 PyObject *list_o = PyStackRef_AsPyObjectBorrow(iter);
+                if (PyRegion_NeedsReadBarrier(list_o)) {
+                    UPDATE_MISS_STATS(FOR_ITER);
+                    assert(_PyOpcode_Deopt[opcode] == (FOR_ITER));
+                    JUMP_TO_PREDICTED(FOR_ITER);
+                }
                 assert(PyList_CheckExact(list_o));
                 #ifdef Py_GIL_DISABLED
                 assert(_Py_IsOwnedByCurrentThread(list_o) ||
@@ -8035,6 +8060,11 @@
             uint32_t func_version = read_u32(&this_instr[4].cache);
             PyObject *getattribute = read_obj(&this_instr[6].cache);
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (PyRegion_NeedsReadBarrier(owner_o)) {
+                UPDATE_MISS_STATS(LOAD_ATTR);
+                assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                JUMP_TO_PREDICTED(LOAD_ATTR);
+            }
             assert((oparg & 1) == 0);
             if (tstate->interp->eval_frame) {
                 UPDATE_MISS_STATS(LOAD_ATTR);
@@ -8117,6 +8147,11 @@
             {
                 uint16_t offset = read_u16(&this_instr[4].cache);
                 PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+                if (PyRegion_NeedsReadBarrier(owner_o)) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
                 PyObject **value_ptr = (PyObject**)(((char *)owner_o) + offset);
                 PyObject *attr_o = FT_ATOMIC_LOAD_PTR_ACQUIRE(*value_ptr);
                 if (attr_o == NULL) {
@@ -8345,6 +8380,11 @@
                 uint32_t dict_version = read_u32(&this_instr[2].cache);
                 uint16_t index = read_u16(&this_instr[4].cache);
                 PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+                if (PyRegion_NeedsReadBarrier(owner_o)) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
                 if (Py_TYPE(owner_o)->tp_getattro != PyModule_Type.tp_getattro) {
                     UPDATE_MISS_STATS(LOAD_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
@@ -8558,6 +8598,11 @@
                 assert(Py_IS_TYPE(fget, &PyFunction_Type));
                 PyFunctionObject *f = (PyFunctionObject *)fget;
                 PyCodeObject *code = (PyCodeObject *)f->func_code;
+                if (PyRegion_NeedsReadBarrier(f)) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
                 if ((code->co_flags & (CO_VARKEYWORDS | CO_VARARGS | CO_OPTIMIZED)) != CO_OPTIMIZED) {
                     UPDATE_MISS_STATS(LOAD_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
@@ -8641,6 +8686,11 @@
             {
                 uint16_t index = read_u16(&this_instr[4].cache);
                 PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+                if (PyRegion_NeedsReadBarrier(owner_o)) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
                 PyObject **addr = (PyObject **)((char *)owner_o + index);
                 PyObject *attr_o = FT_ATOMIC_LOAD_PTR(*addr);
                 if (attr_o == NULL) {
@@ -8711,6 +8761,11 @@
                 uint16_t hint = read_u16(&this_instr[4].cache);
                 PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
                 assert(Py_TYPE(owner_o)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
+                if (PyRegion_NeedsReadBarrier(owner_o)) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
                 PyDictObject *dict = _PyObject_GetManagedDict(owner_o);
                 if (dict == NULL) {
                     UPDATE_MISS_STATS(LOAD_ATTR);
@@ -9212,6 +9267,11 @@
                 uint16_t version = read_u16(&this_instr[3].cache);
                 uint16_t index = read_u16(&this_instr[4].cache);
                 PyDictObject *dict = (PyDictObject *)BUILTINS();
+                if (PyRegion_NeedsReadBarrier(dict)) {
+                    UPDATE_MISS_STATS(LOAD_GLOBAL);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_GLOBAL));
+                    JUMP_TO_PREDICTED(LOAD_GLOBAL);
+                }
                 if (!PyDict_CheckExact(dict)) {
                     UPDATE_MISS_STATS(LOAD_GLOBAL);
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_GLOBAL));
@@ -9278,6 +9338,11 @@
                 uint16_t version = read_u16(&this_instr[2].cache);
                 uint16_t index = read_u16(&this_instr[4].cache);
                 PyDictObject *dict = (PyDictObject *)GLOBALS();
+                if (PyRegion_NeedsReadBarrier(dict)) {
+                    UPDATE_MISS_STATS(LOAD_GLOBAL);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_GLOBAL));
+                    JUMP_TO_PREDICTED(LOAD_GLOBAL);
+                }
                 if (!PyDict_CheckExact(dict)) {
                     UPDATE_MISS_STATS(LOAD_GLOBAL);
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_GLOBAL));
@@ -10559,6 +10624,11 @@
                 v = stack_pointer[-1];
                 receiver = stack_pointer[-2];
                 PyGenObject *gen = (PyGenObject *)PyStackRef_AsPyObjectBorrow(receiver);
+                if (!PyRegion_IsLocal(gen)) {
+                    UPDATE_MISS_STATS(SEND);
+                    assert(_PyOpcode_Deopt[opcode] == (SEND));
+                    JUMP_TO_PREDICTED(SEND);
+                }
                 if (Py_TYPE(gen) != &PyGen_Type && Py_TYPE(gen) != &PyCoro_Type) {
                     UPDATE_MISS_STATS(SEND);
                     assert(_PyOpcode_Deopt[opcode] == (SEND));
@@ -11507,7 +11577,7 @@
                     JUMP_TO_PREDICTED(STORE_SUBSCR);
                 }
                 Py_ssize_t index = ((PyLongObject*)sub)->long_value.ob_digit[0];
-                if (!PyRegion_IsLocal(list)) {
+                if (PyRegion_NeedsReadBarrier(list)) {
                     UPDATE_MISS_STATS(STORE_SUBSCR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_SUBSCR));
                     JUMP_TO_PREDICTED(STORE_SUBSCR);
@@ -12027,6 +12097,11 @@
                 values = &stack_pointer[-1];
                 PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
                 assert(PyList_CheckExact(seq_o));
+                if (PyRegion_NeedsReadBarrier(seq_o)) {
+                    UPDATE_MISS_STATS(UNPACK_SEQUENCE);
+                    assert(_PyOpcode_Deopt[opcode] == (UNPACK_SEQUENCE));
+                    JUMP_TO_PREDICTED(UNPACK_SEQUENCE);
+                }
                 if (!LOCK_OBJECT(seq_o)) {
                     UPDATE_MISS_STATS(UNPACK_SEQUENCE);
                     assert(_PyOpcode_Deopt[opcode] == (UNPACK_SEQUENCE));
@@ -12086,6 +12161,11 @@
                 values = &stack_pointer[-1];
                 PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
                 assert(PyTuple_CheckExact(seq_o));
+                if (PyRegion_NeedsReadBarrier(seq_o)) {
+                    UPDATE_MISS_STATS(UNPACK_SEQUENCE);
+                    assert(_PyOpcode_Deopt[opcode] == (UNPACK_SEQUENCE));
+                    JUMP_TO_PREDICTED(UNPACK_SEQUENCE);
+                }
                 if (PyTuple_GET_SIZE(seq_o) != oparg) {
                     UPDATE_MISS_STATS(UNPACK_SEQUENCE);
                     assert(_PyOpcode_Deopt[opcode] == (UNPACK_SEQUENCE));
@@ -12137,6 +12217,11 @@
                 assert(oparg == 2);
                 PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
                 assert(PyTuple_CheckExact(seq_o));
+                if (PyRegion_NeedsReadBarrier(seq_o)) {
+                    UPDATE_MISS_STATS(UNPACK_SEQUENCE);
+                    assert(_PyOpcode_Deopt[opcode] == (UNPACK_SEQUENCE));
+                    JUMP_TO_PREDICTED(UNPACK_SEQUENCE);
+                }
                 if (PyTuple_GET_SIZE(seq_o) != 2) {
                     UPDATE_MISS_STATS(UNPACK_SEQUENCE);
                     assert(_PyOpcode_Deopt[opcode] == (UNPACK_SEQUENCE));

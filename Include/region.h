@@ -19,6 +19,14 @@ typedef Py_uintptr_t PyRegion_staged_ref_t;
 PyAPI_FUNC(int) _PyRegion_IsLocal(PyObject *obj);
 #define PyRegion_IsLocal(obj) _PyRegion_IsLocal(_PyObject_CAST(obj))
 
+/** This function returns true if the object is inside a region and
+ * would needs a write barrier to be called.
+ */
+static inline int _PyRegion_NeedsReadBarrier(PyObject *obj) {
+    return !(PyRegion_IsLocal(obj) || _Py_IsImmutable(obj));
+}
+#define PyRegion_NeedsReadBarrier(obj) _PyRegion_NeedsReadBarrier(_PyObject_CAST(obj))
+
 PyAPI_FUNC(int) _PyRegion_SameRegion(PyObject *a, PyObject *b);
 #define PyRegion_SameRegion(a, b) _PyRegion_SameRegion(_PyObject_CAST(a), _PyObject_CAST(b))
 

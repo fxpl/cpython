@@ -942,6 +942,7 @@ dummy_func(
             assert(PyLong_CheckExact(sub));
             assert(PyList_CheckExact(list));
 
+            DEOPT_IF(PyRegion_NeedsReadBarrier(list));
             // Deopt unless 0 <= sub < PyList_Size(list)
             DEOPT_IF(!_PyLong_IsNonNegativeCompact((PyLongObject *)sub));
             Py_ssize_t index = ((PyLongObject*)sub)->long_value.ob_digit[0];
@@ -1022,6 +1023,7 @@ dummy_func(
             assert(PyTuple_CheckExact(tuple));
 
             // Deopt unless 0 <= sub < PyTuple_Size(list)
+            DEOPT_IF(PyRegion_NeedsReadBarrier(tuple));
             DEOPT_IF(!_PyLong_IsNonNegativeCompact((PyLongObject *)sub));
             Py_ssize_t index = ((PyLongObject*)sub)->long_value.ob_digit[0];
             DEOPT_IF(index >= PyTuple_GET_SIZE(tuple));
@@ -1147,7 +1149,7 @@ dummy_func(
             // Ensure nonnegative, zero-or-one-digit ints.
             DEOPT_IF(!_PyLong_IsNonNegativeCompact((PyLongObject *)sub));
             Py_ssize_t index = ((PyLongObject*)sub)->long_value.ob_digit[0];
-            DEOPT_IF(!PyRegion_IsLocal(list));
+            DEOPT_IF(PyRegion_NeedsReadBarrier(list));
             DEOPT_IF(!LOCK_OBJECT(list));
             // Ensure index < len(list)
             if (index >= PyList_GET_SIZE(list)) {
@@ -1397,6 +1399,7 @@ dummy_func(
 
         op(_SEND_GEN_FRAME, (receiver, v -- receiver, gen_frame)) {
             PyGenObject *gen = (PyGenObject *)PyStackRef_AsPyObjectBorrow(receiver);
+            DEOPT_IF(!PyRegion_IsLocal(gen));
             DEOPT_IF(Py_TYPE(gen) != &PyGen_Type && Py_TYPE(gen) != &PyCoro_Type);
             DEOPT_IF(gen->gi_frame_state >= FRAME_EXECUTING);
             STAT_INC(SEND, hit);
@@ -1636,6 +1639,7 @@ dummy_func(
             assert(oparg == 2);
             PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
             assert(PyTuple_CheckExact(seq_o));
+            DEOPT_IF(PyRegion_NeedsReadBarrier(seq_o));
             DEOPT_IF(PyTuple_GET_SIZE(seq_o) != 2);
             STAT_INC(UNPACK_SEQUENCE, hit);
             val0 = PyStackRef_FromPyObjectNew(PyTuple_GET_ITEM(seq_o, 0));
@@ -1649,6 +1653,7 @@ dummy_func(
         op(_UNPACK_SEQUENCE_TUPLE, (seq -- values[oparg])) {
             PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
             assert(PyTuple_CheckExact(seq_o));
+            DEOPT_IF(PyRegion_NeedsReadBarrier(seq_o));
             DEOPT_IF(PyTuple_GET_SIZE(seq_o) != oparg);
             STAT_INC(UNPACK_SEQUENCE, hit);
             PyObject **items = _PyTuple_ITEMS(seq_o);
@@ -1664,6 +1669,7 @@ dummy_func(
         op(_UNPACK_SEQUENCE_LIST, (seq -- values[oparg])) {
             PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
             assert(PyList_CheckExact(seq_o));
+            DEOPT_IF(PyRegion_NeedsReadBarrier(seq_o));
             DEOPT_IF(!LOCK_OBJECT(seq_o));
             if (PyList_GET_SIZE(seq_o) != oparg) {
                 UNLOCK_OBJECT(seq_o);
@@ -1855,6 +1861,7 @@ dummy_func(
         op(_LOAD_GLOBAL_MODULE, (version/1, unused/1, index/1 -- res))
         {
             PyDictObject *dict = (PyDictObject *)GLOBALS();
+            DEOPT_IF(PyRegion_NeedsReadBarrier(dict));
             DEOPT_IF(!PyDict_CheckExact(dict));
             PyDictKeysObject *keys = FT_ATOMIC_LOAD_PTR_ACQUIRE(dict->ma_keys);
             DEOPT_IF(FT_ATOMIC_LOAD_UINT32_RELAXED(keys->dk_version) != version);
@@ -1875,6 +1882,7 @@ dummy_func(
         op(_LOAD_GLOBAL_BUILTINS, (version/1, index/1 -- res))
         {
             PyDictObject *dict = (PyDictObject *)BUILTINS();
+            DEOPT_IF(PyRegion_NeedsReadBarrier(dict));
             DEOPT_IF(!PyDict_CheckExact(dict));
             PyDictKeysObject *keys = FT_ATOMIC_LOAD_PTR_ACQUIRE(dict->ma_keys);
             DEOPT_IF(FT_ATOMIC_LOAD_UINT32_RELAXED(keys->dk_version) != version);
@@ -2427,6 +2435,7 @@ dummy_func(
 
         op(_LOAD_ATTR_INSTANCE_VALUE, (offset/1, owner -- attr)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            DEOPT_IF(PyRegion_NeedsReadBarrier(owner_o));
             PyObject **value_ptr = (PyObject**)(((char *)owner_o) + offset);
             PyObject *attr_o = FT_ATOMIC_LOAD_PTR_ACQUIRE(*value_ptr);
             DEOPT_IF(attr_o == NULL);
@@ -2452,6 +2461,7 @@ dummy_func(
 
         op(_LOAD_ATTR_MODULE, (dict_version/2, index/1, owner -- attr)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            DEOPT_IF(PyRegion_NeedsReadBarrier(owner_o));
             DEOPT_IF(Py_TYPE(owner_o)->tp_getattro != PyModule_Type.tp_getattro);
             PyModuleObject* mod = _PyInterpreterState_GetModuleState(owner_o);
             PyDictObject *dict = (PyDictObject *)mod->md_dict;
@@ -2484,6 +2494,7 @@ dummy_func(
         op(_LOAD_ATTR_WITH_HINT, (hint/1, owner -- attr)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
             assert(Py_TYPE(owner_o)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
+            DEOPT_IF(PyRegion_NeedsReadBarrier(owner_o));
             PyDictObject *dict = _PyObject_GetManagedDict(owner_o);
             DEOPT_IF(dict == NULL);
             PyDictKeysObject *dk = FT_ATOMIC_LOAD_PTR(dict->ma_keys);
@@ -2530,6 +2541,7 @@ dummy_func(
         op(_LOAD_ATTR_SLOT, (index/1, owner -- attr)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
 
+            DEOPT_IF(PyRegion_NeedsReadBarrier(owner_o));
             PyObject **addr = (PyObject **)((char *)owner_o + index);
             PyObject *attr_o = FT_ATOMIC_LOAD_PTR(*addr);
             DEOPT_IF(attr_o == NULL);
@@ -2584,6 +2596,7 @@ dummy_func(
             assert(Py_IS_TYPE(fget, &PyFunction_Type));
             PyFunctionObject *f = (PyFunctionObject *)fget;
             PyCodeObject *code = (PyCodeObject *)f->func_code;
+            DEOPT_IF(PyRegion_NeedsReadBarrier(f));
             DEOPT_IF((code->co_flags & (CO_VARKEYWORDS | CO_VARARGS | CO_OPTIMIZED)) != CO_OPTIMIZED);
             DEOPT_IF(code->co_kwonlyargcount);
             DEOPT_IF(code->co_argcount != 1);
@@ -2607,6 +2620,7 @@ dummy_func(
         inst(LOAD_ATTR_GETATTRIBUTE_OVERRIDDEN, (unused/1, type_version/2, func_version/2, getattribute/4, owner -- unused)) {
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
 
+            DEOPT_IF(PyRegion_NeedsReadBarrier(owner_o));
             assert((oparg & 1) == 0);
             DEOPT_IF(tstate->interp->eval_frame);
             PyTypeObject *cls = Py_TYPE(owner_o);
@@ -3365,6 +3379,7 @@ dummy_func(
 
         replaced op(_ITER_NEXT_LIST, (iter, null_or_index -- iter, null_or_index, next)) {
             PyObject *list_o = PyStackRef_AsPyObjectBorrow(iter);
+            DEOPT_IF(PyRegion_NeedsReadBarrier(list_o));
             assert(PyList_CheckExact(list_o));
 #ifdef Py_GIL_DISABLED
             assert(_Py_IsOwnedByCurrentThread(list_o) ||
@@ -3390,6 +3405,7 @@ dummy_func(
         op(_ITER_NEXT_LIST_TIER_TWO, (iter, null_or_index -- iter, null_or_index, next)) {
             PyObject *list_o = PyStackRef_AsPyObjectBorrow(iter);
             assert(PyList_CheckExact(list_o));
+            DEOPT_IF(!PyRegion_IsLocal(list_o));
 #ifdef Py_GIL_DISABLED
             assert(_Py_IsOwnedByCurrentThread((PyObject *)list_o) ||
                    _PyObject_GC_IS_SHARED(list_o));
@@ -3504,6 +3520,7 @@ dummy_func(
 
         op(_FOR_ITER_GEN_FRAME, (iter, null -- iter, null, gen_frame)) {
             PyGenObject *gen = (PyGenObject *)PyStackRef_AsPyObjectBorrow(iter);
+            DEOPT_IF(PyRegion_NeedsReadBarrier(gen));
             DEOPT_IF(Py_TYPE(gen) != &PyGen_Type);
 #ifdef Py_GIL_DISABLED
             // Since generators can't be used by multiple threads anyway we
@@ -4469,6 +4486,7 @@ dummy_func(
 
             DEOPT_IF(!PyList_CheckExact(self_o));
             DEOPT_IF(!LOCK_OBJECT(self_o));
+            DEOPT_IF(PyRegion_NeedsReadBarrier(self_o));
             STAT_INC(CALL, hit);
             int err = _PyList_AppendTakeRef((PyListObject *)self_o, PyStackRef_AsPyObjectSteal(arg));
             UNLOCK_OBJECT(self_o);

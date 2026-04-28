@@ -1412,6 +1412,10 @@
             PyObject *list = PyStackRef_AsPyObjectBorrow(list_st);
             assert(PyLong_CheckExact(sub));
             assert(PyList_CheckExact(list));
+            if (PyRegion_NeedsReadBarrier(list)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (!_PyLong_IsNonNegativeCompact((PyLongObject *)sub)) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -1560,6 +1564,10 @@
             PyObject *tuple = PyStackRef_AsPyObjectBorrow(tuple_st);
             assert(PyLong_CheckExact(sub));
             assert(PyTuple_CheckExact(tuple));
+            if (PyRegion_NeedsReadBarrier(tuple)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (!_PyLong_IsNonNegativeCompact((PyLongObject *)sub)) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -1786,7 +1794,7 @@
                 JUMP_TO_JUMP_TARGET();
             }
             Py_ssize_t index = ((PyLongObject*)sub)->long_value.ob_digit[0];
-            if (!PyRegion_IsLocal(list)) {
+            if (PyRegion_NeedsReadBarrier(list)) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
             }
@@ -2054,6 +2062,10 @@
             v = stack_pointer[-1];
             receiver = stack_pointer[-2];
             PyGenObject *gen = (PyGenObject *)PyStackRef_AsPyObjectBorrow(receiver);
+            if (!PyRegion_IsLocal(gen)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (Py_TYPE(gen) != &PyGen_Type && Py_TYPE(gen) != &PyCoro_Type) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -2261,6 +2273,10 @@
             assert(oparg == 2);
             PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
             assert(PyTuple_CheckExact(seq_o));
+            if (PyRegion_NeedsReadBarrier(seq_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (PyTuple_GET_SIZE(seq_o) != 2) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -2286,6 +2302,10 @@
             values = &stack_pointer[-1];
             PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
             assert(PyTuple_CheckExact(seq_o));
+            if (PyRegion_NeedsReadBarrier(seq_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (PyTuple_GET_SIZE(seq_o) != oparg) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -2311,6 +2331,10 @@
             values = &stack_pointer[-1];
             PyObject *seq_o = PyStackRef_AsPyObjectBorrow(seq);
             assert(PyList_CheckExact(seq_o));
+            if (PyRegion_NeedsReadBarrier(seq_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (!LOCK_OBJECT(seq_o)) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -2527,6 +2551,10 @@
             uint16_t version = (uint16_t)CURRENT_OPERAND0();
             uint16_t index = (uint16_t)CURRENT_OPERAND1();
             PyDictObject *dict = (PyDictObject *)GLOBALS();
+            if (PyRegion_NeedsReadBarrier(dict)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (!PyDict_CheckExact(dict)) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -2565,6 +2593,10 @@
             uint16_t version = (uint16_t)CURRENT_OPERAND0();
             uint16_t index = (uint16_t)CURRENT_OPERAND1();
             PyDictObject *dict = (PyDictObject *)BUILTINS();
+            if (PyRegion_NeedsReadBarrier(dict)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (!PyDict_CheckExact(dict)) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -3426,6 +3458,10 @@
             owner = stack_pointer[-1];
             uint16_t offset = (uint16_t)CURRENT_OPERAND0();
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (PyRegion_NeedsReadBarrier(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             PyObject **value_ptr = (PyObject**)(((char *)owner_o) + offset);
             PyObject *attr_o = FT_ATOMIC_LOAD_PTR_ACQUIRE(*value_ptr);
             if (attr_o == NULL) {
@@ -3458,6 +3494,10 @@
             uint32_t dict_version = (uint32_t)CURRENT_OPERAND0();
             uint16_t index = (uint16_t)CURRENT_OPERAND1();
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (PyRegion_NeedsReadBarrier(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (Py_TYPE(owner_o)->tp_getattro != PyModule_Type.tp_getattro) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -3507,6 +3547,10 @@
             uint16_t hint = (uint16_t)CURRENT_OPERAND0();
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
             assert(Py_TYPE(owner_o)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
+            if (PyRegion_NeedsReadBarrier(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             PyDictObject *dict = _PyObject_GetManagedDict(owner_o);
             if (dict == NULL) {
                 UOP_STAT_INC(uopcode, miss);
@@ -3573,6 +3617,10 @@
             owner = stack_pointer[-1];
             uint16_t index = (uint16_t)CURRENT_OPERAND0();
             PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
+            if (PyRegion_NeedsReadBarrier(owner_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             PyObject **addr = (PyObject **)((char *)owner_o + index);
             PyObject *attr_o = FT_ATOMIC_LOAD_PTR(*addr);
             if (attr_o == NULL) {
@@ -3642,6 +3690,10 @@
             assert(Py_IS_TYPE(fget, &PyFunction_Type));
             PyFunctionObject *f = (PyFunctionObject *)fget;
             PyCodeObject *code = (PyCodeObject *)f->func_code;
+            if (PyRegion_NeedsReadBarrier(f)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if ((code->co_flags & (CO_VARKEYWORDS | CO_VARARGS | CO_OPTIMIZED)) != CO_OPTIMIZED) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -4580,6 +4632,10 @@
             iter = stack_pointer[-2];
             PyObject *list_o = PyStackRef_AsPyObjectBorrow(iter);
             assert(PyList_CheckExact(list_o));
+            if (!PyRegion_IsLocal(list_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             #ifdef Py_GIL_DISABLED
             assert(_Py_IsOwnedByCurrentThread((PyObject *)list_o) ||
                   _PyObject_GC_IS_SHARED(list_o));
@@ -4713,6 +4769,10 @@
             oparg = CURRENT_OPARG();
             iter = stack_pointer[-2];
             PyGenObject *gen = (PyGenObject *)PyStackRef_AsPyObjectBorrow(iter);
+            if (PyRegion_NeedsReadBarrier(gen)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
             if (Py_TYPE(gen) != &PyGen_Type) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
@@ -6165,6 +6225,10 @@
                 JUMP_TO_JUMP_TARGET();
             }
             if (!LOCK_OBJECT(self_o)) {
+                UOP_STAT_INC(uopcode, miss);
+                JUMP_TO_JUMP_TARGET();
+            }
+            if (PyRegion_NeedsReadBarrier(self_o)) {
                 UOP_STAT_INC(uopcode, miss);
                 JUMP_TO_JUMP_TARGET();
             }
