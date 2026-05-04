@@ -619,84 +619,24 @@ PyTypeObject _PyCown_Type = {
     .tp_flags2 = Py_TPFLAGS2_REGION_AWARE
 };
 
-/* This acquires the current cown for the GC. The cown returns a borrowed
- * reference to the contained region via the `region` argument.
- *
- * Possible returns:
- *  (-1): Indicates a error state. (This should never happen).
- *   (0): the acquisition failed, probably because a different thread
- *        acquired the cown first.
- *   (1): The cown was acquired and the `region` argument was updated. The
- *        cown needs to be manually released via `_PyCown_ReleaseGC`.
- */
-int _PyCown_AcquireGC(_PyCownObject *self, Py_region_t *region) {
-    // Attempt to lock the cown
-    int res = cown_lock(self, NO_BLOCKING_TIMEOUT, GC_IPID, false);
-    if (res == COWN_ACQUIRE_ERROR) {
-        return -1;
-    }
-
-    // The cown was snatched up by something else. This is fine for
-    // the GC
-    if (res == COWN_ACQUIRE_FAIL) {
-        return 0;
-    }
-    assert(res == COWN_ACQUIRE_SUCCESS);
-
-    // This accesses the value directly, to keep a potential region closed
-    *region = _PyRegion_Get(self->value);
-    return 1;
-}
-
 int _PyCown_SwitchFromGcToIp(_PyCownObject *self) {
-    BAIL_UNLESS_OWNED_BY(self, GC_IPID, -1);
-
     _PyCown_ipid_t ipid = _PyCown_ThisInterpreterId();
     _PyCown_ipid_t gcid = GC_IPID;
+    BAIL_UNLESS_OWNED_BY(self, gcid, -1);
+
     if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &gcid, ipid)) {
         return -1;
     }
-
     return 0;
 }
 
-static int cown_switch_to_gc_unchecked(_PyCownObject *self, _PyCown_ipid_t ipid, Py_region_t *contained_region) {
-    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, GC_IPID)) {
-        return -1;
-    }
-    *contained_region = _PyRegion_Get(self->value);
-    return 0;
-}
-
-int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region) {
+int _PyCown_SwitchFromIpToGc(_PyCownObject *self) {
     _PyCown_ipid_t ipid = _PyCown_ThisInterpreterId();
-    *contained_region = NULL_REGION;
-    if (cown_check_owner_before_release(self, ipid) < 0) {
+    _PyCown_ipid_t gcid = GC_IPID;
+    BAIL_UNLESS_OWNED_BY(self, ipid, -1);
+
+    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, gcid)) {
         return -1;
     }
-
-    if (cown_is_value_cown_or_immutable(self)) {
-        // Can be switched without any restrictions
-        return cown_switch_to_gc_unchecked(self, ipid, contained_region);
-    }
-    assert(_PyRegion_Get(self->value) != _Py_LOCAL_REGION);
-
-    int clean_res = cown_try_closing_region(self);
-    if (clean_res < 0) {
-        return -1;
-    }
-    if (clean_res == 1) {
-        // The region is still open, and we won't be able to release the cown.
-        // After GC, the cown will still be owned by the current interpreter.
-        // Nobody expects this.
-        // Replace the cown's value with an exception.
-        // FIXME(cowns): exceptions cannot yet be frozen, setting None for now
-        cown_set_value_unchecked(self, Py_None);
-    }
-    // Region is closed, safe to switch
-    return cown_switch_to_gc_unchecked(self, ipid, contained_region);
-}
-
-int _PyCown_ReleaseGC(_PyCownObject *self) {
-    return cown_release(self, GC_IPID);
+    return 0;
 }

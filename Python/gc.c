@@ -2050,10 +2050,8 @@ gc_collect_region_tree(PyThreadState *tstate,
     bool release_gil = cown != NULL && !_PyRegion_IsOpen(root_id);
     PyThreadState *_save;
     if (release_gil) {
-        Py_region_t contained;
-        int res = _PyCown_SwitchFromIpToGc(cown, &contained);
+        int res = _PyCown_SwitchFromIpToGc(cown);
         assert(res == 0);
-        assert(contained == root_id);
         Py_UNBLOCK_THREADS
     }
     region_list_build_dfs(root);
