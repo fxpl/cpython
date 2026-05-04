@@ -1944,7 +1944,7 @@ gc_region_list_split(PyGC_Head *list, PyGC_Head *contained)
  * This function can run without the GIL if the region is closed.
  */
 static void
-region_extract_unreachable(Py_region_t region_id)
+region_extract_unreachable(Py_region_t region_id, Py_ssize_t *object_count)
 {
     _Py_region_data *data = _Py_region_data_CAST(region_id);
 
@@ -1966,6 +1966,9 @@ region_extract_unreachable(Py_region_t region_id)
     gc_list_merge(&contained, &data->gc_list);
     /* Save the unreachable objects. */
     gc_list_merge(&unreachable, &data->unreachable);
+
+    /* Estimate number of objects using the rc.*/
+    *object_count += data->rc;
 }
 
 static void
@@ -2056,7 +2059,8 @@ gc_collect_region_tree(PyThreadState *tstate,
     }
     region_list_build_dfs(root);
     for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
-        region_extract_unreachable(_PyRegion_Get(curr));
+        // Abusing stats.uncollectable to count objects in the region tree.
+        region_extract_unreachable(_PyRegion_Get(curr), &stats->uncollectable);
     }
     if (release_gil) {
         Py_BLOCK_THREADS
@@ -2420,22 +2424,53 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason
     }
 
     GCState *gcstate = &tstate->interp->gc;
-    // TODO(regions-gc): gc callback
+    // TODO(regions): GC callback
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
         debug_region_collection("collecting region tree with root", _PyRegionObject_CAST(region));
     }
 
     struct gc_collection_stats stats = { 0 };
     Py_region_t region_id = _PyRegion_Get(region);
+
+    if (cown != NULL) {
+        // Ensure the cown will not be released.
+        _PyCown_SetCollecting(cown, 1);
+    }
     PyObject *exc = _PyErr_GetRaisedException(tstate);
     gc_collect_region_tree(tstate, region_id, cown, &stats);
     _PyErr_SetRaisedException(tstate, exc);
+    if (cown != NULL) {
+        _PyCown_SetCollecting(cown, 0);
+    }
+    if (reason == _Py_GC_REASON_HEAP) {
+        // uncollectable is used to count the objects in the region tree.
+        gcstate->region_budget -= stats.uncollectable;
+    }
     return stats.collected;
 
 error:
     PyErr_SetString(PyExc_TypeError,
         "region parameter must be a bridge or an acquired cown storing a bridge");
     return -1;
+}
+
+void
+_PyGC_IncreaseRegionBudget(PyThreadState *tstate)
+{
+    GCState *gcstate = &tstate->interp->gc;
+    /* From assess_work_to_do:
+     * For a steady state heap, the amount of work to do is three times the number
+     * of new objects added to the heap. This ensures that we stay ahead in the
+     * worst case of all new objects being garbage.
+     */
+    gcstate->region_budget = gcstate->young.threshold * 3;
+}
+
+bool
+_PyGC_CanRunRegionGC(PyThreadState *tstate)
+{
+    GCState *gcstate = &tstate->interp->gc;
+    return gcstate->enabled && gcstate->region_budget > 0;
 }
 
 void
@@ -2614,6 +2649,7 @@ _Py_RunGC(PyThreadState *tstate)
 {
     if (tstate->interp->gc.enabled) {
         _PyGC_Collect(tstate, 1, _Py_GC_REASON_HEAP);
+        _PyGC_IncreaseRegionBudget(tstate);
     }
 }
 

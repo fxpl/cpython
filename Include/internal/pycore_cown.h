@@ -27,6 +27,7 @@ PyAPI_FUNC(int) _PyCown_SetValue(_PyCownObject* self, PyObject* value);
 PyAPI_FUNC(_PyCown_ipid_t) _PyCown_ThisInterpreterId(void);
 PyAPI_FUNC(_PyCown_thread_id_t) _PyCown_ThisThreadId(void);
 PyAPI_FUNC(int) _PyCown_RegionOpen(_PyCownObject *self, _PyRegionObject* region, _PyCown_ipid_t ip);
+PyAPI_FUNC(void) _PyCown_SetCollecting(_PyCownObject *self, int value);
 PyAPI_FUNC(int) _PyCown_SwitchFromGcToIp(_PyCownObject *self);
 PyAPI_FUNC(int) _PyCown_SwitchFromIpToGc(_PyCownObject *self);
 
