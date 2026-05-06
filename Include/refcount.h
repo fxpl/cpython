@@ -5,6 +5,8 @@ extern "C" {
 #endif
 
 
+#include "pyatomic.h"
+
 /*
 Immortalization:
 
@@ -157,6 +159,17 @@ static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
 #endif
 }
 
+/** Currently, only cowns require atomic reference counting.
+ * Immutable objects are handled separately.
+*/
+static inline int _PyRegion_NeedsAtomicRc(PyObject *obj) {
+    // Cown objects always have their region set to `_Py_COWN_REGION`
+    // directly. It's not possible to merge regions into the cown
+    // region, therefore, we don't need to check if the region field
+    // is part of a union find.
+    return obj->ob_region == _Py_COWN_REGION;
+}
+
 // Py_REFCNT() implementation for the stable ABI
 PyAPI_FUNC(Py_ssize_t) Py_REFCNT(PyObject *ob);
 
@@ -166,6 +179,10 @@ PyAPI_FUNC(Py_ssize_t) Py_REFCNT(PyObject *ob);
 #else
     static inline Py_ssize_t _Py_REFCNT(PyObject *ob) {
     #if !defined(Py_GIL_DISABLED)
+        // FIXME: This for some reason doesn't compile
+        // if (_PyRegion_NeedsAtomicRc(ob)) {
+        //     return _Py_atomic_load_uint32_relaxed(&ob->ob_refcnt);
+        // }
         return _Py_IMMUTABLE_FLAG_CLEAR(ob->ob_refcnt);
     #else
         uint32_t local = _Py_atomic_load_uint32_relaxed(&ob->ob_ref_local);
@@ -257,6 +274,10 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
         // TODO(Immutable): Care should be taken to make the whole SCC mutable
         // again if needed.
     }
+    // FIXME: Setting the ref count for cowns is dangerous; investigate whether
+    // this is really needed.
+    // Don't inspect ob_region here: debug tests intentionally pass incomplete
+    // or invalid PyObject memory to Py_SET_REFCNT.
 #ifndef Py_GIL_DISABLED
 #if SIZEOF_VOID_P > 4
     ob->ob_refcnt = (PY_UINT32_T)refcnt;
@@ -403,7 +424,11 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         return;
 #endif
     }
-    op->ob_refcnt = (uint32_t)cur_refcnt + 1;
+    if (_PyRegion_NeedsAtomicRc(op)) {
+        _Py_atomic_add_uint32(&op->ob_refcnt, 1);
+    } else {
+        op->ob_refcnt = (uint32_t)cur_refcnt + 1;
+    }
 #else
     if (_Py_IsImmortalOrImmutable(op)) {
         if (_Py_IsImmortal(op)) {
@@ -576,7 +601,14 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
 #endif
     }
     _Py_DECREF_STAT_INC();
-    if (--op->ob_refcnt == 0) {
+    uint32_t rc;
+    if (_PyRegion_NeedsAtomicRc(op)) {
+        rc = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+    } else {
+        rc = --op->ob_refcnt;
+    }
+
+    if (rc == 0) {
         _Py_Dealloc(op);
     }
 }
