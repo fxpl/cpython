@@ -296,6 +296,13 @@ interpreterlocal_init(PyObject *self, PyObject *args, PyObject *kwds)
         il->default_value = Py_NewRef(default_or_factory);
         il->factory = NULL;
     }
+
+    // FIXME(regions): This freezes self directly, while we
+    // can't set movability on a per-object level
+    if (_PyImmutability_Freeze(self) < 0) {
+        return -1;
+    }
+
     return 0;
 }
 
@@ -483,6 +490,13 @@ sharedfield_init(PyObject *self, PyObject *args, PyObject *kwds)
     }
 
     sf->value = Py_NewRef(initial);
+
+    // FIXME(regions): This freezes self directly, while we
+    // can't set movability on a per-object level
+    if (_PyImmutability_Freeze(self) < 0) {
+        return -1;
+    }
+
     return 0;
 }
 
