@@ -8,6 +8,10 @@ extern "C" {
 #  error "Py_BUILD_CORE must be defined to include this header"
 #endif
 
+PyAPI_DATA(PyTypeObject) _PyTracingRegion_Type;
+PyAPI_FUNC(int) _PyTracingRegion_Close(PyObject* region);
+PyAPI_FUNC(int) _PyTracingRegion_Open(PyObject* region);
+
 struct _Py_immutability_state {
     int late_init_done;
     struct _Py_hashtable_t *shallow_immutable_types;
