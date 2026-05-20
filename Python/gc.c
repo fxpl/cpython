@@ -2454,6 +2454,7 @@ error:
     return -1;
 }
 
+/* Called when an object is added to a region. */
 void
 _PyGC_IncreaseRegionBudget(PyThreadState *tstate)
 {
@@ -2463,7 +2464,10 @@ _PyGC_IncreaseRegionBudget(PyThreadState *tstate)
      * of new objects added to the heap. This ensures that we stay ahead in the
      * worst case of all new objects being garbage.
      */
-    gcstate->region_budget = gcstate->young.threshold * 3;
+    gcstate->region_budget += 3;
+    if (gcstate->region_budget > gcstate->young.threshold) {
+        gcstate->region_budget = gcstate->young.threshold;
+    }
 }
 
 bool
@@ -2649,7 +2653,6 @@ _Py_RunGC(PyThreadState *tstate)
 {
     if (tstate->interp->gc.enabled) {
         _PyGC_Collect(tstate, 1, _Py_GC_REASON_HEAP);
-        _PyGC_IncreaseRegionBudget(tstate);
     }
 }
 

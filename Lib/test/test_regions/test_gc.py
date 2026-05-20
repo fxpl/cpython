@@ -50,9 +50,6 @@ class TestRegionGC(unittest.TestCase):
     def tearDown(self):
         gc.disable()
 
-    def trigger_local_gc(self):
-        # Threshold was set to 20 in setUpModule
-        l = [object() for _ in range(20)]
 
     def build_cycle(self):
         a = self.A()
@@ -175,7 +172,7 @@ class TestRegionGC(unittest.TestCase):
     def test_collection_triggered(self):
         gc.enable()
         cown = self.build_detector_cown()
-        self.trigger_local_gc()
+        # Assuming that the budget was increased sufficiently.
         cown.release()
         cown.acquire()
 
@@ -191,9 +188,9 @@ class TestRegionGC(unittest.TestCase):
         r.opener = self.RegionOpener(r.iplocal)
         r.opener = None
         r = None
-        self.trigger_local_gc()
 
         with test.support.catch_unraisable_exception() as cm:
+            # Assuming that the budget was increased sufficiently.
             cown.release()
             cown.acquire()
             # The cown could not have been released.

@@ -1287,6 +1287,7 @@ static void _PyRegion_SetMoveGC(PyObject* obj, Py_region_t new_region) {
             gc_clear_collecting(_Py_AS_GC(obj));
             gc_set_old_space(_Py_AS_GC(obj), 0);
             gc_list_move(_Py_AS_GC(obj), &data->gc_list);
+            _PyGC_IncreaseRegionBudget(PyThreadState_Get());
         } else if (IS_LOCAL_REGION(new_region)) {
             // Objects can't be moved from regions into the local region via
             // `_PyRegion_SetMoveGC`. Dissolve will always merge the entire list
