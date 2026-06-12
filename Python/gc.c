@@ -1188,6 +1188,9 @@ finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
             (finalize = Py_TYPE(op)->tp_finalize) != NULL)
         {
             _PyGC_SET_FINALIZED(op);
+            // Regions: No barrier needed.
+            // If called from the local GC, op is local.
+            // If called from the region GC, the region is already open.
             Py_INCREF(op);
             finalize(op);
             assert(!_PyErr_Occurred(tstate));
@@ -1223,6 +1226,9 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
         else {
             inquiry clear;
             if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
+                // Regions: No barrier needed.
+                // If called from the local GC, op is local.
+                // If called from the region GC, the region is already open.
                 Py_INCREF(op);
                 // TODO(Immutable): This is only required until we have the SCC support working.
                 _Py_CLEAR_IMMUTABLE(op);
@@ -1909,6 +1915,28 @@ region_list_build_dfs(_PyRegionObject *root)
     }
 }
 
+/* Create artificial local references to the bridges. */
+static int
+region_list_add_local_refs(_PyRegionObject *root) {
+    _PyRegionObject *revert_end = NULL;
+    for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
+        if (PyRegion_AddLocalRef(curr)) {
+            revert_end = curr;
+            break;
+        }
+        Py_INCREF(curr);
+    }
+    if (revert_end == NULL) {
+        return 0;
+    }
+    // AddLocalRef failed, revert the changes.
+    for (_PyRegionObject *curr = root; curr != revert_end; curr = curr->next) {
+        PyRegion_RemoveLocalRef(curr);
+        Py_DECREF(curr);
+    }
+    return 1;
+}
+
 static void
 gc_region_list_split(PyGC_Head *list, PyGC_Head *contained)
 {
@@ -2072,8 +2100,9 @@ gc_collect_region_tree(PyThreadState *tstate,
      * 1. ensure they will not go away,
      * 2. prevent Python code from sharing them with other interpreters.
      */
-    for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
-        PyRegion_NewRef(curr);
+    if (region_list_add_local_refs(root)) {
+        PyErr_Clear();
+        return;
     }
 
     /* This runs Python code, which can change the region topology.
@@ -2130,6 +2159,9 @@ do_gc_callback(GCState *gcstate, const char *phase,
     PyObject *stack[] = {phase_obj, info};
     for (Py_ssize_t i=0; i<PyList_GET_SIZE(gcstate->callbacks); i++) {
         PyObject *r, *cb = PyList_GET_ITEM(gcstate->callbacks, i);
+        if (PyRegion_AddLocalRef(cb)) {
+            continue;
+        }
         Py_INCREF(cb); /* make sure cb doesn't go away */
         r = PyObject_Vectorcall(cb, stack, 2, NULL);
         if (r == NULL) {
@@ -2137,8 +2169,10 @@ do_gc_callback(GCState *gcstate, const char *phase,
                                    "calling GC callback %R", cb);
         }
         else {
+            PyRegion_RemoveLocalRef(r);
             Py_DECREF(r);
         }
+        PyRegion_RemoveLocalRef(cb);
         Py_DECREF(cb);
     }
     Py_DECREF(phase_obj);
@@ -2415,6 +2449,8 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason
             goto error;
         }
         region = value;
+        // Remove the reference to allow gc_collect_region_tree to
+        // release the GIL if the region is closed.
         PyRegion_RemoveLocalRef(value);
         Py_DECREF(value);
     }
@@ -2800,6 +2836,8 @@ visit_generation(gcvisitobjects_t callback, void *arg, struct gc_generation *gen
     gc_list = &gen->head;
     for (gc = GC_NEXT(gc_list); gc != gc_list; gc = GC_NEXT(gc)) {
         PyObject *op = FROM_GC(gc);
+        // TODO(regions): If callback moves op into a region,
+        // this function would start iterating objects in the region.
         Py_INCREF(op);
         int res = callback(op, arg);
         Py_DECREF(op);
