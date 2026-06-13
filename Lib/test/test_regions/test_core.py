@@ -1,6 +1,6 @@
 import sys
 import unittest
-from regions import Region, is_local
+from regions import Region, is_local, is_owned, get_region
 from immutable import freeze, is_frozen, freezable, unfreezable
 
 class TestBasicRegionObject(unittest.TestCase):
@@ -122,6 +122,8 @@ class TestOwnership(unittest.TestCase):
 
         self.assertTrue(is_local(a))
         self.assertFalse(r.owns(a))
+        self.assertFalse(is_owned(a))
+        self.assertEqual(get_region(a), None)
 
     def test_region_takes_ownership_of_local(self):
         # Create a region
@@ -135,6 +137,8 @@ class TestOwnership(unittest.TestCase):
         r.a = a
         self.assertTrue(r.owns(a))
         self.assertFalse(is_local(a))
+        self.assertTrue(is_owned(a))
+        self.assertEqual(get_region(a), r)
 
     def test_region_takes_ownership_of_local_is_deep(self):
         # Create a region
@@ -152,6 +156,22 @@ class TestOwnership(unittest.TestCase):
         self.assertTrue(r.owns(a.b))
         self.assertFalse(is_local(a))
         self.assertFalse(is_local(a.b))
+
+    def test_get_region_lrc(self):
+        # Create a region
+        r = Region()
+        a = self.A()
+        r.a = a
+
+        # a is owned by r
+        self.assertTrue(r.owns(a))
+
+        base_lrc = r._lrc
+        self.assertEqual(get_region(a), r)
+        self.assertEqual(get_region(r), r)
+        self.assertEqual(get_region(a), r)
+        self.assertEqual(get_region(r), r)
+        self.assertEqual(r._lrc, base_lrc)
 
 class TestInterRegionRelations(unittest.TestCase):
     class A:

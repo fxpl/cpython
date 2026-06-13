@@ -2093,6 +2093,8 @@ int _PyRegion_IsBridge(PyObject *obj) {
 }
 
 /* Returns the bridge object belonging to the region of the given object.
+ *
+ * The bridge pointer is borrowed, it has to be INCREF'ed to be strong
  */
 PyObject* _PyRegion_GetBridge(Py_region_t region) {
     // Regions without data don't have a bridge

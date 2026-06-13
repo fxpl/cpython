@@ -103,6 +103,39 @@ regions_is_local_impl(PyObject *module, PyObject *obj)
 }
 
 /*[clinic input]
+regions.is_owned -> bool
+    obj: object
+    /
+
+Return True the object is owned by a region.
+[clinic start generated code]*/
+
+static int
+regions_is_owned_impl(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=121858a6b80c07a6 input=bf22ea6a6fc44cae]*/
+{
+    return _PyRegion_GetBridge(_PyRegion_Get(obj)) != Py_None;
+}
+
+/*[clinic input]
+
+regions.get_region -> object
+    obj: object
+    /
+
+Returns the region object owning this object.
+
+It returns None if the object is local or immutable.
+[clinic start generated code]*/
+
+static PyObject *
+regions_get_region(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=8c8f6be3371e4e6e input=abd4a6313cd7a2e1]*/
+{
+    return PyRegion_NewRef(_PyRegion_GetBridge(_PyRegion_Get(obj)));
+}
+
+/*[clinic input]
 regions.get_last_dirty_reason
 
 Returns the last reason for marking open regions as dirty.
@@ -119,6 +152,8 @@ regions_get_last_dirty_reason_impl(PyObject *module)
 
 static struct PyMethodDef regions_methods[] = {
     REGIONS_IS_LOCAL_METHODDEF
+    REGIONS_IS_OWNED_METHODDEF
+    REGIONS_GET_REGION_METHODDEF
     REGIONS_GET_LAST_DIRTY_REASON_METHODDEF
     { NULL, NULL }
 };
