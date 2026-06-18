@@ -3575,18 +3575,12 @@ dict_repr_lock_held(PyObject *self)
     Py_ssize_t i = 0;
     int first = 1;
     while (_PyDict_Next((PyObject *)mp, &i, &key, &value, NULL)) {
+        if (PyRegion_AddLocalRefs(key, value)) {
+            goto error;
+        }
         // Prevent repr from deleting key or value during key format.
         Py_INCREF(key);
         Py_INCREF(value);
-        if (PyRegion_AddLocalRef(key)) {
-            // Clear `value` to prevent the `PyRegion_AddLocalRef` call
-            // during error handling.
-            Py_CLEAR(value);
-            goto error;
-        }
-        if (PyRegion_AddLocalRef(value)) {
-            goto error;
-        }
 
         if (!first) {
             // Write ", "
@@ -5474,7 +5468,6 @@ dictiter_new(PyDictObject *dict, PyTypeObject *itertype)
         return NULL;
     }
     if (PyRegion_AddRef(di, dict)) {
-        Py_DECREF(dict);
         return NULL;
     }
     di->di_dict = (PyDictObject*)Py_NewRef(dict);
