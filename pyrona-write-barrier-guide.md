@@ -26,23 +26,36 @@ approval between functions; the human reviews the finished type.
 ### The loop
 1. **Find the spec** (`PyTypeObject` or `PyType_Spec`) for the type, as in
    "The type-level workflow" below.
-2. **Movability check.** Inspect the object struct named in `sizeof(...)`. If
+2. **Request broad file-edit permission upfront.** Before making any edits,
+   tell the user you will be modifying the migration target file throughout
+   and ask for a single approval that covers all edits. Do **not** ask again
+   for each individual change — repeated per-edit prompts slow the migration.
+3. **Movability check.** Inspect the object struct named in `sizeof(...)`. If
    it holds non-movable pointers (`PyThreadState*`, `PyInterpreterState*`,
    frame pointers, or other non-`PyObject*` pointers into runtime/stack
    state), **stop and report it for human review** with the specific fields,
    then wait. Otherwise continue.
-3. **Set the flag now.** Add `.tp_flags2 = Py_TPFLAGS2_REGION_AWARE` at the
+4. **Set the flag now.** Add `.tp_flags2 = Py_TPFLAGS2_REGION_AWARE` at the
    start, not the end — otherwise dispatching to the type during testing marks
    regions dirty and the tests can't observe correct behavior. Setting it early
    does not change runtime correctness.
-4. **Walk the spec with the moving `// TODO`**, top to bottom, descending into
+5. **Walk the spec with the moving `// TODO`**, top to bottom, descending into
    sub-structs. For each function the TODO lands on, run the per-function cycle
    below, then advance the TODO. Continue until the TODO reaches the end of the
    spec and all sub-structs.
-5. **Run the tests once, at the end** (see "Tests"). The type is not complete
-   until the full `test_regions` package passes. If it fails, decide whether
-   the test or the migration is wrong, fix, and re-run.
-6. **Produce the final output** (below).
+6. **Run the tests once, at the end** (see "Tests"). The type is not complete
+   until **all** of the following hold:
+   - The full `test_regions` package passes with **zero failures and zero
+     expected failures introduced by this migration**. An `@expectedFailure`
+     that covers unimplemented barrier behavior is a migration defect, not a
+     valid outcome. Fix the barrier, or stop and flag for human review (see
+     "When to stop and ask the human") — do not hand the human an incomplete
+     implementation disguised as an expected failure.
+   - Every operation slot in the type spec has a corresponding test (see
+     "Test coverage requirement" in the Tests section).
+   If a test fails, decide whether the test or the migration is wrong, fix,
+   and re-run. Repeat until the full suite is green.
+7. **Produce the final output** (below).
 
 ### Per-function cycle
 For the function currently under the TODO:
@@ -57,30 +70,64 @@ For the function currently under the TODO:
 4. Advance the TODO to the next function.
 
 ### The review step
-Give the review sub-agent this instruction:
+**Spawn three independent review sub-agents** — not yourself, not the same
+agent twice. Self-review shares the blind spots that produced any error, so it
+is not trusted. Each agent receives the *original* function(s), the *migrated*
+function(s), and this guide. The migration proceeds to "Final output" only when
+**all three reviews report no violations**. If any review finds a violation,
+fix it and re-run all three reviews for the functions that changed. "Re-run
+from scratch" is scoped to the changed function(s): functions that were not
+touched by the fix do not need re-review unless the fix altered a shared helper
+they also call.
 
-> You did not write this code. Review the migrated function **and its tests**
-> against the attached Migration Guide. First decide whether the migration is
-> even the right shape; then check, specifically: every `Py_DECREF`/`Py_XDECREF`
+Each agent has a different lens:
+
+**Agent 1 — Barrier correctness and behavior preservation.** Give it this instruction:
+
+> You did not write this code. Review the migrated functions against the
+> attached Migration Guide. Check specifically: every `Py_DECREF`/`Py_XDECREF`
 > on a stack-held value has a preceding `RemoveLocalRef`/`CLEARLOCAL`; every
-> exit path (`return`, `goto`) is symmetric; every barrier failure is handled in
-> the function's own error-handling style; if the function is in a critical
-> section, every failure path exits it; observable behavior is unchanged; every
-> skipped barrier is justified with an `assert`; and no value is given a local
-> ref only to immediately `TakeRef` it (the new-owning-ref vs transfer
-> anti-pattern). Then review the tests: do they exercise the barrier shapes this
-> function actually used (neutral / returning-borrow / transfer), assert
-> *relative* counter changes rather than absolute values, keep returned
-> references alive to observe the borrow and clear them to prove symmetry, and
-> cover the relevant failure path — not just the happy path? Report every
-> violation specifically. A review that only finds cosmetic issues while a
-> barrier is missing or misplaced, or that passes shallow happy-path-only tests,
-> is a failed review.
+> exit path (`return`, `goto`) is symmetric — borrows added are removed on
+> every path; every barrier failure is handled in the function's own
+> error-handling style; if the function is inside a critical section, every
+> failure path exits it; every skipped barrier is justified with an `assert`;
+> `TakeRef` is only used when the caller genuinely owns the stack reference
+> (never on a borrowed argument); and `AddRef` vs `TakeRef` is chosen
+> correctly per the guide's classification table. Also verify that the
+> migration did not change observable behavior: return values, error codes,
+> exception types, and side effects must be identical to the original for all
+> inputs — the only permitted additions are barrier calls and `assert`s.
+> Report every violation specifically with the line number and the rule it
+> breaks.
 
-Note: the independent review reduces how many errors reach the test suite, but
-it is not a guarantee — it still shares model-level blind spots with the
-migrating agent. Compilation and the `test_regions` run at the end are the
-checks that do not depend on model judgment, and are the real gate.
+**Agent 2 — Test completeness.** Give it this instruction:
+
+> You did not write these tests. Review them against the attached Migration
+> Guide's "Tests" section and "Test coverage requirement". Check specifically:
+> every operation slot in the type spec has at least one test; in-place
+> operators (`|=`, `&=`, `-=`, `^=`) are each covered separately from their
+> non-in-place counterparts; the three operation shapes (neutral,
+> returning-borrow, transfer) are each tested; tests assert *relative* counter
+> changes (record before/after), not absolute values; returned references are
+> kept alive to observe the borrow and cleared to prove symmetry; failure paths
+> are tested, not just the happy path; and no test is marked `@expectedFailure`
+> to hide an unimplemented barrier. Report every gap specifically.
+
+**Agent 3 — Edge cases and corner shapes.** Give it this instruction:
+
+> You did not write this code or tests. Review for edge cases the other
+> reviewers might miss: frozenset vs mutable-set branches that diverge in
+> barrier handling; self-referential operations (e.g. `s & s`, `s.isdisjoint(s)`);
+> empty-collection fast paths; iterator exhaustion vs early abandonment;
+> operations that call `__eq__` or `__hash__` on foreign objects (arbitrary
+> Python can run, region state can change mid-call); and in-place operators
+> that return `self` (must use `PyRegion_NewRef`, not `Py_NewRef`). For each
+> edge case, check whether the migration and tests cover it. Report every gap.
+
+Note: three independent reviews reduce how many errors reach the test suite,
+but they do not eliminate the possibility — they still share model-level blind
+spots with the migrating agent. Compilation and the `test_regions` run at the
+end are the checks that do not depend on model judgment, and are the real gate.
 
 ### When to stop and ask the human (only these)
 Proceed autonomously except in these cases, where you stop and ask rather than
@@ -93,14 +140,23 @@ guess (guessing is a failure, not a time-saver):
 - Something is genuinely ambiguous and this guide does not resolve it — an
   unclear source region, new-ref vs transfer you cannot determine, or a callee
   whose RC/region behavior you cannot establish.
+- A barrier cannot be implemented because the required API does not exist or
+  the behavior is genuinely undefined. Flag for human review. **Do not** mark
+  the test `@expectedFailure` and hand over an incomplete implementation — that
+  hides the defect and forces the human to rediscover it.
 
 ### Final output
 When the whole type is migrated:
 - The migrated type: all functions, plus `.tp_flags2 = Py_TPFLAGS2_REGION_AWARE`.
 - The tests added.
-- The `test_regions` run result.
+- The `test_regions` run result, **plus the run result for the type's own test
+  module** (e.g. `test_set` when migrating `set`) — both must pass.
 - A list of everything flagged for human review (movability, staged refs,
   public-signature changes, unresolved questions).
+- **Disputed findings**: for each review finding the agent evaluated and chose
+  not to act on, record the finding text, the agent's counter-reasoning, and
+  the specific code location. This allows the human reviewer to adjudicate
+  without re-running the review.
 
 ---
 
@@ -131,10 +187,24 @@ add an `assert` documenting why it can be safely skipped.
    the irreversible store, so you can still bail out cleanly.
 
 **Default to proper barriers with full error handling.** Skipping a barrier in
-favour of an `assert` is an optimization you may apply only when you are
-certain it is safe (e.g. the target is immutable, or the reference is into a
-known-local object). **If uncertain, always use proper barriers with error
-handling over hoping for the best.**
+favour of an `assert` is an optimization you may apply only when one of these
+specific structural conditions holds:
+
+1. The object was created in the current frame with no path for it to enter a
+   region before this point (e.g., return value of `PyList_New`, `PyDict_New`,
+   `PySet_New` — functions that always return a freshly allocated object).
+2. The object is known immutable — `PyRegion_NeedsReadBarrier` would return
+   false in all cases (e.g., `Py_None`, `Py_True`, `Py_True`, small integers,
+   interned strings).
+3. The container is provably locked and its region therefore open, making
+   `AddLocalRef` infallible — as in the steal-and-return pattern.
+
+The condition must be stated explicitly in a comment adjacent to the assert.
+An assert that provides no structural justification must be replaced with a
+proper barrier. Note that asserts are stripped in optimized builds; a barrier
+replaced by an assert is absent at production runtime.
+
+**If uncertain, always use proper barriers with error handling.**
 
 ---
 
@@ -198,10 +268,10 @@ PyTypeObject PySet_Type = {
 };
 ```
 
-Some slots point to sub-structs (`tp_as_number`, `tp_as_sequence`,
-`tp_methods`, `tp_getset`, ...). When the TODO reaches one, descend into that
-struct and apply the same moving-TODO walk through its function pointers
-before returning to the parent spec:
+Some slots point to sub-structs (`tp_as_number`, `tp_as_sequence`, etc.).
+When the TODO reaches one, descend into that struct and apply the same
+moving-TODO walk through its function pointers before returning to the parent
+spec:
 ```c
 static PyNumberMethods set_as_number = {
     0,                                  /*nb_add*/
@@ -210,6 +280,12 @@ static PyNumberMethods set_as_number = {
     ...
 };
 ```
+
+`tp_methods` and `tp_getset` are **arrays**, not sub-structs, but must be
+walked all the same. For `tp_methods`, every non-NULL `.ml_meth` entry is a
+function to migrate. For `tp_getset`, every non-NULL `.get` and `.set` entry
+is a function to migrate. Do not skip them because they are array entries
+rather than named struct fields.
 
 This walk defines the order in which functions are migrated, and guarantees
 every function reachable from the type's spec is covered.
@@ -238,11 +314,20 @@ If the function calls another function that is **not yet migrated**, check
 whether that callee does any reference-count work:
 - If the callee does **no** RC work (e.g. it only returns a raw C pointer with
   no RC change, like a `set_next` iterator helper), you do not need to migrate
-  it to proceed.
+  it to proceed. **Positive verification required**: grep the callee for
+  `Py_INCREF`, `Py_DECREF`, `Py_XDECREF`, `Py_XINCREF`, `Py_SETREF`,
+  `Py_CLEAR`, `Py_NewRef`, `Py_XNewRef`, and `PyRegion_`. Only claim "no RC
+  work" if none of these appear.
 - If the callee **does** RC work, migrate it first (descend into it), then
   return.
-- If the callee is **already migrated / region-aware** (e.g. `list`, `dict`),
-  you can rely on it without rechecking.
+- If the callee is a **shared internal helper** (called from more than one spec
+  function): migrate it when first encountered; note it as done; skip it on
+  subsequent encounters. When a second spec function reaches it, re-read the
+  callee to confirm it was migrated correctly for that function's call context.
+- If the callee is **already migrated / region-aware** (its source contains
+  `PyRegion_` calls or it is a well-known built-in type like `list` or `dict`):
+  you can rely on it without descending. "Already migrated" must be verifiable
+  by reading the callee — a verbal claim is not sufficient.
 - If the call **dispatches through a type slot** to code that may not be
   region-aware, guard it with `PyRegion_NotifyTypeUse(type)` (see reference).
 
@@ -256,6 +341,7 @@ For every RC operation in the function, pick the barrier:
 | Storing a value you **received or are also keeping** into a heap object (you create a new owning reference; RC is incremented) | `PyRegion_AddRef` before the store, then `Py_NewRef` |
 | Storing several such new references in one logical step | `PyRegion_AddRefs` (fixed count) or `PyRegion_AddRefsArray` (runtime count) |
 | Handing off a reference you **already own on the stack** into a heap object — you are not keeping it and the RC does not change (a transfer) | `PyRegion_TakeRef` before the store |
+| **Stealing** a value from a heap field and returning it to the caller **without changing the RC** (the container loses it, the caller gains it) | `PyRegion_AddLocalRef(val)` *before* clearing the field, then clear the field, then `PyRegion_RemoveRef(src, val)` — see "Steal-and-return" below |
 | Replacing a field, stealing the value | `PyRegion_XSETREF` |
 | Replacing a field with a **new owning reference** to the value | `PyRegion_XSETNEWREF` |
 | `Py_SETREF(field, val)` — old value non-null | `PyRegion_XSETREF` (the X-prefix is harmless on a non-null old value) |
@@ -263,6 +349,60 @@ For every RC operation in the function, pick the barrier:
 | `Py_DECREF` on a field in `dealloc` | `PyRegion_RemoveRef(self, field)` before `Py_DECREF` |
 | Dispatching through a type slot | `PyRegion_NotifyTypeUse(type)` before the dispatch |
 | Reusing/recycling an object as if newly allocated | `PyRegion_RecycleObject(obj)` |
+| Bulk loop: storing N references into one container as an all-or-nothing step | **If `src` is local** (`PyRegion_IsLocal(src)` is true), use per-item `PyRegion_AddLocalRef` with rollback via `RemoveLocalRef` on failure — no heap allocation needed. **If `src` is not local**, build the full array first, then `PyRegion_AddRefsArray(src, n, array)` before the loop; on failure propagate the error without having stored anything. Both branches share the copy loop that follows; the local branch needs no `RemoveLocalRef` cleanup after the copy. |
+| Copying a struct that contains `PyObject*` fields (e.g. `tmp = *self`) — the copy's fields are new stack borrows | `PyRegion_AddLocalRef` / `PyRegion_AddLocalRefs` for each non-NULL field you will use; each `AddLocalRef` must be paired with a `Py_INCREF`/`Py_XINCREF` on that field; match cleanup with `PyRegion_RemoveLocalRef` / `PyRegion_CLEARLOCAL` — see "Struct-snapshot pattern" |
+| Temporarily holding a value **borrowed from a heap field** across a call that may run Python code — e.g. `Py_INCREF(key)` to pin a table entry, call `PyObject_RichCompareBool`, then `Py_DECREF(key)` | `PyRegion_AddLocalRef(key)` before the `Py_INCREF`; `PyRegion_RemoveLocalRef(key)` before the `Py_DECREF`. The callee can remove the value from the container through arbitrary `__eq__`/`__hash__` code; the region tracker must know the borrow exists. This is the most common pattern in hash-table lookup and comparison functions. |
+
+### Steal-and-return
+
+"Steal-and-return" is the pattern for operations like `pop`: the function removes
+a value from a heap field and returns it to the caller **without incrementing
+the RC**. The container loses the owning reference; the caller gains a local
+borrow. The RC does not change.
+
+The safe order — `AddLocalRef` *first*, before clearing the field — means the
+object's region stays open throughout. If `AddLocalRef` is called after the
+field is already `NULL`/`dummy`, the owning reference is already gone and the
+region may have closed.
+
+```c
+// PATTERN: steal entry->key from 'so' and return it to caller
+key = entry->key;
+
+// 1. Record the local borrow WHILE so still owns it.
+//    Succeeds because so is locked (region is open).
+if (PyRegion_AddLocalRef(key)) {
+    return NULL;   // or use assert — see below
+}
+
+// 2. Clear the field (so no longer owns key).
+entry->key = dummy;
+entry->hash = -1;
+...
+
+// 3. Remove the owning edge from so — NO Py_DECREF follows.
+//    The strong reference is not dropped; it is inherited by the caller
+//    via the return value. RC stays at the same value throughout.
+PyRegion_RemoveRef(so, key);
+
+// 4. Return key — caller inherits the local borrow recorded in step 1.
+return key;
+```
+
+Note: `RemoveRef`'s reference entry says "call before the matching `Py_DECREF`" —
+that applies to the *drop* case (dealloc, field replace). In steal-and-return the
+strong reference is not dropped; it is handed to the caller, so no `Py_DECREF`
+is needed and none should be added.
+
+When you can prove that `so` is locked — meaning a `Py_BEGIN_CRITICAL_SECTION`
+lock on `so` is held, which guarantees at least one borrow is active and therefore
+its region's LRC > 0 — `AddLocalRef` cannot fail; you may replace the `if` with
+an `assert`:
+```c
+int res = PyRegion_AddLocalRef(key);
+assert(res == 0 && "so is locked, its region is open");
+(void)res;
+```
 
 **`AddRef` vs `TakeRef` — decide by what you hold:**
 - You received a borrowed argument, or you are storing a value you also keep a
@@ -303,6 +443,15 @@ lives in a region. In that case you may replace a full barrier with
 `PyRegion_AddLocalRef` plus an `assert`, and replace a barrier-requiring
 `Py_DECREF` of a value you *received from a callee* with an
 `assert(!PyRegion_NeedsReadBarrier(x))`.
+
+**Do not confuse "known-local" with "possibly-cached/interned."** Some C API
+functions may return a shared or immortal object rather than a freshly
+allocated one — for example `PyLong_FromLong` for small integers,
+`PyBool_FromLong`, or `PyUnicode_InternInPlace`. These are not "local" in the
+region sense; they are *immutable*. Apply the immutable exemption (condition 2
+above), not the known-local exemption. The distinction matters: a known-local
+object has no region; an immutable object may be in a region but requires no
+barrier because it cannot transfer ownership.
 
 This illustrates how `set_repr_lock_held` is migrated (it shows the intended
 result of the migration, which may be ahead of any given checkout of the
@@ -351,6 +500,35 @@ The failure path uses `goto done` rather than `return NULL`, because the real
 `Py_ReprLeave` before returning). Returning directly would skip that cleanup —
 exactly the failure-path symmetry this guide tells you to preserve.
 
+### Struct-snapshot pattern
+
+When code copies an entire struct that contains `PyObject*` fields — for example
+to iterate a collection safely while holding a snapshot:
+
+```c
+setiterobject tmp = *si;
+Py_XINCREF(tmp.si_set);
+```
+
+The copy `tmp` now has its own stack reference to `tmp.si_set`. That reference
+is a new local borrow. Migrate it the same way as any stack-held `Py_INCREF`:
+
+```c
+setiterobject tmp = *si;
+if (tmp.si_set != NULL && PyRegion_AddLocalRef(tmp.si_set)) {
+    return NULL;
+}
+Py_XINCREF(tmp.si_set);   // RC change to match the borrow
+```
+
+And the matching cleanup:
+```c
+PyRegion_CLEARLOCAL(tmp.si_set);   // RemoveLocalRef + XDECREF
+```
+
+Use `PyRegion_AddLocalRefs(a, b, ...)` when the snapshot covers multiple fields
+that must be borrowed as an all-or-nothing step.
+
 ### Handle failure the way the function already does
 Every `Add*` / `Take*` / `XSET*` barrier can fail (nonzero, or NULL for the
 `NewRef` family). On failure you must **undo what you have done so far and
@@ -376,6 +554,9 @@ A function is done when **all** of the following hold:
       or — for dynamic dispatch — is guarded by `NotifyTypeUse`.
 - [ ] If inside a critical section, every failure path exits it.
 - [ ] No staged-ref pattern was needed without being flagged for human review.
+- [ ] The function has at least one test that exercises its barrier shape
+      (neutral / returning-borrow / transfer), and that test passes with no
+      `@expectedFailure` annotation.
 
 If you cannot satisfy this — ambiguous barrier choice, a function with no error
 channel that needs a failing barrier, or an apparent need for staged refs —
@@ -412,6 +593,66 @@ as `AddRefs`, but for a count known only at **runtime**: it succeeds if a
 reference can be created to every object in `array`, and on failure leaves
 everything unchanged. Use this when you need to add a runtime-determined number
 of references atomically.
+
+**`IsLocal` fast-path:** `AddRefsArray` requires building a heap-allocated array
+upfront. When `PyRegion_IsLocal(src)` is true you can avoid that allocation
+entirely by using per-item `PyRegion_AddLocalRef` instead — `AddLocalRef` is
+reversible, so a failure mid-loop can be rolled back with `RemoveLocalRef` on
+the items already added:
+
+```c
+if (PyRegion_IsLocal(so)) {
+    /* local: use per-item AddLocalRef — reversible, no heap allocation */
+    for (i = 0; i <= other->mask; i++) {
+        key = other->table[i].key;
+        if (key != NULL) {
+            if (PyRegion_AddLocalRef(key)) {
+                /* roll back items already added */
+                while (i > 0) {
+                    --i;
+                    PyObject *k2 = other->table[i].key;
+                    if (k2 != NULL) PyRegion_RemoveLocalRef(k2);
+                }
+                return -1;
+            }
+        }
+    }
+} else {
+    /* non-local: must use AddRefsArray for all-or-nothing ownership barrier */
+    Py_ssize_t k = 0;
+    PyObject **keys_array = PyMem_New(PyObject *, other->used);
+    if (keys_array == NULL) { PyErr_NoMemory(); return -1; }
+    for (i = 0; i <= other->mask; i++) {
+        key = other->table[i].key;
+        if (key != NULL) keys_array[k++] = key;
+    }
+    if (PyRegion_AddRefsArray(so, (int)k, keys_array)) {
+        PyMem_Free(keys_array);
+        return -1;
+    }
+    PyMem_Free(keys_array);
+}
+for (i = 0; i <= other->mask; i++, so_entry++, other_entry++) {
+    key = other_entry->key;
+    if (key != NULL) {
+        so_entry->key = Py_NewRef(key);
+        so_entry->hash = other_entry->hash;
+    }
+}
+```
+
+The key distinction: `AddLocalRef` is **reversible** (a failed borrow can be
+undone with `RemoveLocalRef`), whereas owning references recorded by
+`AddRefsArray` are not. This makes the per-item loop safe to roll back without
+needing the all-or-nothing array.
+
+The `IsLocal` branch does **not** need a `RemoveLocalRef` cleanup loop after the
+copy — removing them would make the two branches asymmetric (the `AddRefsArray`
+branch has no corresponding cleanup). The `AddLocalRef` calls serve purely as a
+reversible pre-flight check; once `Py_NewRef` establishes proper ownership
+during the copy, no explicit release is needed.
+
+Apply this pattern whenever the container is known local at the call site.
 
 **`PyRegion_TakeRef(src, tgt)`** — transfer an **existing owned** reference
 (typically a stack-held borrow) into `src`. Use when the code stores into a
@@ -471,9 +712,9 @@ if (PyRegion_XSETREF(self, self->args, seq)) {
 }
 ```
 
-**`PyRegion_XSETNEWREF(src, field, val)`** — like `XSETREF` but creates a
-**new** owning reference to `val` instead of stealing it. Replaces the
-`Py_XSETREF(field, Py_NewRef(val))` idiom. `val` may be `NULL` (it internally
+**`PyRegion_XSETNEWREF(src, field, val)`** — replaces the old field with a
+**new** owning reference to `val` (i.e. the RC is incremented) rather than
+stealing an existing one. `val` may be `NULL` (it internally
 uses `Py_XNewRef`). Can fail.
 ```c
 if (PyRegion_XSETNEWREF(self, self->value, value)) {
@@ -535,7 +776,22 @@ the first borrow succeeded and the second failed.
 
 **`PyRegion_CLEARLOCAL(local)`** — clears a stack-held local reference (removes
 the borrow and DECREFs). Prefer it over a manual `RemoveLocalRef` + `Py_DECREF`
-pair where it fits.
+pair where it fits. `CLEARLOCAL` sets `local` to NULL as part of its
+implementation — **do not write `local = NULL` afterward**, it is redundant.
+
+**Anti-pattern — prefer `CLEARLOCAL` over open-coded `RemoveLocalRef` + `Py_DECREF`.**
+When the variable is not used after the cleanup, collapse the pair into one call:
+```c
+// VERBOSE (only use when you need the variable to remain non-NULL afterward):
+PyRegion_RemoveLocalRef(it);
+Py_DECREF(it);
+
+// PREFERRED when the variable is done:
+PyRegion_CLEARLOCAL(it);
+```
+The pair form is appropriate only when you need to keep `it` pointing at the
+old object after the barrier (e.g. to read a field from it before it frees).
+In practice that is rare; default to `CLEARLOCAL`.
 
 ### Local replacement helpers
 
@@ -562,6 +818,24 @@ Py_DECREF(listrepr);
 An assert documents the assumption *and* checks it in debug builds — strictly
 better than a comment that can silently rot.
 
+**Anti-pattern — never pair `assert(!NeedsReadBarrier)` with `CLEARLOCAL`.**
+`CLEARLOCAL` performs a region barrier (it calls `RemoveLocalRef`). If
+`!NeedsReadBarrier` is true, no barrier was established, so calling
+`RemoveLocalRef` is wrong — it decrements LRC without a matching increment.
+The assert and `CLEARLOCAL` are contradictory:
+```c
+// WRONG: assert says no barrier needed, but CLEARLOCAL performs one
+assert(!PyRegion_NeedsReadBarrier(x));
+PyRegion_CLEARLOCAL(x);
+
+// RIGHT option A: established a borrow (AddLocalRef was called) — use CLEARLOCAL, no assert
+PyRegion_CLEARLOCAL(x);
+
+// RIGHT option B: no borrow established (local or immutable) — assert + plain Py_DECREF
+assert(!PyRegion_NeedsReadBarrier(x));
+Py_DECREF(x);
+```
+
 **Immutable values never need a barrier.** This covers:
 - Singletons returned via `Py_RETURN_NONE`, `Py_RETURN_TRUE`,
   `Py_RETURN_FALSE`, and `Py_RETURN_NOTIMPLEMENTED` — `Py_None`, `Py_True`,
@@ -587,11 +861,23 @@ result = Py_TYPE(obj)->tp_repr(obj);   // the dispatch
 ```
 Common cases that *are* dispatches needing a guard: direct slot calls
 (`tp_repr`, `tp_richcompare`, `mp_ass_subscript`, `sq_ass_item`, `tp_iternext`,
-etc.). When you call a higher-level helper API instead of a slot directly
-(e.g. `PyObject_Repr`, `PyObject_RichCompare`), the helper performs the
-dispatch internally; if you cannot determine whether such a helper already
-notifies, flag for review rather than guessing — a missed notification is a
-correctness bug, and a redundant one is only mildly wasteful.
+etc.). High-level helper APIs that dispatch internally must be treated the same
+way — add `PyRegion_NotifyTypeUse(Py_TYPE(obj))` immediately before the call:
+
+| Helper | Dispatches through |
+|--------|--------------------|
+| `PyObject_Repr(obj)` | `tp_repr` |
+| `PyObject_RichCompareBool(a, b, op)` / `PyObject_RichCompare` | `tp_richcompare` |
+| `PyObject_Hash(obj)` | `tp_hash` |
+| `PyObject_GetAttr(obj, name)` | `tp_getattro` |
+| `PyObject_SetAttr(obj, name, val)` | `tp_setattro` |
+| `PyObject_CallMethod(obj, ...)` | slot dispatch chain |
+| `PyObject_GetIter(obj)` | `tp_iter` |
+
+When the dispatch target is a type you just migrated (and thus region-aware),
+the `NotifyTypeUse` call is a no-op and harmless. When the target is an
+unknown or user-defined type, it is required. Default to adding it; omit only
+when you can confirm the target type is already region-aware.
 
 ### Object recycling
 
@@ -663,6 +949,56 @@ Tests use the `Region` object and its inspection API. Assert on **relative**
 counter changes — record before and after the operation under test, never
 absolute values. Useful inspection points: `_lrc`, `_osc`, `is_open`,
 `is_dirty`, and the helpers `owns(obj)`, `is_local(obj)`, `get_region(obj)`.
+
+### Test coverage requirement
+A migration is **not complete** until every operation slot in the type spec has
+a corresponding test. Walk the spec the same way the migration did, and for each
+function verify that at least one test exercises it. Gaps to watch for:
+
+- **In-place operators** (`|=`, `&=`, `-=`, `^=`) — each returns `self` via
+  `PyRegion_NewRef`; they must be tested separately from their non-in-place
+  counterparts (`|`, `&`, `-`, `^`) because the barrier shape differs.
+- **All iteration shapes**: iterator creation (LRC cost), `next()` (per-yield
+  LRC cost), iterator exhaustion, and early abandonment (deleting the iterator
+  before it is exhausted).
+- **Copy and repr** — neutral operations; assert LRC returns to baseline.
+- **Pop** — steal-and-return; assert LRC rises while the result is held and
+  drops when the result is released.
+- **Clear** — assert LRC drops by one per element removed.
+- **Frozenset-specific paths**: the idempotent `frozenset(f)` shortcut and the
+  `frozenset.copy()` shortcut each have a distinct `PyRegion_NewRef` site.
+
+A test that is marked `@expectedFailure` because the underlying barrier is not
+yet implemented is **not acceptable** as a substitute for a passing test. Fix
+the barrier, or stop and flag for human review (see "When to stop and ask the
+human").
+
+### Tests must use region objects
+Every test must place the object under test inside a `Region` before calling
+the function being tested. A test that operates only on local (non-region)
+objects cannot exercise the barrier code path — barriers on local objects are
+no-ops — and does not satisfy the coverage requirement.
+
+```python
+# WRONG: operates on a local set; barriers never fire
+def test_set_add_wrong(self):
+    s = set()
+    s.add(42)
+
+# RIGHT: places element in a region so AddRef/RemoveRef fire
+def test_set_add_right(self):
+    r = Region()
+    elem = MyObj()
+    base = r._lrc
+    r.s = set()
+    r.s.add(elem)
+    self.assertTrue(r.owns(elem))
+```
+
+When claiming that an **existing** test covers a function, confirm the existing
+test constructs a region object on the relevant path. Pre-migration tests
+almost always use only local objects and do not cover the barrier paths; extend
+them rather than citing them as sufficient.
 
 ### Map tests to the barriers the function used
 For each migrated function, look at what it did and test the matching
@@ -767,18 +1103,25 @@ fully when the loop variable is cleared because they cache the result object
 implementation actually intends.
 
 ### Running tests
-Use focused tests while migrating, then run the whole package before marking
-the type region-aware:
+Use focused tests while migrating, then run the complete required suite before
+marking the type done:
 ```bash
-# whole region test package — run before marking a type done
-./python.exe -m test test_regions
+# required: region barriers + the type's own test module (e.g. test_set)
+./python.exe -m test test_regions test_set
 
-# a single module while working on a type
+# a single region module while working on a type
 ./python.exe -m unittest Lib.test.test_regions.test_dict
 
 # a single test while iterating
 ./python.exe -m unittest Lib.test.test_regions.test_core.TestInterRegionRelations.test_unchanged_region_after_failure
 ```
+
+`test_regions` verifies that the new barriers are correct. The type's own test
+module (e.g. `test_set` for `set`, `test_dict` for `dict`) verifies that
+observable behavior is unchanged — barrier bugs can corrupt data structures in
+ways that appear only there, not in `test_regions`. **Both must pass.** Running
+only `test_regions` is not sufficient.
+
 If tests fail, consider both possibilities: the test may be wrong, or the
 migration may be. A type is only done when the full `test_regions` package
 passes with the type marked `Py_TPFLAGS2_REGION_AWARE`.
