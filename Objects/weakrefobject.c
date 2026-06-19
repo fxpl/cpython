@@ -1108,6 +1108,9 @@ handle_callback(PyWeakReference *ref, PyObject *callback)
 void
 PyObject_ClearWeakRefs(PyObject *object)
 {
+    // Pyrona: ASSUME THIS IS MIGRATED
+    // THIS IS WIP, BUT OUT OF SCOPE FOR A TYPE MIGRATION
+
     PyWeakReference **list;
 
     if (object == NULL
