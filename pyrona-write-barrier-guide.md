@@ -49,9 +49,11 @@ deficiency.
    regions dirty and the tests can't observe correct behavior. Setting it early
    does not change runtime correctness.
 5. **Walk the spec with the moving `// TODO`**, top to bottom, descending into
-   sub-structs. For each function the TODO lands on, run the per-function cycle
-   below, then advance the TODO. Continue until the TODO reaches the end of the
-   spec and all sub-structs.
+   sub-structs. For each function the TODO lands on, **complete all five steps
+   of the per-function cycle below — including writing the test and waiting for
+   all three review agents to finish — before writing any code for the next
+   function.** Only then advance the TODO. Continue until the TODO reaches the
+   end of the spec and all sub-structs.
 6. **Run the tests once, at the end** (see "Tests"). The type is not complete
    until **all** of the following hold:
    - The full `test_regions` package passes with **zero failures and zero
@@ -102,10 +104,12 @@ For the function currently under the TODO:
    migrated functions that call the reviewed one.
 
 ### The review step
-**Spawn three independent review sub-agents** — not yourself, not the same
-agent twice. Self-review shares the blind spots that produced any error, so it
-is not trusted. Each agent receives the *original* function(s), the *migrated*
-function(s), the *new test(s)*, and this guide. The migration proceeds to "Final output" only when
+**Spawn three independent review sub-agents using the Agent tool** — not
+yourself, not the same agent twice. Self-review shares the blind spots that
+produced any error, so it is not trusted. Call the Agent tool three times (in
+parallel if the tool supports it) with the instructions below. Each agent
+receives the *original* function(s), the *migrated* function(s), the *new
+test(s)*, and this guide. The migration proceeds to "Final output" only when
 **all three reviews report no violations**. If any review finds a violation,
 fix it and re-run all three reviews for the functions that changed. "Re-run
 from scratch" is scoped to the changed function(s): functions that were not
