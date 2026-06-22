@@ -59,26 +59,51 @@ approval between functions; the human reviews the finished type.
 
 ### Per-function cycle
 For the function currently under the TODO:
-1. Migrate it to its Definition of Done, following "Migrating a single
-   function" and writing its tests as you go.
-2. **Review it with an independent sub-agent — not yourself.** Self-review
+1. **Migrate** the function, following "Migrating a single function".
+2. **Write the test** for this function before doing anything else. The test
+   must be written while the function's logic is fresh, and before review —
+   the review agents check both the migration and the test together, so the
+   test must exist first. See "Tests" for what to write. If the function has
+   no direct Python API surface (e.g. a shared internal helper), write the
+   test against its shallowest public caller and note the linkage explicitly.
+   Tests are written now but only *run* at the end once the build is stable —
+   see step 6 of "The loop".
+3. **Review both** with independent sub-agents — not yourself. Self-review
    shares the blind spots that produced any error, so it is not trusted. Hand
-   the *original* function, the *migrated* function, and this guide to a
-   separate review agent with the instruction in "The review step" below.
-3. If the review reports violations, fix them and re-review. Repeat until the
+   the *original* function, the *migrated* function, the new test, and this
+   guide to separate review agents with the instruction in "The review step"
+   below. The only permitted exception: if migrating this function required
+   descending into one or more callees for context, declare the group upfront
+   ("migrating `foo` and its callees `bar`, `baz`"), complete all of them and
+   write all their tests, then review the entire group together. Groups may not
+   be formed retrospectively to justify deferred reviews.
+4. If the review reports violations, fix them and re-review. Repeat until the
    review is clean.
-4. Advance the TODO to the next function.
+5. Advance the TODO to the next function. **Do not advance until step 4 is
+   satisfied.** Deferring all reviews to after the full migration is prohibited
+   — a batch review cannot prevent errors from propagating into subsequently
+   migrated functions that call the reviewed one.
 
 ### The review step
 **Spawn three independent review sub-agents** — not yourself, not the same
 agent twice. Self-review shares the blind spots that produced any error, so it
 is not trusted. Each agent receives the *original* function(s), the *migrated*
-function(s), and this guide. The migration proceeds to "Final output" only when
+function(s), the *new test(s)*, and this guide. The migration proceeds to "Final output" only when
 **all three reviews report no violations**. If any review finds a violation,
 fix it and re-run all three reviews for the functions that changed. "Re-run
 from scratch" is scoped to the changed function(s): functions that were not
 touched by the fix do not need re-review unless the fix altered a shared helper
 they also call.
+
+**Model for review agents**: Spawn each review agent with `model:
+"claude-sonnet-4-6"` and `effort: "medium"`. The review task is structured and
+checklist-driven — the agent does not need to discover what to look for, only
+apply the criteria in its prompt systematically. Using the same model as the
+migrating agent for reviews adds cost without proportional benefit. If a review
+comes back clean but you are still uncertain about a function — unusually
+complex error paths, ambiguous ownership, or a barrier shape not covered by
+this guide — stop and flag it for human review rather than re-running with a
+different model. See "When to stop and ask the human".
 
 Each agent has a different lens:
 
@@ -287,6 +312,13 @@ function to migrate. For `tp_getset`, every non-NULL `.get` and `.set` entry
 is a function to migrate. Do not skip them because they are array entries
 rather than named struct fields.
 
+**Before you start migrating any function**, produce an explicit numbered list
+of every `.ml_meth` entry in `tp_methods` (and every `.get`/`.set` entry in
+`tp_getset`). Record this list as your working inventory. Cross each entry off
+only after it has been migrated and its per-function review has passed. This
+list is the ground truth — if a function is not on the list, it was not
+enumerated and may be silently skipped during the walk.
+
 This walk defines the order in which functions are migrated, and guarantees
 every function reachable from the type's spec is covered.
 
@@ -303,21 +335,45 @@ only stops the dirty-marking. It is set early precisely so the per-function
 tests are meaningful, and the finished type is reviewed by a human before
 production.
 
+**Placement rule**: `.tp_flags2` must be added as a **trailing designated
+initializer** — place it after all positional initializers in the struct
+literal. Never insert it in the middle of a positional sequence. In C99, once
+a designated initializer appears mid-sequence, the compiler fills subsequent
+*positional* initializers starting from the slot *after* the designated field,
+silently shifting every later slot and corrupting the struct. Adding the flag
+at the end avoids this entirely.
+
 ---
 
 ## Migrating a single function
 
 When the TODO lands on a function, open its definition and work through it.
 
+> **Anti-pattern — name-based reasoning.** The worked examples in this guide
+> use names from a past set migration (`set_next`, `setiterobject`, `other->table`,
+> etc.). Do not use those names as evidence that a pattern applies. A function
+> named `container_next` in a new migration does not inherit the properties of
+> `set_next` in the example. Apply every pattern by structural analysis of the
+> actual function — what it does to reference counts and struct fields — not by
+> recognising a name from an example.
+
 ### Walk the call graph as needed
 If the function calls another function that is **not yet migrated**, check
 whether that callee does any reference-count work:
 - If the callee does **no** RC work (e.g. it only returns a raw C pointer with
-  no RC change, like a `set_next` iterator helper), you do not need to migrate
+  no RC change, like a raw position-advance iterator helper), you do not need to migrate
   it to proceed. **Positive verification required**: grep the callee for
   `Py_INCREF`, `Py_DECREF`, `Py_XDECREF`, `Py_XINCREF`, `Py_SETREF`,
-  `Py_CLEAR`, `Py_NewRef`, `Py_XNewRef`, and `PyRegion_`. Only claim "no RC
-  work" if none of these appear.
+  `Py_CLEAR`, `Py_NewRef`, `Py_XNewRef`, and `PyRegion_`. Also grep for any
+  assignment through a struct field pointer: any occurrence of `->` on the
+  same line as a `=` that is not a comparison operator (`!=`, `==`, `<=`,
+  `>=`). This covers bare field writes (`entry->key = …`), array-indexed field
+  writes (`->table[i].key = …`), and struct-level copies. A function that
+  scores zero on RC-symbol grep but writes `PyObject*` fields directly may
+  transfer ownership without a reference count change — it still requires
+  migration or human review. Only claim "no RC work" if none of these appear.
+  This check must be run by actually reading the callee; name similarity to an
+  already-migrated function is not sufficient.
 - If the callee **does** RC work, migrate it first (descend into it), then
   return.
 - If the callee is a **shared internal helper** (called from more than one spec
@@ -453,17 +509,18 @@ above), not the known-local exemption. The distinction matters: a known-local
 object has no region; an immutable object may be in a region but requires no
 barrier because it cannot transfer ownership.
 
-This illustrates how `set_repr_lock_held` is migrated (it shows the intended
-result of the migration, which may be ahead of any given checkout of the
-source):
+The following example is from a past set migration. The names (`container_next`,
+`entry->val`, `so`) are placeholders for real set-specific names; apply the
+pattern by recognising the structure, not the names:
 ```c
-while (set_next(so, &pos, &entry)) {
-    int res = PyRegion_AddLocalRef(entry->key);
-    // entry->key is borrowed via so; so is borrowed, so its region is open,
+// Example from a past migration — field names are illustrative
+while (container_next(so, &pos, &entry)) {
+    int res = PyRegion_AddLocalRef(entry->val);
+    // entry->val is borrowed via so; so is borrowed, so its region is open,
     // therefore this AddLocalRef always succeeds here.
-    assert(res == 0 && "entry->key is borrowed via so; its region is open");
+    assert(res == 0 && "entry->val is borrowed via so; its region is open");
     (void) res;
-    PyList_SET_ITEM(keys, idx++, Py_NewRef(entry->key));
+    PyList_SET_ITEM(keys, idx++, Py_NewRef(entry->val));
 }
 ...
 listrepr = PyObject_Repr(keys);
@@ -479,24 +536,24 @@ Two things to note. First, only assert `!PyRegion_NeedsReadBarrier(x)` on
 values you *received* (e.g. a callee's return value), not on objects you just
 created yourself — a list from `PyList_New` is trivially local, so the assert
 would be vacuous and teaches the wrong habit. Second, the `assert` message must
-reason about the object the barrier acts on (`entry->key`), not the container.
+reason about the object the barrier acts on (`entry->val`), not the container.
 
 The fully-safe alternative is always acceptable and is what you should pick if
 there is any doubt. Note that when `keys` is local, `PyRegion_AddRef(keys,
-entry->key)` is *equivalent* to `PyRegion_AddLocalRef(entry->key)` — adding a
+entry->val)` is *equivalent* to `PyRegion_AddLocalRef(entry->val)` — adding a
 reference from a local object is exactly a local borrow — so this is a valid
 barrier here, not an owning cross-region edge:
 ```c
-while (set_next(so, &pos, &entry)) {
-    if (PyRegion_AddRef(keys, entry->key)) {  // keys local => same as AddLocalRef
+while (container_next(so, &pos, &entry)) {
+    if (PyRegion_AddRef(keys, entry->val)) {  // keys local => same as AddLocalRef
         result = NULL;
         goto done;                            // use the function's own cleanup
     }
-    PyList_SET_ITEM(keys, idx++, Py_NewRef(entry->key));
+    PyList_SET_ITEM(keys, idx++, Py_NewRef(entry->val));
 }
 ```
-The failure path uses `goto done` rather than `return NULL`, because the real
-`set_repr_lock_held` centralizes cleanup at the `done:` label (it must run
+The failure path uses `goto done` rather than `return NULL`, because the
+original function centralizes cleanup at the `done:` label (it must run
 `Py_ReprLeave` before returning). Returning directly would skip that cleanup —
 exactly the failure-path symmetry this guide tells you to preserve.
 
@@ -506,24 +563,26 @@ When code copies an entire struct that contains `PyObject*` fields — for examp
 to iterate a collection safely while holding a snapshot:
 
 ```c
-setiterobject tmp = *si;
-Py_XINCREF(tmp.si_set);
+// IterObj and it_container are placeholders — use the real type and field names
+IterObj tmp = *iter;
+Py_XINCREF(tmp.it_container);
 ```
 
-The copy `tmp` now has its own stack reference to `tmp.si_set`. That reference
-is a new local borrow. Migrate it the same way as any stack-held `Py_INCREF`:
+The copy `tmp` now has its own stack reference to `tmp.it_container`. That
+reference is a new local borrow. Migrate it the same way as any stack-held
+`Py_INCREF`:
 
 ```c
-setiterobject tmp = *si;
-if (tmp.si_set != NULL && PyRegion_AddLocalRef(tmp.si_set)) {
+IterObj tmp = *iter;
+if (tmp.it_container != NULL && PyRegion_AddLocalRef(tmp.it_container)) {
     return NULL;
 }
-Py_XINCREF(tmp.si_set);   // RC change to match the borrow
+Py_XINCREF(tmp.it_container);   // RC change to match the borrow
 ```
 
 And the matching cleanup:
 ```c
-PyRegion_CLEARLOCAL(tmp.si_set);   // RemoveLocalRef + XDECREF
+PyRegion_CLEARLOCAL(tmp.it_container);   // RemoveLocalRef + XDECREF
 ```
 
 Use `PyRegion_AddLocalRefs(a, b, ...)` when the snapshot covers multiple fields
@@ -554,9 +613,11 @@ A function is done when **all** of the following hold:
       or — for dynamic dispatch — is guarded by `NotifyTypeUse`.
 - [ ] If inside a critical section, every failure path exits it.
 - [ ] No staged-ref pattern was needed without being flagged for human review.
-- [ ] The function has at least one test that exercises its barrier shape
-      (neutral / returning-borrow / transfer), and that test passes with no
-      `@expectedFailure` annotation.
+- [ ] At least one test for this function has been **written** (before review,
+      per the per-function cycle). The test exercises the function's barrier
+      shape (neutral / returning-borrow / transfer). Tests are run at the end
+      of the full migration, not per-function — "written" is the per-function
+      gate; "passing with no `@expectedFailure`" is the final gate.
 
 If you cannot satisfy this — ambiguous barrier choice, a function with no error
 channel that needs a failing barrier, or an apparent need for staged refs —
@@ -601,16 +662,18 @@ reversible, so a failure mid-loop can be rolled back with `RemoveLocalRef` on
 the items already added:
 
 ```c
-if (PyRegion_IsLocal(so)) {
+// Field names (items, capacity, count, dst_slot, src_slot) are placeholders —
+// use the real struct fields for the type you are migrating.
+if (PyRegion_IsLocal(dst)) {
     /* local: use per-item AddLocalRef — reversible, no heap allocation */
-    for (i = 0; i <= other->mask; i++) {
-        key = other->table[i].key;
+    for (i = 0; i < other->capacity; i++) {
+        key = other->items[i].val;
         if (key != NULL) {
             if (PyRegion_AddLocalRef(key)) {
                 /* roll back items already added */
                 while (i > 0) {
                     --i;
-                    PyObject *k2 = other->table[i].key;
+                    PyObject *k2 = other->items[i].val;
                     if (k2 != NULL) PyRegion_RemoveLocalRef(k2);
                 }
                 return -1;
@@ -620,23 +683,23 @@ if (PyRegion_IsLocal(so)) {
 } else {
     /* non-local: must use AddRefsArray for all-or-nothing ownership barrier */
     Py_ssize_t k = 0;
-    PyObject **keys_array = PyMem_New(PyObject *, other->used);
-    if (keys_array == NULL) { PyErr_NoMemory(); return -1; }
-    for (i = 0; i <= other->mask; i++) {
-        key = other->table[i].key;
-        if (key != NULL) keys_array[k++] = key;
+    PyObject **arr = PyMem_New(PyObject *, other->count);
+    if (arr == NULL) { PyErr_NoMemory(); return -1; }
+    for (i = 0; i < other->capacity; i++) {
+        key = other->items[i].val;
+        if (key != NULL) arr[k++] = key;
     }
-    if (PyRegion_AddRefsArray(so, (int)k, keys_array)) {
-        PyMem_Free(keys_array);
+    if (PyRegion_AddRefsArray(dst, (int)k, arr)) {
+        PyMem_Free(arr);
         return -1;
     }
-    PyMem_Free(keys_array);
+    PyMem_Free(arr);
 }
-for (i = 0; i <= other->mask; i++, so_entry++, other_entry++) {
-    key = other_entry->key;
+for (i = 0; i < other->capacity; i++, dst_slot++, src_slot++) {
+    key = src_slot->val;
     if (key != NULL) {
-        so_entry->key = Py_NewRef(key);
-        so_entry->hash = other_entry->hash;
+        dst_slot->val = Py_NewRef(key);
+        dst_slot->hash = src_slot->hash;
     }
 }
 ```
@@ -967,6 +1030,12 @@ function verify that at least one test exercises it. Gaps to watch for:
 - **Clear** — assert LRC drops by one per element removed.
 - **Frozenset-specific paths**: the idempotent `frozenset(f)` shortcut and the
   `frozenset.copy()` shortcut each have a distinct `PyRegion_NewRef` site.
+- **`tp_methods` entries are not covered by tests of their helper functions.**
+  If `method_foo` calls internal helper `_set_foo_impl`, a test of
+  `_set_foo_impl` does not cover `method_foo`. Each entry in `tp_methods`
+  needs its own test that calls the method through the Python API (e.g.
+  `r.s.intersection_update(...)`) so that the method's own barrier calls and
+  return-value handling are exercised.
 
 A test that is marked `@expectedFailure` because the underlying barrier is not
 yet implemented is **not acceptable** as a substitute for a passing test. Fix
@@ -978,6 +1047,16 @@ Every test must place the object under test inside a `Region` before calling
 the function being tested. A test that operates only on local (non-region)
 objects cannot exercise the barrier code path — barriers on local objects are
 no-ops — and does not satisfy the coverage requirement.
+
+**Test element class**: Use plain Python objects (`class A: pass`) as set
+elements. Plain objects have a default identity-based `__hash__` and
+`__eq__`; no custom `__hash__` is needed or desirable. Do not add a custom
+`__hash__` — it is unnecessary complexity and makes the test harder to read.
+Do not use `type` objects (classes themselves) as elements: `type` objects are
+immutable in this runtime and the region system treats them as scalars, so LRC
+tracking is a no-op for them. Instantiate the class instead. Prime the class
+for region membership in `setUp` with `freeze(A())` so the first live instance
+can be assigned to a region without being auto-frozen.
 
 ```python
 # WRONG: operates on a local set; barriers never fire
@@ -1125,3 +1204,25 @@ only `test_regions` is not sufficient.
 If tests fail, consider both possibilities: the test may be wrong, or the
 migration may be. A type is only done when the full `test_regions` package
 passes with the type marked `Py_TPFLAGS2_REGION_AWARE`.
+
+---
+
+## Critical system constraints
+
+These constraints govern what analysis is in scope and what runtime guarantees
+hold. Do not infer, invent, or assume behavior beyond what is stated here or in
+the accompanying Conceptual Reference.
+
+1. **The GIL is enabled.** This runtime operates with the Global Interpreter
+   Lock active for all Python threads.
+2. **No-GIL (free-threaded) analysis is out of scope.** Do not reason about
+   lock-free data structure access, atomic reference count operations, or
+   thread-safety of barrier calls under concurrent execution. All migration
+   decisions are made under the assumption that the GIL serializes Python
+   threads.
+3. **Per-object lock calls are no-ops in GIL builds.** Functions such as
+   `Py_BEGIN_CRITICAL_SECTION` / `Py_END_CRITICAL_SECTION` exist in the
+   codebase but compile to empty stubs when the GIL is enabled. Do not treat
+   them as introducing real critical sections, and do not add or remove them
+   as part of a migration.
+
