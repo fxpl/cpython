@@ -23,6 +23,15 @@ This section is the top-level procedure. Given a Python type name (e.g.
 `"set"`), migrate the entire type autonomously, then stop. Do not pause for
 approval between functions; the human reviews the finished type.
 
+**Authoritative sources — only these, nothing else.** This guide and `pyrona.md`
+are the complete reference for this migration. Do not read other type
+implementations (e.g. `dictobject.c`) for context or examples. If you find
+yourself reaching for an external source because something is not covered here,
+that is a guide gap — stop, report what is missing and why you needed it, and
+wait for the human to update the guide. Filling the gap yourself wastes tokens,
+produces a one-off fix the next migration will not have, and obscures the
+deficiency.
+
 ### The loop
 1. **Find the spec** (`PyTypeObject` or `PyType_Spec`) for the type, as in
    "The type-level workflow" below.
@@ -165,6 +174,10 @@ guess (guessing is a failure, not a time-saver):
 - Something is genuinely ambiguous and this guide does not resolve it — an
   unclear source region, new-ref vs transfer you cannot determine, or a callee
   whose RC/region behavior you cannot establish.
+- You find yourself needing context that is not in this guide or `pyrona.md`
+  (e.g. you want to read another type's implementation for examples or
+  patterns). Do not read it. Report what is missing from the guide and why,
+  so the guide can be fixed permanently.
 - A barrier cannot be implemented because the required API does not exist or
   the behavior is genuinely undefined. Flag for human review. **Do not** mark
   the test `@expectedFailure` and hand over an incomplete implementation — that
