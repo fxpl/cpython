@@ -62,8 +62,16 @@ deficiency.
      implementation disguised as an expected failure.
    - Every operation slot in the type spec has a corresponding test (see
      "Test coverage requirement" in the Tests section).
-   If a test fails, decide whether the test or the migration is wrong, fix,
-   and re-run. Repeat until the full suite is green.
+   If a test fails: (a) re-read the migrated function against the Definition
+   of Done checklist — if any item is violated, fix the migration and re-run.
+   Repeat step (a) until the migration passes every checklist item or two full
+   fix-and-rerun cycles have produced the same failure. (b) Only then inspect
+   the test against the "Tests" section — if the test violates a stated
+   requirement (wrong object type, absolute instead of relative counter,
+   missing region object), fix the test and re-run. If after one read of the
+   test no stated requirement is violated, treat (b) as inconclusive and stop
+   — flag for human review. Do not change the test to make a broken migration
+   pass.
 7. **Produce the final output** (below).
 
 ### Per-function cycle
@@ -107,12 +115,10 @@ they also call.
 **Model for review agents**: Spawn each review agent with `model:
 "claude-sonnet-4-6"` and `effort: "medium"`. The review task is structured and
 checklist-driven — the agent does not need to discover what to look for, only
-apply the criteria in its prompt systematically. Using the same model as the
-migrating agent for reviews adds cost without proportional benefit. If a review
-comes back clean but you are still uncertain about a function — unusually
-complex error paths, ambiguous ownership, or a barrier shape not covered by
-this guide — stop and flag it for human review rather than re-running with a
-different model. See "When to stop and ask the human".
+apply the criteria in its prompt systematically. If a review
+comes back clean but the function meets any stop condition listed
+in “When to stop and ask the human”, flag for human review regardless of the
+clean review result.
 
 Each agent has a different lens:
 
@@ -164,16 +170,16 @@ spots with the migrating agent. Compilation and the `test_regions` run at the
 end are the checks that do not depend on model judgment, and are the real gate.
 
 ### When to stop and ask the human (only these)
-Proceed autonomously except in these cases, where you stop and ask rather than
-guess (guessing is a failure, not a time-saver):
+Proceed autonomously except in these cases, where you stop and ask:
 - The movability check is positive (non-movable pointers found).
 - A staged-reference shape is required (see "Staged references") — flag, do not
   implement.
 - A public function's signature would need to change to migrate it — flag, do
   not implement.
-- Something is genuinely ambiguous and this guide does not resolve it — an
-  unclear source region, new-ref vs transfer you cannot determine, or a callee
-  whose RC/region behavior you cannot establish.
+- The guide does not resolve the situation — specifically: you cannot determine
+  the source region after reading the function, cannot determine new-ref vs
+  transfer after reading the function and its direct callees, or cannot
+  establish the RC/region behavior of a callee after reading it.
 - You find yourself needing context that is not in this guide or `pyrona.md`
   (e.g. you want to read another type's implementation for examples or
   patterns). Do not read it. Report what is missing from the guide and why,
@@ -224,9 +230,9 @@ add an `assert` documenting why it can be safely skipped.
    barriers can *fail* and must be checked: the failure is reported *before*
    the irreversible store, so you can still bail out cleanly.
 
-**Default to proper barriers with full error handling.** Skipping a barrier in
-favour of an `assert` is an optimization you may apply only when one of these
-specific structural conditions holds:
+**Use proper barriers with full error handling.** Skipping a barrier in favour
+of an `assert` is permitted only when one of these specific structural
+conditions holds:
 
 1. The object was created in the current frame with no path for it to enter a
    region before this point (e.g., return value of `PyList_New`, `PyDict_New`,
@@ -234,15 +240,16 @@ specific structural conditions holds:
 2. The object is known immutable — `PyRegion_NeedsReadBarrier` would return
    false in all cases (e.g., `Py_None`, `Py_True`, `Py_True`, small integers,
    interned strings).
-3. The container is provably locked and its region therefore open, making
-   `AddLocalRef` infallible — as in the steal-and-return pattern.
+3. The branch verified that the referenced object is doesn't need a write barrier
+    using `PyRegion_NeedsReadBarrier`, `PyRegion_IsLocal` or `_Py_IsImmutable`.
 
 The condition must be stated explicitly in a comment adjacent to the assert.
 An assert that provides no structural justification must be replaced with a
 proper barrier. Note that asserts are stripped in optimized builds; a barrier
 replaced by an assert is absent at production runtime.
 
-**If uncertain, always use proper barriers with error handling.**
+If none of the three named structural conditions above is met and stated in a
+comment, use a proper barrier with error handling.
 
 ---
 
@@ -278,8 +285,11 @@ Look at the object struct named in `sizeof(...)` (the `tp_basicsize` /
 `.basicsize` argument — e.g. `PySetObject`). If that struct contains pointers
 that cannot be moved between sub-interpreters — for example
 `_PyInterpreterFrame *`, `PyFrameObject *`, `PyThreadState *`,
-`PyInterpreterState *`, or other non-`PyObject *` pointers into runtime/stack
-state — the type is likely **non-movable**.
+`PyInterpreterState *`, or any pointer type whose declared name contains
+`Frame`, `Thread`, `Interpreter`, or `State` — flag the type for human review
+as a non-movable candidate. For any other non-`PyObject *` pointer field: flag
+for human review if the field is not a C primitive pointer
+(e.g. `char *`, `void *`, `int *`).
 
 Marking a type non-movable (done by adding it to `_PyRegion_GetMoveability`)
 is **always a human decision**. As an LLM, **flag the type for review with the
@@ -370,12 +380,12 @@ When the TODO lands on a function, open its definition and work through it.
 > actual function — what it does to reference counts and struct fields — not by
 > recognising a name from an example.
 
-### Walk the call graph as needed
+### Walk the call graph
 If the function calls another function that is **not yet migrated**, check
 whether that callee does any reference-count work:
-- If the callee does **no** RC work (e.g. it only returns a raw C pointer with
-  no RC change, like a raw position-advance iterator helper), you do not need to migrate
-  it to proceed. **Positive verification required**: grep the callee for
+- If the callee does **no** RC work, you do not need to migrate it to proceed.
+  **Positive verification required** — run this check by actually reading the
+  callee, not by inferring from its name: grep the callee for
   `Py_INCREF`, `Py_DECREF`, `Py_XDECREF`, `Py_XINCREF`, `Py_SETREF`,
   `Py_CLEAR`, `Py_NewRef`, `Py_XNewRef`, and `PyRegion_`. Also grep for any
   assignment through a struct field pointer: any occurrence of `->` on the
@@ -392,11 +402,16 @@ whether that callee does any reference-count work:
 - If the callee is a **shared internal helper** (called from more than one spec
   function): migrate it when first encountered; note it as done; skip it on
   subsequent encounters. When a second spec function reaches it, re-read the
-  callee to confirm it was migrated correctly for that function's call context.
-- If the callee is **already migrated / region-aware** (its source contains
-  `PyRegion_` calls or it is a well-known built-in type like `list` or `dict`):
-  you can rely on it without descending. "Already migrated" must be verifiable
-  by reading the callee — a verbal claim is not sufficient.
+  callee and verify: (a) every RC site has a barrier or a comment-annotated
+  assert, and (b) the callee's error-exit path does not assume a lock or
+  critical section that the new caller does not hold.
+- If the callee is **already migrated / region-aware**: you can rely on it
+  without descending. For a type slot: verified by reading the type's source
+  and confirming `.tp_flags2 = Py_TPFLAGS2_REGION_AWARE` is present in its
+  `PyTypeObject` or `PyType_Spec`. For a free function (not a type slot):
+  verified by reading the function body and confirming every RC site has a
+  `PyRegion_` call or a comment-annotated assert. A name or assumption is not
+  sufficient in either case.
 - If the call **dispatches through a type slot** to code that may not be
   region-aware, guard it with `PyRegion_NotifyTypeUse(type)` (see reference).
 
@@ -505,7 +520,7 @@ so->slot = Py_NewRef(key);
 Reach for `TakeRef` only when you genuinely already own the stack reference and
 are giving it away.
 
-### The known-local optimization (use carefully)
+### The known-local optimization (only under the three structural conditions)
 When you can prove a value is local — for example a list you just created with
 `PyList_New` — a reference from it is always allowed, even into an object that
 lives in a region. In that case you may replace a full barrier with
@@ -545,14 +560,12 @@ listrepr = PyUnicode_Substring(listrepr, 1, PyUnicode_GET_LENGTH(listrepr)-1);
 assert(!PyRegion_NeedsReadBarrier(listrepr));
 Py_DECREF(listrepr);
 ```
-Two things to note. First, only assert `!PyRegion_NeedsReadBarrier(x)` on
-values you *received* (e.g. a callee's return value), not on objects you just
-created yourself — a list from `PyList_New` is trivially local, so the assert
-would be vacuous and teaches the wrong habit. Second, the `assert` message must
-reason about the object the barrier acts on (`entry->val`), not the container.
+The `assert` message must reason about the object the barrier
+acts on (`entry->val`), not the container.
 
-The fully-safe alternative is always acceptable and is what you should pick if
-there is any doubt. Note that when `keys` is local, `PyRegion_AddRef(keys,
+Use the known-local optimization only when one of the three structural
+conditions listed under "Default to proper barriers" is met and stated in an
+adjacent comment. In all other cases, use the fully-safe alternative. Note that when `keys` is local, `PyRegion_AddRef(keys,
 entry->val)` is *equivalent* to `PyRegion_AddLocalRef(entry->val)` — adding a
 reference from a local object is exactly a local borrow — so this is a valid
 barrier here, not an owning cross-region edge:
@@ -622,8 +635,10 @@ A function is done when **all** of the following hold:
 - [ ] Every exit path (every early `return` and `goto`) is symmetric: borrows
       added are removed, owning references added before a later failure are
       accounted for, and the region counters are left correct.
-- [ ] Every called function is already migrated/region-aware, does no RC work,
-      or — for dynamic dispatch — is guarded by `NotifyTypeUse`.
+- [ ] Every called function is already migrated/region-aware (verified per
+      "Walk the call graph"), does no RC work (verified per the positive
+      verification procedure there), or — for dynamic dispatch — is guarded
+      by `NotifyTypeUse`.
 - [ ] If inside a critical section, every failure path exits it.
 - [ ] No staged-ref pattern was needed without being flagged for human review.
 - [ ] At least one test for this function has been **written** (before review,
@@ -632,10 +647,14 @@ A function is done when **all** of the following hold:
       of the full migration, not per-function — "written" is the per-function
       gate; "passing with no `@expectedFailure`" is the final gate.
 
-If you cannot satisfy this — ambiguous barrier choice, a function with no error
-channel that needs a failing barrier, or an apparent need for staged refs —
-**stop and flag the function for human review** with a short explanation rather
-than guessing.
+If you cannot satisfy this — the barrier classification table does not produce
+a single unambiguous row for an RC site after reading the function and its
+direct callees, a function with no error channel that needs a failing barrier,
+or the function matches the staged-reference shape (multiple conditional
+branches each discovering references, all of which must be validated before any
+is committed, and neither `AddRefs` nor `AddRefsArray` can express the set —
+see "Staged references") — **stop and flag the function for human review** with
+a short explanation.
 
 ---
 
@@ -728,7 +747,10 @@ branch has no corresponding cleanup). The `AddLocalRef` calls serve purely as a
 reversible pre-flight check; once `Py_NewRef` establishes proper ownership
 during the copy, no explicit release is needed.
 
-Apply this pattern whenever the container is known local at the call site.
+Apply this pattern when `PyRegion_IsLocal(dst)` returns true at the call site,
+or when `dst` was returned by a call that always allocates a new object
+(e.g. `PyList_New`, `PyDict_New`, `PySet_New`) and has not been stored into a
+heap object since that call.
 
 **`PyRegion_TakeRef(src, tgt)`** — transfer an **existing owned** reference
 (typically a stack-held borrow) into `src`. Use when the code stores into a
@@ -953,7 +975,10 @@ way — add `PyRegion_NotifyTypeUse(Py_TYPE(obj))` immediately before the call:
 When the dispatch target is a type you just migrated (and thus region-aware),
 the `NotifyTypeUse` call is a no-op and harmless. When the target is an
 unknown or user-defined type, it is required. Default to adding it; omit only
-when you can confirm the target type is already region-aware.
+when the target type's source contains `PyRegion_` calls and
+`.tp_flags2 = Py_TPFLAGS2_REGION_AWARE` in its `PyTypeObject` or
+`PyType_Spec`, verified by reading that source file. If the source is not
+available to read, add `NotifyTypeUse`.
 
 ### Object recycling
 
@@ -1214,9 +1239,10 @@ observable behavior is unchanged — barrier bugs can corrupt data structures in
 ways that appear only there, not in `test_regions`. **Both must pass.** Running
 only `test_regions` is not sufficient.
 
-If tests fail, consider both possibilities: the test may be wrong, or the
-migration may be. A type is only done when the full `test_regions` package
-passes with the type marked `Py_TPFLAGS2_REGION_AWARE`.
+If tests fail, apply the same rule as in "The loop": check the migration
+against the Definition of Done checklist first; fix the test only if the
+migration passes every checklist item. A type is only done when the full
+`test_regions` package passes with the type marked `Py_TPFLAGS2_REGION_AWARE`.
 
 ---
 
