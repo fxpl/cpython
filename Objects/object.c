@@ -3261,6 +3261,7 @@ _Py_Dealloc(PyObject *op)
     _Py_ForgetReference(op);
 #endif
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
+    PyRegion_NeedsReadBarrier(Py_TYPE(op));
     (*dealloc)(op);
 
 #ifdef Py_DEBUG

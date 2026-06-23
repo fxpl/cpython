@@ -2567,6 +2567,21 @@ void PyRegion_NotifyTypeUse(PyTypeObject* tp) {
     _PyOwnership_notify_untrusted_code(tp->tp_name);
 }
 
+/* This marks the region containing the given object as dirty.
+ *
+ * This should be used as a backup for write barriers in locations
+ * which should never fail and also don't support failure.
+ */
+void PyRegion_DirtyObjectRegion(PyObject* obj) {
+    regiondata_mark_as_dirty(_PyRegion_Get(obj));
+}
+
+/* This marks all open regions as dirty.
+ */
+void PyRegion_DirtyAllRegions(const char* reason) {
+    _PyOwnership_notify_untrusted_code(reason);
+}
+
 /* This clears the region from a given object. This should only be done
  * when the object is being deallocated.
  */
@@ -2617,3 +2632,5 @@ void PyRegion_RecycleObject(PyObject *obj) {
 //                           true, since the objects inside the region should be inaccessible
 //                           when the region is closed
 // FIXME(regions): xFrednet: Write barriers in bytecode seems to be working verify this
+// FIXME(regions): xFrednet: Region opt-in/out is currently on a per type basis, for modules we
+//                           might want to use slots to allow opt-in/out on a module level.

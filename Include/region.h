@@ -167,6 +167,8 @@ static inline void _PyRegion_Clear(PyObject *src, PyObject **field) {
 
 PyAPI_FUNC(void) PyRegion_NotifyTypeUse(PyTypeObject* type);
 PyAPI_FUNC(void) PyRegion_RecycleObject(PyObject *obj);
+PyAPI_FUNC(void) PyRegion_DirtyObjectRegion(PyObject* obj);
+PyAPI_FUNC(void) PyRegion_DirtyAllRegions(const char* reason);
 
 #ifdef __cplusplus
 }
