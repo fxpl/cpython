@@ -2525,6 +2525,7 @@ _PyDict_GetItemRef_KnownHash(PyDictObject *op, PyObject *key, Py_hash_t hash, Py
 int
 PyDict_GetItemRef(PyObject *op, PyObject *key, PyObject **result)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
         *result = NULL;

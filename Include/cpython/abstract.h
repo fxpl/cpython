@@ -68,6 +68,7 @@ PyObject_CallMethodNoArgs(PyObject *self, PyObject *name)
 static inline PyObject *
 PyObject_CallMethodOneArg(PyObject *self, PyObject *name, PyObject *arg)
 {
+    // TODO(regions): Migrate this
     PyObject *args[2] = {self, arg};
     size_t nargsf = 2 | PY_VECTORCALL_ARGUMENTS_OFFSET;
     assert(arg != NULL);

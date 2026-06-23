@@ -59,6 +59,7 @@ is_medium_int(stwodigits x)
 static PyObject *
 get_small_int(sdigit ival)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(IS_SMALL_INT(ival));
     return (PyObject *)&_PyLong_SMALL_INTS[_PY_NSMALLNEGINTS + ival];
 }
@@ -217,6 +218,7 @@ _PyLong_FromDigits(int negative, Py_ssize_t digit_count, digit *digits)
 PyObject *
 _PyLong_Copy(PyLongObject *src)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(src != NULL);
     int sign;
 
@@ -700,6 +702,7 @@ PyLong_AsInt(PyObject *obj)
 
 Py_ssize_t
 PyLong_AsSsize_t(PyObject *vv) {
+    // Pyrona: This functions was checked and no further migration is needed
     PyLongObject *v;
     Py_ssize_t i;
     int sign;

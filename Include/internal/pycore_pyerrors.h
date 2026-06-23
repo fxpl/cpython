@@ -73,6 +73,7 @@ extern void _PyErr_FiniTypes(PyInterpreterState *);
 
 static inline PyObject* _PyErr_Occurred(PyThreadState *tstate)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(tstate != NULL);
     if (tstate->current_exception == NULL) {
         return NULL;

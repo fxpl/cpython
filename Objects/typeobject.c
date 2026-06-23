@@ -514,6 +514,7 @@ stop_readying(PyTypeObject *type)
 static inline int
 is_readying(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (type->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = managed_static_type_state_get(interp, type);
@@ -647,6 +648,7 @@ clear_tp_bases(PyTypeObject *self, int final)
 static inline PyObject *
 lookup_tp_mro(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     ASSERT_NEW_TYPE_OR_LOCKED(self);
     return self->tp_mro;
 }
@@ -2914,6 +2916,7 @@ static PyTypeObject *solid_base(PyTypeObject *type);
 static int
 type_is_subtype_base_chain(PyTypeObject *a, PyTypeObject *b)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     do {
         if (a == b)
             return 1;
@@ -2926,6 +2929,7 @@ type_is_subtype_base_chain(PyTypeObject *a, PyTypeObject *b)
 static int
 is_subtype_with_mro(PyObject *a_mro, PyTypeObject *a, PyTypeObject *b)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int res;
     if (a_mro != NULL) {
         /* Deal with multiple inheritance without recursion
@@ -2951,6 +2955,7 @@ is_subtype_with_mro(PyObject *a_mro, PyTypeObject *a, PyTypeObject *b)
 int
 PyType_IsSubtype(PyTypeObject *a, PyTypeObject *b)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return is_subtype_with_mro(a->tp_mro, a, b);
 }
 
@@ -5995,6 +6000,7 @@ PyObject_GetItemData(PyObject *obj)
 static PyObject *
 find_name_in_mro(PyTypeObject *type, PyObject *name, int *error)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_hash_t hash = _PyObject_HashFast(name);
     if (hash == -1) {
         *error = -1;
@@ -6020,6 +6026,10 @@ find_name_in_mro(PyTypeObject *type, PyObject *name, int *error)
     PyObject *res = NULL;
     /* Keep a strong reference to mro because type->tp_mro can be replaced
        during dict lookup, e.g. when comparing to non-string keys. */
+    if (PyRegion_AddLocalRef(mro)) {
+        *error = -1;
+        return NULL;
+    }
     Py_INCREF(mro);
     Py_ssize_t n = PyTuple_GET_SIZE(mro);
     for (Py_ssize_t i = 0; i < n; i++) {
@@ -6036,7 +6046,7 @@ find_name_in_mro(PyTypeObject *type, PyObject *name, int *error)
     }
     *error = 0;
 done:
-    Py_DECREF(mro);
+    PyRegion_CLEARLOCAL(mro);
     return res;
 }
 
@@ -6061,12 +6071,14 @@ is_dunder_name(PyObject *name)
 static PyObject *
 update_cache(struct type_cache_entry *entry, PyObject *name, unsigned int version_tag, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_atomic_store_ptr_relaxed(&entry->value, value); /* borrowed */
     assert(_PyASCIIObject_CAST(name)->hash != -1);
     OBJECT_STAT_INC_COND(type_cache_collisions, entry->name != Py_None && entry->name != name);
     // We're releasing this under the lock for simplicity sake because it's always a
     // exact unicode object or Py_None so it's safe to do so.
     PyObject *old_name = entry->name;
+    assert(!PyRegion_NeedsReadBarrier(name));
     _Py_atomic_store_ptr_relaxed(&entry->name, Py_NewRef(name));
     // We must write the version last to avoid _Py_TryXGetStackRef()
     // operating on an invalid (already deallocated) value inside
@@ -6129,6 +6141,7 @@ _PyTypes_AfterFork(void)
 PyObject *
 _PyType_LookupRefAndVersion(PyTypeObject *type, PyObject *name, unsigned int *version)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _PyStackRef out;
     unsigned int ver = _PyType_LookupStackRefAndVersion(type, name, &out);
     if (version) {
@@ -6143,6 +6156,7 @@ _PyType_LookupRefAndVersion(PyTypeObject *type, PyObject *name, unsigned int *ve
 unsigned int
 _PyType_LookupStackRefAndVersion(PyTypeObject *type, PyObject *name, _PyStackRef *out)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     unsigned int h = MCACHE_HASH_METHOD(type, name);
     struct type_cache *cache = get_type_cache();
     struct type_cache_entry *entry = &cache->hashtable[h];
@@ -6229,7 +6243,7 @@ _PyType_LookupStackRefAndVersion(PyTypeObject *type, PyObject *name, _PyStackRef
         update_cache_gil_disabled(entry, name, assigned_version, res);
 #else
         PyObject *old_value = update_cache(entry, name, assigned_version, res);
-        Py_DECREF(old_value);
+        PyRegion_CLEARLOCAL(old_value);
 #endif
     }
     *out = res ? PyStackRef_FromPyObjectSteal(res) : PyStackRef_NULL;
@@ -6242,6 +6256,7 @@ _PyType_LookupStackRefAndVersion(PyTypeObject *type, PyObject *name, _PyStackRef
 PyObject *
 _PyType_LookupRef(PyTypeObject *type, PyObject *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyType_LookupRefAndVersion(type, name, NULL);
 }
 
@@ -6376,6 +6391,7 @@ _PyType_SetFlagsRecursive(PyTypeObject *self, unsigned long mask, unsigned long 
 PyObject *
 _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missing_attribute)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *metatype = Py_TYPE(type);
     PyObject *meta_attribute, *attribute;
     descrgetfunc meta_get;
@@ -6404,13 +6420,16 @@ _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missin
         meta_get = Py_TYPE(meta_attribute)->tp_descr_get;
 
         if (meta_get != NULL && PyDescr_IsData(meta_attribute)) {
+            // We call notify on the metatype since that one defined the meta attribute
+            // FIXME(regions): Is this correct?
+            PyRegion_NotifyTypeUse(metatype);
             /* Data descriptors implement tp_descr_set to intercept
              * writes. Assume the attribute is not overridden in
              * type's tp_dict (and bases): call the descriptor now.
              */
             res = meta_get(meta_attribute, (PyObject *)type,
                            (PyObject *)metatype);
-            Py_DECREF(meta_attribute);
+            PyRegion_CLEARLOCAL(meta_attribute);
             return res;
         }
     }
@@ -6422,14 +6441,16 @@ _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missin
         /* Implement descriptor functionality, if any */
         descrgetfunc local_get = Py_TYPE(attribute)->tp_descr_get;
 
-        Py_XDECREF(meta_attribute);
+        PyRegion_CLEARLOCAL(meta_attribute);
 
         if (local_get != NULL) {
+            // FIXME(regions): Is this correct?
+            PyRegion_NotifyTypeUse(type);
             /* NULL 2nd argument indicates the descriptor was
              * found on the target object itself (or a base)  */
             res = local_get(attribute, (PyObject *)NULL,
                             (PyObject *)type);
-            Py_DECREF(attribute);
+            PyRegion_CLEARLOCAL(attribute);
             return res;
         }
 
@@ -6439,10 +6460,11 @@ _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missin
     /* No attribute found in local __dict__ (or bases): use the
      * descriptor from the metatype, if any */
     if (meta_get != NULL) {
+        PyRegion_NotifyTypeUse(metatype);
         PyObject *res;
         res = meta_get(meta_attribute, (PyObject *)type,
                        (PyObject *)metatype);
-        Py_DECREF(meta_attribute);
+        PyRegion_CLEARLOCAL(meta_attribute);
         return res;
     }
 
@@ -9376,6 +9398,7 @@ error:
 int
 PyType_Ready(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (type->tp_flags & Py_TPFLAGS_READY) {
         assert(_PyType_CheckConsistency(type));
         return 0;

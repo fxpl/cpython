@@ -1,3 +1,4 @@
+from unittest import expectedFailure
 import sys
 import unittest
 from regions import Region, is_local, is_owned, get_region

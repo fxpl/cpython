@@ -120,6 +120,7 @@ Py_DEPRECATED(3.14) PyAPI_FUNC(PyLongObject*) _PyLong_FromDigits(
 
 static inline int
 _PyLong_IsCompact(const PyLongObject* op) {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyType_HasFeature(op->ob_base.ob_type, Py_TPFLAGS_LONG_SUBCLASS));
     return op->long_value.lv_tag < (2 << _PyLong_NON_SIZE_BITS);
 }

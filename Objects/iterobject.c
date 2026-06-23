@@ -17,6 +17,7 @@ typedef struct {
 PyObject *
 PySeqIter_New(PyObject *seq)
 {
+    // TODO(regions): Migrate this function
     seqiterobject *it;
 
     if (!PySequence_Check(seq)) {

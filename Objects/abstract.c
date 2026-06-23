@@ -23,6 +23,7 @@
 static PyObject *
 type_error(const char *msg, PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyErr_Format(PyExc_TypeError, msg, Py_TYPE(obj)->tp_name);
     return NULL;
 }
@@ -30,6 +31,7 @@ type_error(const char *msg, PyObject *obj)
 static PyObject *
 null_error(void)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     if (!_PyErr_Occurred(tstate)) {
         _PyErr_SetString(tstate, PyExc_SystemError,
@@ -41,6 +43,7 @@ null_error(void)
 static PyObject *
 immutable_error(PyObject* op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyErr_WriteToImmutable(op);
 }
 
@@ -49,6 +52,7 @@ immutable_error(PyObject* op)
 PyObject *
 PyObject_Type(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *v;
 
     if (o == NULL) {
@@ -62,6 +66,7 @@ PyObject_Type(PyObject *o)
 Py_ssize_t
 PyObject_Size(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         null_error();
         return -1;
@@ -69,6 +74,7 @@ PyObject_Size(PyObject *o)
 
     PySequenceMethods *m = Py_TYPE(o)->tp_as_sequence;
     if (m && m->sq_length) {
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         Py_ssize_t len = m->sq_length(o);
         assert(_Py_CheckSlotResult(o, "__len__", len >= 0));
         return len;
@@ -81,12 +87,14 @@ PyObject_Size(PyObject *o)
 Py_ssize_t
 PyObject_Length(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyObject_Size(o);
 }
 #define PyObject_Length PyObject_Size
 
 int
 _PyObject_HasLen(PyObject *o) {
+    // Pyrona: This functions was checked and no further migration is needed
     return (Py_TYPE(o)->tp_as_sequence && Py_TYPE(o)->tp_as_sequence->sq_length) ||
         (Py_TYPE(o)->tp_as_mapping && Py_TYPE(o)->tp_as_mapping->mp_length);
 }
@@ -100,6 +108,7 @@ _PyObject_HasLen(PyObject *o) {
 Py_ssize_t
 PyObject_LengthHint(PyObject *o, Py_ssize_t defaultvalue)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *hint, *result;
     Py_ssize_t res;
     if (_PyObject_HasLen(o)) {
@@ -124,7 +133,7 @@ PyObject_LengthHint(PyObject *o, Py_ssize_t defaultvalue)
         return defaultvalue;
     }
     result = _PyObject_CallNoArgs(hint);
-    Py_DECREF(hint);
+    PyRegion_CLEARLOCAL(hint);
     if (result == NULL) {
         PyThreadState *tstate = _PyThreadState_GET();
         if (_PyErr_ExceptionMatches(tstate, PyExc_TypeError)) {
@@ -134,6 +143,7 @@ PyObject_LengthHint(PyObject *o, Py_ssize_t defaultvalue)
         return -1;
     }
     else if (result == Py_NotImplemented) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return defaultvalue;
     }
@@ -141,11 +151,12 @@ PyObject_LengthHint(PyObject *o, Py_ssize_t defaultvalue)
         PyErr_Format(PyExc_TypeError,
                      "%T.__length_hint__() must return an int, not %T",
                      o, result);
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return -1;
     }
     res = PyLong_AsSsize_t(result);
-    Py_DECREF(result);
+    PyRegion_CLEARLOCAL(result);
     if (res < 0 && PyErr_Occurred()) {
         return -1;
     }
@@ -160,13 +171,14 @@ PyObject_LengthHint(PyObject *o, Py_ssize_t defaultvalue)
 PyObject *
 PyObject_GetItem(PyObject *o, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL || key == NULL) {
         return null_error();
     }
 
     PyMappingMethods *m = Py_TYPE(o)->tp_as_mapping;
     if (m && m->mp_subscript) {
-        // TODO(regions): PyRegion_NotifyTypeUse(Py_TYPE(o));
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         PyObject *item = m->mp_subscript(o, key);
         assert(_Py_CheckSlotResult(o, "__getitem__", item != NULL));
         return item;
@@ -199,6 +211,10 @@ PyObject_GetItem(PyObject *o, PyObject *key)
             return NULL;
         }
         if (meth && meth != Py_None) {
+            // FIXME(regions): This notify type use is probably not needed?
+            // `PyObject_CallOneArg` should check if for region awareness when
+            // calling c functions. (I think)
+            PyRegion_NotifyTypeUse(Py_TYPE(o));
             result = PyObject_CallOneArg(meth, key);
             PyRegion_CLEARLOCAL(meth);
             return result;
@@ -215,6 +231,7 @@ PyObject_GetItem(PyObject *o, PyObject *key)
 int
 PyMapping_GetOptionalItem(PyObject *obj, PyObject *key, PyObject **result)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyDict_CheckExact(obj)) {
         return PyDict_GetItemRef(obj, key, result);
     }
@@ -234,6 +251,7 @@ PyMapping_GetOptionalItem(PyObject *obj, PyObject *key, PyObject **result)
 int
 PyObject_SetItem(PyObject *o, PyObject *key, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL || key == NULL || value == NULL) {
         null_error();
         return -1;
@@ -246,6 +264,7 @@ PyObject_SetItem(PyObject *o, PyObject *key, PyObject *value)
             return -1;
         }
 
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         int res = m->mp_ass_subscript(o, key, value);
         assert(_Py_CheckSlotResult(o, "__setitem__", res >= 0));
         return res;
@@ -278,6 +297,7 @@ PyObject_SetItem(PyObject *o, PyObject *key, PyObject *value)
 int
 PyObject_DelItem(PyObject *o, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL || key == NULL) {
         null_error();
         return -1;
@@ -290,6 +310,7 @@ PyObject_DelItem(PyObject *o, PyObject *key)
             return -1;
         }
 
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         int res = m->mp_ass_subscript(o, key, (PyObject*)NULL);
         assert(_Py_CheckSlotResult(o, "__delitem__", res >= 0));
         return res;
@@ -322,6 +343,7 @@ PyObject_DelItem(PyObject *o, PyObject *key)
 int
 PyObject_DelItemString(PyObject *o, const char *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *okey;
     int ret;
 
@@ -333,6 +355,7 @@ PyObject_DelItemString(PyObject *o, const char *key)
     if (okey == NULL)
         return -1;
     ret = PyObject_DelItem(o, okey);
+    assert(!PyRegion_NeedsReadBarrier(okey));
     Py_DECREF(okey);
     return ret;
 }
@@ -342,6 +365,7 @@ PyObject_DelItemString(PyObject *o, const char *key)
 int
 PyObject_CheckBuffer(PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyBufferProcs *tp_as_buffer = Py_TYPE(obj)->tp_as_buffer;
     return (tp_as_buffer != NULL && tp_as_buffer->bf_getbuffer != NULL);
 }
@@ -359,12 +383,14 @@ PyObject_CheckBuffer(PyObject *obj)
 PyAPI_FUNC(int) /* abi_only */
 PyObject_CheckReadBuffer(PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyBufferProcs *pb = Py_TYPE(obj)->tp_as_buffer;
     Py_buffer view;
 
     if (pb == NULL ||
         pb->bf_getbuffer == NULL)
         return 0;
+    PyRegion_NotifyTypeUse(Py_TYPE(obj));
     if ((*pb->bf_getbuffer)(obj, &view, PyBUF_SIMPLE) == -1) {
         PyErr_Clear();
         return 0;
@@ -376,6 +402,7 @@ PyObject_CheckReadBuffer(PyObject *obj)
 static int
 as_read_buffer(PyObject *obj, const void **buffer, Py_ssize_t *buffer_len)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_buffer view;
 
     if (obj == NULL || buffer == NULL || buffer_len == NULL) {
@@ -402,6 +429,7 @@ PyObject_AsCharBuffer(PyObject *obj,
                       const char **buffer,
                       Py_ssize_t *buffer_len)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return as_read_buffer(obj, (const void **)buffer, buffer_len);
 }
 
@@ -416,6 +444,7 @@ PyObject_AsReadBuffer(PyObject *obj,
                       const void **buffer,
                       Py_ssize_t *buffer_len)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return as_read_buffer(obj, buffer, buffer_len);
 }
 
@@ -430,6 +459,7 @@ PyObject_AsWriteBuffer(PyObject *obj,
                        void **buffer,
                        Py_ssize_t *buffer_len)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyBufferProcs *pb;
     Py_buffer view;
 
@@ -444,6 +474,7 @@ PyObject_AsWriteBuffer(PyObject *obj,
     }
 
     pb = Py_TYPE(obj)->tp_as_buffer;
+    PyRegion_NotifyTypeUse(Py_TYPE(obj));
     if (pb == NULL ||
         pb->bf_getbuffer == NULL ||
         ((*pb->bf_getbuffer)(obj, &view, PyBUF_WRITABLE) != 0)) {
@@ -463,6 +494,7 @@ PyObject_AsWriteBuffer(PyObject *obj,
 int
 PyObject_GetBuffer(PyObject *obj, Py_buffer *view, int flags)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (flags != PyBUF_SIMPLE) {  /* fast path */
         if (flags == PyBUF_READ || flags == PyBUF_WRITE) {
             PyErr_BadInternalCall();
@@ -483,6 +515,7 @@ PyObject_GetBuffer(PyObject *obj, Py_buffer *view, int flags)
         return -1;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(obj));
     int res = (*pb->bf_getbuffer)(obj, view, flags);
     assert(_Py_CheckSlotResult(obj, "getbuffer", res >= 0));
 
@@ -492,6 +525,7 @@ PyObject_GetBuffer(PyObject *obj, Py_buffer *view, int flags)
 static int
 _IsFortranContiguous(const Py_buffer *view)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t sd, dim;
     int i;
 
@@ -532,6 +566,7 @@ _IsFortranContiguous(const Py_buffer *view)
 static int
 _IsCContiguous(const Py_buffer *view)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t sd, dim;
     int i;
 
@@ -559,7 +594,7 @@ _IsCContiguous(const Py_buffer *view)
 int
 PyBuffer_IsContiguous(const Py_buffer *view, char order)
 {
-
+    // Pyrona: This functions was checked and no further migration is needed
     if (view->suboffsets != NULL) return 0;
 
     if (order == 'C')
@@ -575,6 +610,7 @@ PyBuffer_IsContiguous(const Py_buffer *view, char order)
 void*
 PyBuffer_GetPointer(const Py_buffer *view, const Py_ssize_t *indices)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     char* pointer;
     int i;
     pointer = (char *)view->buf;
@@ -591,6 +627,7 @@ PyBuffer_GetPointer(const Py_buffer *view, const Py_ssize_t *indices)
 static void
 _Py_add_one_to_index_F(int nd, Py_ssize_t *index, const Py_ssize_t *shape)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int k;
 
     for (k=0; k<nd; k++) {
@@ -607,6 +644,7 @@ _Py_add_one_to_index_F(int nd, Py_ssize_t *index, const Py_ssize_t *shape)
 static void
 _Py_add_one_to_index_C(int nd, Py_ssize_t *index, const Py_ssize_t *shape)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int k;
 
     for (k=nd-1; k>=0; k--) {
@@ -623,6 +661,7 @@ _Py_add_one_to_index_C(int nd, Py_ssize_t *index, const Py_ssize_t *shape)
 Py_ssize_t
 PyBuffer_SizeFromFormat(const char *format)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *calcsize = NULL;
     PyObject *res = NULL;
     PyObject *fmt = NULL;
@@ -649,15 +688,16 @@ PyBuffer_SizeFromFormat(const char *format)
     }
 
 done:
-    Py_XDECREF(calcsize);
-    Py_XDECREF(fmt);
-    Py_XDECREF(res);
+    PyRegion_CLEARLOCAL(calcsize);
+    PyRegion_CLEARLOCAL(fmt);
+    PyRegion_CLEARLOCAL(res);
     return itemsize;
 }
 
 int
 PyBuffer_FromContiguous(const Py_buffer *view, const void *buf, Py_ssize_t len, char fort)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int k;
     void (*addone)(int, Py_ssize_t *, const Py_ssize_t *);
     Py_ssize_t *indices, elements;
@@ -715,6 +755,7 @@ PyBuffer_FromContiguous(const Py_buffer *view, const void *buf, Py_ssize_t len, 
 
 int PyObject_CopyData(PyObject *dest, PyObject *src)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_buffer view_dest, view_src;
     int k;
     Py_ssize_t *indices, elements;
@@ -794,6 +835,7 @@ PyBuffer_FillContiguousStrides(int nd, Py_ssize_t *shape,
                                Py_ssize_t *strides, int itemsize,
                                char fort)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int k;
     Py_ssize_t sd;
 
@@ -817,6 +859,7 @@ int
 PyBuffer_FillInfo(Py_buffer *view, PyObject *obj, void *buf, Py_ssize_t len,
                   int readonly, int flags)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (view == NULL) {
         PyErr_SetString(PyExc_BufferError,
                         "PyBuffer_FillInfo: view==NULL argument is obsolete");
@@ -836,6 +879,19 @@ PyBuffer_FillInfo(Py_buffer *view, PyObject *obj, void *buf, Py_ssize_t len,
         }
     }
 
+    // Regions: This reference is weird. The assignment below sets the owning
+    // reference of the view. This could be seen as a cycle, and probably is one
+    // but given that the view is not an actual Python object, we can't move it
+    // into a region.
+    //
+    // FIXME(regions): Migrate `MemoryObject` and handle this, maybe we need to
+    // make it unmovable. Looking a bit further, it looks like the current
+    // sub-interpreter thing always sends the buffer back to the creating
+    // interpreter. This speaks for these views being local. I think that
+    // also make sense. So yes, they should likely be local.
+    if (PyRegion_AddLocalRef(obj)) {
+        return -1;
+    }
     view->obj = Py_XNewRef(obj);
     view->buf = buf;
     view->len = len;
@@ -859,21 +915,24 @@ PyBuffer_FillInfo(Py_buffer *view, PyObject *obj, void *buf, Py_ssize_t len,
 void
 PyBuffer_Release(Py_buffer *view)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *obj = view->obj;
     PyBufferProcs *pb;
     if (obj == NULL)
         return;
+    PyRegion_NotifyTypeUse(Py_TYPE(obj));
     pb = Py_TYPE(obj)->tp_as_buffer;
     if (pb && pb->bf_releasebuffer) {
         pb->bf_releasebuffer(obj, view);
     }
     view->obj = NULL;
-    Py_DECREF(obj);
+    PyRegion_CLEARLOCAL(obj);
 }
 
 static int
 _buffer_release_call(void *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyBuffer_Release((Py_buffer *)arg);
     return 0;
 }
@@ -882,6 +941,11 @@ int
 _PyBuffer_ReleaseInInterpreter(PyInterpreterState *interp,
                                Py_buffer *view)
 {
+    // Regions: The current sub-interpreter implementation always sends
+    // the buffers back to the interpreter that initially created them.
+    // For Pyrona, we'll for now assume that buffers are pinned to one
+    // interpreter and any buffers shared as part of the internal
+    // sub-interpreter API are correctly handed back to the respective interpreter.
     return _Py_CallInInterpreter(interp, _buffer_release_call, view);
 }
 
@@ -889,12 +953,18 @@ int
 _PyBuffer_ReleaseInInterpreterAndRawFree(PyInterpreterState *interp,
                                          Py_buffer *view)
 {
+    // Regions: The current sub-interpreter implementation always sends
+    // the buffers back to the interpreter that initially created them.
+    // For Pyrona, we'll for now assume that buffers are pinned to one
+    // interpreter and any buffers shared as part of the internal
+    // sub-interpreter API are correctly handed back to the respective interpreter.
     return _Py_CallInInterpreterAndRawFree(interp, _buffer_release_call, view);
 }
 
 PyObject *
 PyObject_Format(PyObject *obj, PyObject *format_spec)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *meth;
     PyObject *empty = NULL;
     PyObject *result = NULL;
@@ -909,9 +979,11 @@ PyObject_Format(PyObject *obj, PyObject *format_spec)
     /* Fast path for common types. */
     if (format_spec == NULL || PyUnicode_GET_LENGTH(format_spec) == 0) {
         if (PyUnicode_CheckExact(obj)) {
+            assert(!PyRegion_NeedsReadBarrier(obj));
             return Py_NewRef(obj);
         }
         if (PyLong_CheckExact(obj)) {
+            assert(!PyRegion_NeedsReadBarrier(obj));
             return PyObject_Str(obj);
         }
     }
@@ -936,17 +1008,18 @@ PyObject_Format(PyObject *obj, PyObject *format_spec)
 
     /* And call it. */
     result = PyObject_CallOneArg(meth, format_spec);
-    Py_DECREF(meth);
+    PyRegion_CLEARLOCAL(meth);
 
     if (result && !PyUnicode_Check(result)) {
         PyErr_Format(PyExc_TypeError,
                      "%T.__format__() must return a str, not %T",
                      obj, result);
-        Py_SETREF(result, NULL);
+        PyRegion_CLEARLOCAL(result);
         goto done;
     }
 
 done:
+    assert(empty == NULL || !PyRegion_NeedsReadBarrier(empty));
     Py_XDECREF(empty);
     return result;
 }
@@ -955,6 +1028,7 @@ done:
 int
 PyNumber_Check(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL)
         return 0;
     PyNumberMethods *nb = Py_TYPE(o)->tp_as_number;
@@ -986,6 +1060,7 @@ binary_op1(PyObject *v, PyObject *w, const int op_slot
 #endif
            )
 {
+    // Pyrona: This functions was checked and no further migration is needed
     binaryfunc slotv;
     if (Py_TYPE(v)->tp_as_number != NULL) {
         slotv = NB_BINOP(Py_TYPE(v)->tp_as_number, op_slot);
@@ -1008,26 +1083,29 @@ binary_op1(PyObject *v, PyObject *w, const int op_slot
     if (slotv) {
         PyObject *x;
         if (slotw && PyType_IsSubtype(Py_TYPE(w), Py_TYPE(v))) {
+            PyRegion_NotifyTypeUse(Py_TYPE(v));
             x = slotw(v, w);
             if (x != Py_NotImplemented)
                 return x;
-            Py_DECREF(x); /* can't do it */
+            PyRegion_CLEARLOCAL(x); /* can't do it */
             slotw = NULL;
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(v));
         x = slotv(v, w);
         assert(_Py_CheckSlotResult(v, op_name, x != NULL));
         if (x != Py_NotImplemented) {
             return x;
         }
-        Py_DECREF(x); /* can't do it */
+        PyRegion_CLEARLOCAL(x); /* can't do it */
     }
     if (slotw) {
+        PyRegion_NotifyTypeUse(Py_TYPE(w));
         PyObject *x = slotw(v, w);
         assert(_Py_CheckSlotResult(w, op_name, x != NULL));
         if (x != Py_NotImplemented) {
             return x;
         }
-        Py_DECREF(x); /* can't do it */
+        PyRegion_CLEARLOCAL(x); /* can't do it */
     }
     Py_RETURN_NOTIMPLEMENTED;
 }
@@ -1041,6 +1119,7 @@ binary_op1(PyObject *v, PyObject *w, const int op_slot
 static PyObject *
 binop_type_error(PyObject *v, PyObject *w, const char *op_name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyErr_Format(PyExc_TypeError,
                  "unsupported operand type(s) for %.100s: "
                  "'%.100s' and '%.100s'",
@@ -1053,8 +1132,10 @@ binop_type_error(PyObject *v, PyObject *w, const char *op_name)
 static PyObject *
 binary_op(PyObject *v, PyObject *w, const int op_slot, const char *op_name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = BINARY_OP1(v, w, op_slot, op_name);
     if (result == Py_NotImplemented) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return binop_type_error(v, w, op_name);
     }
@@ -1077,6 +1158,7 @@ ternary_op(PyObject *v,
            const char *op_name
            )
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyNumberMethods *mv = Py_TYPE(v)->tp_as_number;
     PyNumberMethods *mw = Py_TYPE(w)->tp_as_number;
 
@@ -1102,27 +1184,30 @@ ternary_op(PyObject *v,
     if (slotv) {
         PyObject *x;
         if (slotw && PyType_IsSubtype(Py_TYPE(w), Py_TYPE(v))) {
+            PyRegion_NotifyTypeUse(Py_TYPE(w));
             x = slotw(v, w, z);
             if (x != Py_NotImplemented) {
                 return x;
             }
-            Py_DECREF(x); /* can't do it */
+            PyRegion_CLEARLOCAL(x); /* can't do it */
             slotw = NULL;
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(v));
         x = slotv(v, w, z);
         assert(_Py_CheckSlotResult(v, op_name, x != NULL));
         if (x != Py_NotImplemented) {
             return x;
         }
-        Py_DECREF(x); /* can't do it */
+        PyRegion_CLEARLOCAL(x); /* can't do it */
     }
     if (slotw) {
+        PyRegion_NotifyTypeUse(Py_TYPE(w));
         PyObject *x = slotw(v, w, z);
         assert(_Py_CheckSlotResult(w, op_name, x != NULL));
         if (x != Py_NotImplemented) {
             return x;
         }
-        Py_DECREF(x); /* can't do it */
+        PyRegion_CLEARLOCAL(x); /* can't do it */
     }
 
     PyNumberMethods *mz = Py_TYPE(z)->tp_as_number;
@@ -1132,12 +1217,13 @@ ternary_op(PyObject *v,
             slotz = NULL;
         }
         if (slotz) {
+            PyRegion_NotifyTypeUse(Py_TYPE(z));
             PyObject *x = slotz(v, w, z);
             assert(_Py_CheckSlotResult(z, op_name, x != NULL));
             if (x != Py_NotImplemented) {
                 return x;
             }
-            Py_DECREF(x); /* can't do it */
+            PyRegion_CLEARLOCAL(x); /* can't do it */
         }
     }
 
@@ -1166,6 +1252,7 @@ ternary_op(PyObject *v,
 #define BINARY_FUNC(func, op, op_name) \
     PyObject * \
     func(PyObject *v, PyObject *w) { \
+        /* Pyrona: This functions was checked and no further migration is needed */ \
         return binary_op(v, w, NB_SLOT(op), op_name); \
     }
 
@@ -1180,14 +1267,16 @@ BINARY_FUNC(PyNumber_Divmod, nb_divmod, "divmod()")
 PyObject *
 PyNumber_Add(PyObject *v, PyObject *w)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = BINARY_OP1(v, w, NB_SLOT(nb_add), "+");
     if (result != Py_NotImplemented) {
         return result;
     }
-    Py_DECREF(result);
+    PyRegion_CLEARLOCAL(result);
 
     PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;
     if (m && m->sq_concat) {
+        PyRegion_NotifyTypeUse(Py_TYPE(v));
         result = (*m->sq_concat)(v, w);
         assert(_Py_CheckSlotResult(v, "+", result != NULL));
         return result;
@@ -1199,6 +1288,7 @@ PyNumber_Add(PyObject *v, PyObject *w)
 static PyObject *
 sequence_repeat(ssizeargfunc repeatfunc, PyObject *seq, PyObject *n)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t count;
     if (_PyIndex_Check(n)) {
         count = PyNumber_AsSsize_t(n, PyExc_OverflowError);
@@ -1210,6 +1300,7 @@ sequence_repeat(ssizeargfunc repeatfunc, PyObject *seq, PyObject *n)
         return type_error("can't multiply sequence by "
                           "non-int of type '%.200s'", n);
     }
+    PyRegion_NotifyTypeUse(Py_TYPE(seq));
     PyObject *res = (*repeatfunc)(seq, count);
     assert(_Py_CheckSlotResult(seq, "*", res != NULL));
     return res;
@@ -1218,11 +1309,12 @@ sequence_repeat(ssizeargfunc repeatfunc, PyObject *seq, PyObject *n)
 PyObject *
 PyNumber_Multiply(PyObject *v, PyObject *w)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = BINARY_OP1(v, w, NB_SLOT(nb_multiply), "*");
     if (result == Py_NotImplemented) {
         PySequenceMethods *mv = Py_TYPE(v)->tp_as_sequence;
         PySequenceMethods *mw = Py_TYPE(w)->tp_as_sequence;
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         if  (mv && mv->sq_repeat) {
             return sequence_repeat(mv->sq_repeat, v, w);
         }
@@ -1242,12 +1334,14 @@ BINARY_FUNC(PyNumber_Remainder, nb_remainder, "%")
 PyObject *
 PyNumber_Power(PyObject *v, PyObject *w, PyObject *z)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return ternary_op(v, w, z, NB_SLOT(nb_power), "** or pow()");
 }
 
 PyObject *
 _PyNumber_PowerNoMod(PyObject *lhs, PyObject *rhs)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyNumber_Power(lhs, rhs, Py_None);
 }
 
@@ -1274,6 +1368,7 @@ binary_iop1(PyObject *v, PyObject *w, const int iop_slot, const int op_slot
 #endif
             )
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyNumberMethods *mv = Py_TYPE(v)->tp_as_number;
     if (mv != NULL) {
         binaryfunc slot = NB_BINOP(mv, iop_slot);
@@ -1283,12 +1378,13 @@ binary_iop1(PyObject *v, PyObject *w, const int iop_slot, const int op_slot
                 return NULL;
             }
 
+            PyRegion_NotifyTypeUse(Py_TYPE(v));
             PyObject *x = (slot)(v, w);
             assert(_Py_CheckSlotResult(v, op_name, x != NULL));
             if (x != Py_NotImplemented) {
                 return x;
             }
-            Py_DECREF(x);
+            PyRegion_CLEARLOCAL(x);
         }
     }
 #ifdef NDEBUG
@@ -1308,8 +1404,10 @@ static PyObject *
 binary_iop(PyObject *v, PyObject *w, const int iop_slot, const int op_slot,
                 const char *op_name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = BINARY_IOP1(v, w, iop_slot, op_slot, op_name);
     if (result == Py_NotImplemented) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return binop_type_error(v, w, op_name);
     }
@@ -1320,6 +1418,7 @@ static PyObject *
 ternary_iop(PyObject *v, PyObject *w, PyObject *z, const int iop_slot, const int op_slot,
                 const char *op_name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyNumberMethods *mv = Py_TYPE(v)->tp_as_number;
     if (mv != NULL) {
         ternaryfunc slot = NB_TERNOP(mv, iop_slot);
@@ -1329,11 +1428,12 @@ ternary_iop(PyObject *v, PyObject *w, PyObject *z, const int iop_slot, const int
                 return NULL;
             }
 
+            PyRegion_NotifyTypeUse(Py_TYPE(v));
             PyObject *x = (slot)(v, w, z);
             if (x != Py_NotImplemented) {
                 return x;
             }
-            Py_DECREF(x);
+            PyRegion_CLEARLOCAL(x);
         }
     }
     return ternary_op(v, w, z, op_slot, op_name);
@@ -1359,16 +1459,19 @@ INPLACE_BINOP(PyNumber_InPlaceRemainder, nb_inplace_remainder, nb_remainder, "%=
 PyObject *
 PyNumber_InPlaceAdd(PyObject *v, PyObject *w)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = BINARY_IOP1(v, w, NB_SLOT(nb_inplace_add),
                                    NB_SLOT(nb_add), "+=");
     if (result == Py_NotImplemented) {
-        PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
+        PySequenceMethods *m = Py_TYPE(v)->tp_as_sequence;
         if (m != NULL) {
             binaryfunc func = m->sq_inplace_concat;
             if (func == NULL)
                 func = m->sq_concat;
             if (func != NULL) {
+                PyRegion_NotifyTypeUse(Py_TYPE(v));
                 result = func(v, w);
                 assert(_Py_CheckSlotResult(v, "+=", result != NULL));
                 return result;
@@ -1382,12 +1485,14 @@ PyNumber_InPlaceAdd(PyObject *v, PyObject *w)
 PyObject *
 PyNumber_InPlaceMultiply(PyObject *v, PyObject *w)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = BINARY_IOP1(v, w, NB_SLOT(nb_inplace_multiply),
                                    NB_SLOT(nb_multiply), "*=");
     if (result == Py_NotImplemented) {
         ssizeargfunc f = NULL;
         PySequenceMethods *mv = Py_TYPE(v)->tp_as_sequence;
         PySequenceMethods *mw = Py_TYPE(w)->tp_as_sequence;
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         if (mv != NULL) {
             f = mv->sq_inplace_repeat;
@@ -1411,6 +1516,7 @@ PyNumber_InPlaceMultiply(PyObject *v, PyObject *w)
 PyObject *
 PyNumber_InPlacePower(PyObject *v, PyObject *w, PyObject *z)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return ternary_iop(v, w, z, NB_SLOT(nb_inplace_power),
                                 NB_SLOT(nb_power), "**=");
 }
@@ -1418,6 +1524,7 @@ PyNumber_InPlacePower(PyObject *v, PyObject *w, PyObject *z)
 PyObject *
 _PyNumber_InPlacePowerNoMod(PyObject *lhs, PyObject *rhs)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyNumber_InPlacePower(lhs, rhs, Py_None);
 }
 
@@ -1433,6 +1540,7 @@ _PyNumber_InPlacePowerNoMod(PyObject *lhs, PyObject *rhs)
                                                                          \
         PyNumberMethods *m = Py_TYPE(o)->tp_as_number;                   \
         if (m && m->op) {                                                \
+            PyRegion_NotifyTypeUse(Py_TYPE(o));                    \
             PyObject *res = (*m->op)(o);                                 \
             assert(_Py_CheckSlotResult(o, #meth_name, res != NULL));     \
             return res;                                                  \
@@ -1450,6 +1558,7 @@ UNARY_FUNC(PyNumber_Absolute, nb_absolute, __abs__, "abs()")
 int
 PyIndex_Check(PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyIndex_Check(obj);
 }
 
@@ -1462,12 +1571,13 @@ PyIndex_Check(PyObject *obj)
 PyObject *
 _PyNumber_Index(PyObject *item)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (item == NULL) {
         return null_error();
     }
 
     if (PyLong_Check(item)) {
-        return Py_NewRef(item);
+        return PyRegion_NewRef(item);
     }
     if (!_PyIndex_Check(item)) {
         PyErr_Format(PyExc_TypeError,
@@ -1476,6 +1586,7 @@ _PyNumber_Index(PyObject *item)
         return NULL;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(item));
     PyObject *result = Py_TYPE(item)->tp_as_number->nb_index(item);
     assert(_Py_CheckSlotResult(item, "__index__", result != NULL));
     if (!result || PyLong_CheckExact(result)) {
@@ -1486,7 +1597,7 @@ _PyNumber_Index(PyObject *item)
         PyErr_Format(PyExc_TypeError,
                      "%T.__index__() must return an int, not %T",
                      item, result);
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         return NULL;
     }
     /* Issue #17576: warn if 'result' not of exact type int. */
@@ -1495,7 +1606,7 @@ _PyNumber_Index(PyObject *item)
             "The ability to return an instance of a strict subclass of int "
             "is deprecated, and may be removed in a future version of Python.",
             item, result)) {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
         return NULL;
     }
     return result;
@@ -1508,9 +1619,10 @@ _PyNumber_Index(PyObject *item)
 PyObject *
 PyNumber_Index(PyObject *item)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = _PyNumber_Index(item);
     if (result != NULL && !PyLong_CheckExact(result)) {
-        Py_SETREF(result, _PyLong_Copy((PyLongObject *)result));
+        PyRegion_XSETLOCALREF(result, _PyLong_Copy((PyLongObject *)result));
     }
     return result;
 }
@@ -1520,6 +1632,7 @@ PyNumber_Index(PyObject *item)
 Py_ssize_t
 PyNumber_AsSsize_t(PyObject *item, PyObject *err)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t result;
     PyObject *runerr;
     PyObject *value = _PyNumber_Index(item);
@@ -1563,7 +1676,7 @@ PyNumber_AsSsize_t(PyObject *item, PyObject *err)
     }
 
  finish:
-    Py_DECREF(value);
+    PyRegion_CLEARLOCAL(value);
     return result;
 }
 
@@ -1571,6 +1684,7 @@ PyNumber_AsSsize_t(PyObject *item, PyObject *err)
 PyObject *
 PyNumber_Long(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result;
     PyNumberMethods *m;
     Py_buffer view;
@@ -1580,12 +1694,14 @@ PyNumber_Long(PyObject *o)
     }
 
     if (PyLong_CheckExact(o)) {
+        assert(!PyRegion_NeedsReadBarrier(o));
         return Py_NewRef(o);
     }
     m = Py_TYPE(o)->tp_as_number;
     if (m && m->nb_int) { /* This should include subclasses of int */
         /* Convert using the nb_int slot, which should return something
            of exact type int. */
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         result = m->nb_int(o);
         assert(_Py_CheckSlotResult(o, "__int__", result != NULL));
         if (!result || PyLong_CheckExact(result)) {
@@ -1596,7 +1712,7 @@ PyNumber_Long(PyObject *o)
             PyErr_Format(PyExc_TypeError,
                          "%T.__int__() must return an int, not %T",
                          o, result);
-            Py_DECREF(result);
+            PyRegion_CLEARLOCAL(result);
             return NULL;
         }
         /* Issue #17576: warn if 'result' not of exact type int. */
@@ -1605,10 +1721,10 @@ PyNumber_Long(PyObject *o)
                 "The ability to return an instance of a strict subclass of int "
                 "is deprecated, and may be removed in a future version of Python.",
                 o, result)) {
-            Py_DECREF(result);
+            PyRegion_CLEARLOCAL(result);
             return NULL;
         }
-        Py_SETREF(result, _PyLong_Copy((PyLongObject *)result));
+        PyRegion_XSETLOCALREF(result, _PyLong_Copy((PyLongObject *)result));
         return result;
     }
     if (m && m->nb_index) {
@@ -1642,7 +1758,7 @@ PyNumber_Long(PyObject *o)
         }
         result = _PyLong_FromBytes(PyBytes_AS_STRING(bytes),
                                    PyBytes_GET_SIZE(bytes), 10);
-        Py_DECREF(bytes);
+        PyRegion_CLEARLOCAL(bytes);
         PyBuffer_Release(&view);
         return result;
     }
@@ -1654,16 +1770,19 @@ PyNumber_Long(PyObject *o)
 PyObject *
 PyNumber_Float(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         return null_error();
     }
 
     if (PyFloat_CheckExact(o)) {
+        assert(!PyRegion_NeedsReadBarrier(o));
         return Py_NewRef(o);
     }
 
     PyNumberMethods *m = Py_TYPE(o)->tp_as_number;
     if (m && m->nb_float) { /* This should include subclasses of float */
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         PyObject *res = m->nb_float(o);
         assert(_Py_CheckSlotResult(o, "__float__", res != NULL));
         if (!res || PyFloat_CheckExact(res)) {
@@ -1673,7 +1792,7 @@ PyNumber_Float(PyObject *o)
         if (!PyFloat_Check(res)) {
             PyErr_Format(PyExc_TypeError,
                          "%T.__float__() must return a float, not %T", o, res);
-            Py_DECREF(res);
+            PyRegion_CLEARLOCAL(res);
             return NULL;
         }
         /* Issue #26983: warn if 'res' not of exact type float. */
@@ -1682,11 +1801,11 @@ PyNumber_Float(PyObject *o)
                 "The ability to return an instance of a strict subclass of float "
                 "is deprecated, and may be removed in a future version of Python.",
                 o, res)) {
-            Py_DECREF(res);
+            PyRegion_CLEARLOCAL(res);
             return NULL;
         }
         double val = PyFloat_AS_DOUBLE(res);
-        Py_DECREF(res);
+        PyRegion_CLEARLOCAL(res);
         return PyFloat_FromDouble(val);
     }
 
@@ -1696,7 +1815,7 @@ PyNumber_Float(PyObject *o)
             return NULL;
         }
         double val = PyLong_AsDouble(res);
-        Py_DECREF(res);
+        PyRegion_CLEARLOCAL(res);
         if (val == -1.0 && PyErr_Occurred()) {
             return NULL;
         }
@@ -1714,6 +1833,7 @@ PyNumber_Float(PyObject *o)
 PyObject *
 PyNumber_ToBase(PyObject *n, int base)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!(base == 2 || base == 8 || base == 10 || base == 16)) {
         PyErr_SetString(PyExc_SystemError,
                         "PyNumber_ToBase: base must be 2, 8, 10 or 16");
@@ -1723,7 +1843,7 @@ PyNumber_ToBase(PyObject *n, int base)
     if (!index)
         return NULL;
     PyObject *res = _PyLong_Format(index, base);
-    Py_DECREF(index);
+    PyRegion_CLEARLOCAL(index);
     return res;
 }
 
@@ -1733,6 +1853,7 @@ PyNumber_ToBase(PyObject *n, int base)
 int
 PySequence_Check(PyObject *s)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyDict_Check(s))
         return 0;
     return Py_TYPE(s)->tp_as_sequence &&
@@ -1742,6 +1863,7 @@ PySequence_Check(PyObject *s)
 Py_ssize_t
 PySequence_Size(PyObject *s)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL) {
         null_error();
         return -1;
@@ -1749,6 +1871,7 @@ PySequence_Size(PyObject *s)
 
     PySequenceMethods *m = Py_TYPE(s)->tp_as_sequence;
     if (m && m->sq_length) {
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         Py_ssize_t len = m->sq_length(s);
         assert(_Py_CheckSlotResult(s, "__len__", len >= 0));
         return len;
@@ -1766,6 +1889,7 @@ PySequence_Size(PyObject *s)
 Py_ssize_t
 PySequence_Length(PyObject *s)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PySequence_Size(s);
 }
 #define PySequence_Length PySequence_Size
@@ -1773,12 +1897,14 @@ PySequence_Length(PyObject *s)
 PyObject *
 PySequence_Concat(PyObject *s, PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL || o == NULL) {
         return null_error();
     }
 
     PySequenceMethods *m = Py_TYPE(s)->tp_as_sequence;
     if (m && m->sq_concat) {
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         PyObject *res = m->sq_concat(s, o);
         assert(_Py_CheckSlotResult(s, "+", res != NULL));
         return res;
@@ -1791,6 +1917,7 @@ PySequence_Concat(PyObject *s, PyObject *o)
         PyObject *result = BINARY_OP1(s, o, NB_SLOT(nb_add), "+");
         if (result != Py_NotImplemented)
             return result;
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
     }
     return type_error("'%.200s' object can't be concatenated", s);
@@ -1799,12 +1926,14 @@ PySequence_Concat(PyObject *s, PyObject *o)
 PyObject *
 PySequence_Repeat(PyObject *o, Py_ssize_t count)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         return null_error();
     }
 
     PySequenceMethods *m = Py_TYPE(o)->tp_as_sequence;
     if (m && m->sq_repeat) {
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         PyObject *res = m->sq_repeat(o, count);
         assert(_Py_CheckSlotResult(o, "*", res != NULL));
         return res;
@@ -1819,9 +1948,11 @@ PySequence_Repeat(PyObject *o, Py_ssize_t count)
         if (n == NULL)
             return NULL;
         result = BINARY_OP1(o, n, NB_SLOT(nb_multiply), "*");
+        assert(!PyRegion_NeedsReadBarrier(n));
         Py_DECREF(n);
         if (result != Py_NotImplemented)
             return result;
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
     }
     return type_error("'%.200s' object can't be repeated", o);
@@ -1830,6 +1961,7 @@ PySequence_Repeat(PyObject *o, Py_ssize_t count)
 PyObject *
 PySequence_InPlaceConcat(PyObject *s, PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL || o == NULL) {
         return null_error();
     }
@@ -1840,11 +1972,13 @@ PySequence_InPlaceConcat(PyObject *s, PyObject *o)
             return immutable_error(s);
         }
 
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         PyObject *res = m->sq_inplace_concat(s, o);
         assert(_Py_CheckSlotResult(s, "+=", res != NULL));
         return res;
     }
     if (m && m->sq_concat) {
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         PyObject *res = m->sq_concat(s, o);
         assert(_Py_CheckSlotResult(s, "+", res != NULL));
         return res;
@@ -1855,6 +1989,7 @@ PySequence_InPlaceConcat(PyObject *s, PyObject *o)
                                        NB_SLOT(nb_add), "+=");
         if (result != Py_NotImplemented)
             return result;
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
     }
     return type_error("'%.200s' object can't be concatenated", s);
@@ -1863,6 +1998,7 @@ PySequence_InPlaceConcat(PyObject *s, PyObject *o)
 PyObject *
 PySequence_InPlaceRepeat(PyObject *o, Py_ssize_t count)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         return null_error();
     }
@@ -1873,11 +2009,13 @@ PySequence_InPlaceRepeat(PyObject *o, Py_ssize_t count)
             return immutable_error(o);
         }
 
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         PyObject *res = m->sq_inplace_repeat(o, count);
         assert(_Py_CheckSlotResult(o, "*=", res != NULL));
         return res;
     }
     if (m && m->sq_repeat) {
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         PyObject *res = m->sq_repeat(o, count);
         assert(_Py_CheckSlotResult(o, "*", res != NULL));
         return res;
@@ -1890,9 +2028,11 @@ PySequence_InPlaceRepeat(PyObject *o, Py_ssize_t count)
             return NULL;
         result = BINARY_IOP1(o, n, NB_SLOT(nb_inplace_multiply),
                              NB_SLOT(nb_multiply), "*=");
+        assert(!PyRegion_NeedsReadBarrier(n));
         Py_DECREF(n);
         if (result != Py_NotImplemented)
             return result;
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
     }
     return type_error("'%.200s' object can't be repeated", o);
@@ -1901,6 +2041,7 @@ PySequence_InPlaceRepeat(PyObject *o, Py_ssize_t count)
 PyObject *
 PySequence_GetItem(PyObject *s, Py_ssize_t i)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL) {
         return null_error();
     }
@@ -1909,6 +2050,7 @@ PySequence_GetItem(PyObject *s, Py_ssize_t i)
     if (m && m->sq_item) {
         if (i < 0) {
             if (m->sq_length) {
+                PyRegion_NotifyTypeUse(Py_TYPE(s));
                 Py_ssize_t l = (*m->sq_length)(s);
                 assert(_Py_CheckSlotResult(s, "__len__", l >= 0));
                 if (l < 0) {
@@ -1935,6 +2077,7 @@ PySequence_GetItem(PyObject *s, Py_ssize_t i)
 PyObject *
 PySequence_GetSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!s) {
         return null_error();
     }
@@ -1945,9 +2088,10 @@ PySequence_GetSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2)
         if (!slice) {
             return NULL;
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         PyObject *res = mp->mp_subscript(s, slice);
         assert(_Py_CheckSlotResult(s, "__getitem__", res != NULL));
-        Py_DECREF(slice);
+        PyRegion_CLEARLOCAL(slice);
         return res;
     }
 
@@ -1957,6 +2101,7 @@ PySequence_GetSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2)
 int
 PySequence_SetItem(PyObject *s, Py_ssize_t i, PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL) {
         null_error();
         return -1;
@@ -1971,6 +2116,7 @@ PySequence_SetItem(PyObject *s, Py_ssize_t i, PyObject *o)
 
         if (i < 0) {
             if (m->sq_length) {
+                PyRegion_NotifyTypeUse(Py_TYPE(s));
                 Py_ssize_t l = (*m->sq_length)(s);
                 assert(_Py_CheckSlotResult(s, "__len__", l >= 0));
                 if (l < 0) {
@@ -1979,6 +2125,7 @@ PySequence_SetItem(PyObject *s, Py_ssize_t i, PyObject *o)
                 i += l;
             }
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         int res = m->sq_ass_item(s, i, o);
         assert(_Py_CheckSlotResult(s, "__setitem__", res >= 0));
         return res;
@@ -1995,6 +2142,7 @@ PySequence_SetItem(PyObject *s, Py_ssize_t i, PyObject *o)
 int
 PySequence_DelItem(PyObject *s, Py_ssize_t i)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL) {
         null_error();
         return -1;
@@ -2009,6 +2157,7 @@ PySequence_DelItem(PyObject *s, Py_ssize_t i)
 
         if (i < 0) {
             if (m->sq_length) {
+                PyRegion_NotifyTypeUse(Py_TYPE(s));
                 Py_ssize_t l = (*m->sq_length)(s);
                 assert(_Py_CheckSlotResult(s, "__len__", l >= 0));
                 if (l < 0) {
@@ -2017,6 +2166,7 @@ PySequence_DelItem(PyObject *s, Py_ssize_t i)
                 i += l;
             }
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         int res = m->sq_ass_item(s, i, (PyObject *)NULL);
         assert(_Py_CheckSlotResult(s, "__delitem__", res >= 0));
         return res;
@@ -2033,6 +2183,7 @@ PySequence_DelItem(PyObject *s, Py_ssize_t i)
 int
 PySequence_SetSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2, PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL) {
         null_error();
         return -1;
@@ -2048,9 +2199,10 @@ PySequence_SetSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2, PyObject *o)
         PyObject *slice = _PySlice_FromIndices(i1, i2);
         if (!slice)
             return -1;
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         int res = mp->mp_ass_subscript(s, slice, o);
         assert(_Py_CheckSlotResult(s, "__setitem__", res >= 0));
-        Py_DECREF(slice);
+        PyRegion_CLEARLOCAL(slice);
         return res;
     }
 
@@ -2061,6 +2213,7 @@ PySequence_SetSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2, PyObject *o)
 int
 PySequence_DelSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (s == NULL) {
         null_error();
         return -1;
@@ -2077,9 +2230,10 @@ PySequence_DelSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2)
         if (!slice) {
             return -1;
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(s));
         int res = mp->mp_ass_subscript(s, slice, NULL);
         assert(_Py_CheckSlotResult(s, "__delitem__", res >= 0));
-        Py_DECREF(slice);
+        PyRegion_CLEARLOCAL(slice);
         return res;
     }
     type_error("'%.200s' object doesn't support slice deletion", s);
@@ -2089,6 +2243,7 @@ PySequence_DelSlice(PyObject *s, Py_ssize_t i1, Py_ssize_t i2)
 PyObject *
 PySequence_Tuple(PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *it;  /* iter(v) */
 
     if (v == NULL) {
@@ -2101,7 +2256,7 @@ PySequence_Tuple(PyObject *v)
            a tuple *subclass* instance as-is, hence the restriction
            to exact tuples here.  In contrast, lists always make
            a copy, so there's no need for exactness below. */
-        return Py_NewRef(v);
+        return PyRegion_NewRef(v);
     }
     if (PyList_CheckExact(v))
         return PyList_AsTuple(v);
@@ -2119,7 +2274,7 @@ PySequence_Tuple(PyObject *v)
             if (PyErr_Occurred()) {
                 goto fail;
             }
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             return _PyTuple_FromArraySteal(buffer, n);
         }
         buffer[n] = item;
@@ -2131,33 +2286,38 @@ PySequence_Tuple(PyObject *v)
     assert(n == 8);
     Py_SET_SIZE(list, n);
     for (Py_ssize_t j = 0; j < n; j++) {
+        // Regions: This doesn't need a TakeRef, since the iterator already
+        // bumped the LRC and list is always local here
         PyList_SET_ITEM(list, j, buffer[j]);
     }
     for (;;) {
         PyObject *item = PyIter_Next(it);
         if (item == NULL) {
             if (PyErr_Occurred()) {
+                assert(!PyRegion_NeedsReadBarrier(list));
                 Py_DECREF(list);
-                Py_DECREF(it);
+                PyRegion_CLEARLOCAL(it);
                 return NULL;
             }
             break;
         }
         if (_PyList_AppendTakeRef(list, item) < 0) {
+            assert(!PyRegion_NeedsReadBarrier(list));
             Py_DECREF(list);
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             return NULL;
         }
     }
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     PyObject *res = _PyList_AsTupleAndClear(list);
+    assert(!PyRegion_NeedsReadBarrier(list));
     Py_DECREF(list);
     return res;
 fail:
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     while (n > 0) {
         n--;
-        Py_DECREF(buffer[n]);
+        PyRegion_CLEARLOCAL(buffer[n]);
     }
     return NULL;
 }
@@ -2165,6 +2325,7 @@ fail:
 PyObject *
 PySequence_List(PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result;  /* result list */
     PyObject *rv;          /* return value from PyList_Extend */
 
@@ -2178,10 +2339,11 @@ PySequence_List(PyObject *v)
 
     rv = _PyList_Extend((PyListObject *)result, v);
     if (rv == NULL) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return NULL;
     }
-    Py_DECREF(rv);
+    PyRegion_CLEARLOCAL(rv);
     return result;
 }
 
@@ -2195,7 +2357,7 @@ PySequence_Fast(PyObject *v, const char *m)
     }
 
     if (PyList_CheckExact(v) || PyTuple_CheckExact(v)) {
-        return Py_NewRef(v);
+        return PyRegion_NewRef(v);
     }
 
     it = PyObject_GetIter(v);
@@ -2208,7 +2370,7 @@ PySequence_Fast(PyObject *v, const char *m)
     }
 
     v = PySequence_List(it);
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
 
     return v;
 }
@@ -2222,6 +2384,7 @@ PySequence_Fast(PyObject *v, const char *m)
 Py_ssize_t
 _PySequence_IterSearch(PyObject *seq, PyObject *obj, int operation)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t n;
     int wrapped;  /* for PY_ITERSEARCH_INDEX, true iff n wrapped around */
     PyObject *it;  /* iter(seq) */
@@ -2258,7 +2421,7 @@ _PySequence_IterSearch(PyObject *seq, PyObject *obj, int operation)
         }
 
         cmp = PyObject_RichCompareBool(item, obj, Py_EQ);
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         if (cmp < 0)
             goto Fail;
         if (cmp > 0) {
@@ -2306,15 +2469,15 @@ Fail:
     n = -1;
     /* fall through */
 Done:
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return n;
-
 }
 
 /* Return # of times o appears in s. */
 Py_ssize_t
 PySequence_Count(PyObject *s, PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PySequence_IterSearch(s, o, PY_ITERSEARCH_COUNT);
 }
 
@@ -2324,8 +2487,10 @@ PySequence_Count(PyObject *s, PyObject *o)
 int
 PySequence_Contains(PyObject *seq, PyObject *ob)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySequenceMethods *sqm = Py_TYPE(seq)->tp_as_sequence;
     if (sqm != NULL && sqm->sq_contains != NULL) {
+        PyRegion_NotifyTypeUse(Py_TYPE(seq));
         int res = (*sqm->sq_contains)(seq, ob);
         assert(_Py_CheckSlotResult(seq, "__contains__", res >= 0));
         return res;
@@ -2339,12 +2504,14 @@ PySequence_Contains(PyObject *seq, PyObject *ob)
 int
 PySequence_In(PyObject *w, PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PySequence_Contains(w, v);
 }
 
 Py_ssize_t
 PySequence_Index(PyObject *s, PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PySequence_IterSearch(s, o, PY_ITERSEARCH_INDEX);
 }
 
@@ -2353,6 +2520,7 @@ PySequence_Index(PyObject *s, PyObject *o)
 int
 PyMapping_Check(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return o && Py_TYPE(o)->tp_as_mapping &&
         Py_TYPE(o)->tp_as_mapping->mp_subscript;
 }
@@ -2360,6 +2528,7 @@ PyMapping_Check(PyObject *o)
 Py_ssize_t
 PyMapping_Size(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         null_error();
         return -1;
@@ -2367,6 +2536,7 @@ PyMapping_Size(PyObject *o)
 
     PyMappingMethods *m = Py_TYPE(o)->tp_as_mapping;
     if (m && m->mp_length) {
+        PyRegion_NotifyTypeUse(Py_TYPE(o));
         Py_ssize_t len = m->mp_length(o);
         assert(_Py_CheckSlotResult(o, "__len__", len >= 0));
         return len;
@@ -2385,6 +2555,7 @@ PyMapping_Size(PyObject *o)
 Py_ssize_t
 PyMapping_Length(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyMapping_Size(o);
 }
 #define PyMapping_Length PyMapping_Size
@@ -2392,6 +2563,7 @@ PyMapping_Length(PyObject *o)
 PyObject *
 PyMapping_GetItemString(PyObject *o, const char *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *okey, *r;
 
     if (key == NULL) {
@@ -2402,6 +2574,7 @@ PyMapping_GetItemString(PyObject *o, const char *key)
     if (okey == NULL)
         return NULL;
     r = PyObject_GetItem(o, okey);
+    assert(!PyRegion_NeedsReadBarrier(okey));
     Py_DECREF(okey);
     return r;
 }
@@ -2409,6 +2582,7 @@ PyMapping_GetItemString(PyObject *o, const char *key)
 int
 PyMapping_GetOptionalItemString(PyObject *obj, const char *key, PyObject **result)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (key == NULL) {
         *result = NULL;
         null_error();
@@ -2420,6 +2594,7 @@ PyMapping_GetOptionalItemString(PyObject *obj, const char *key, PyObject **resul
         return -1;
     }
     int rc = PyMapping_GetOptionalItem(obj, okey, result);
+    assert(!PyRegion_NeedsReadBarrier(okey));
     Py_DECREF(okey);
     return rc;
 }
@@ -2427,6 +2602,7 @@ PyMapping_GetOptionalItemString(PyObject *obj, const char *key, PyObject **resul
 int
 PyMapping_SetItemString(PyObject *o, const char *key, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *okey;
     int r;
 
@@ -2439,6 +2615,7 @@ PyMapping_SetItemString(PyObject *o, const char *key, PyObject *value)
     if (okey == NULL)
         return -1;
     r = PyObject_SetItem(o, okey, value);
+    assert(!PyRegion_NeedsReadBarrier(okey));
     Py_DECREF(okey);
     return r;
 }
@@ -2446,24 +2623,27 @@ PyMapping_SetItemString(PyObject *o, const char *key, PyObject *value)
 int
 PyMapping_HasKeyStringWithError(PyObject *obj, const char *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *res;
     int rc = PyMapping_GetOptionalItemString(obj, key, &res);
-    Py_XDECREF(res);
+    PyRegion_CLEARLOCAL(res);
     return rc;
 }
 
 int
 PyMapping_HasKeyWithError(PyObject *obj, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *res;
     int rc = PyMapping_GetOptionalItem(obj, key, &res);
-    Py_XDECREF(res);
+    PyRegion_CLEARLOCAL(res);
     return rc;
 }
 
 int
 PyMapping_HasKeyString(PyObject *obj, const char *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *value;
     int rc;
     if (obj == NULL) {
@@ -2482,13 +2662,14 @@ PyMapping_HasKeyString(PyObject *obj, const char *key)
             "PyMapping_GetOptionalItemString() or PyMapping_GetItemString()");
         return 0;
     }
-    Py_XDECREF(value);
+    PyRegion_CLEARLOCAL(value);
     return rc;
 }
 
 int
 PyMapping_HasKey(PyObject *obj, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *value;
     int rc;
     if (obj == NULL || key == NULL) {
@@ -2507,7 +2688,7 @@ PyMapping_HasKey(PyObject *obj, PyObject *key)
             "PyMapping_GetOptionalItem() or PyObject_GetItem()");
         return 0;
     }
-    Py_XDECREF(value);
+    PyRegion_CLEARLOCAL(value);
     return rc;
 }
 
@@ -2517,6 +2698,7 @@ PyMapping_HasKey(PyObject *obj, PyObject *key)
 static PyObject *
 method_output_as_list(PyObject *o, PyObject *meth)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *it, *result, *meth_output;
 
     assert(o != NULL);
@@ -2532,18 +2714,19 @@ method_output_as_list(PyObject *o, PyObject *meth)
                           "%T.%U() must return an iterable, not %T",
                           o, meth, meth_output);
         }
-        Py_DECREF(meth_output);
+        PyRegion_CLEARLOCAL(meth_output);
         return NULL;
     }
-    Py_DECREF(meth_output);
+    PyRegion_CLEARLOCAL(meth_output);
     result = PySequence_List(it);
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return result;
 }
 
 PyObject *
 PyMapping_Keys(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         return null_error();
     }
@@ -2556,6 +2739,7 @@ PyMapping_Keys(PyObject *o)
 PyObject *
 PyMapping_Items(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         return null_error();
     }
@@ -2568,6 +2752,7 @@ PyMapping_Items(PyObject *o)
 PyObject *
 PyMapping_Values(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL) {
         return null_error();
     }
@@ -2606,11 +2791,12 @@ PyMapping_Values(PyObject *o)
 static PyObject *
 abstract_get_bases(PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *bases;
 
     (void)PyObject_GetOptionalAttr(cls, &_Py_ID(__bases__), &bases);
     if (bases != NULL && !PyTuple_Check(bases)) {
-        Py_DECREF(bases);
+        PyRegion_CLEARLOCAL(bases);
         return NULL;
     }
     return bases;
@@ -2620,13 +2806,14 @@ abstract_get_bases(PyObject *cls)
 static int
 abstract_issubclass(PyObject *derived, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *bases = NULL;
     Py_ssize_t i, n;
     int r = 0;
 
     while (1) {
         if (derived == cls) {
-            Py_XDECREF(bases); /* See below comment */
+            PyRegion_CLEARLOCAL(bases); /* See below comment */
             return 1;
         }
         /* Use XSETREF to drop bases reference *after* finishing with
@@ -2634,7 +2821,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
            XSETREF is used instead of SETREF, because bases is NULL on the
            first iteration of the loop.
         */
-        Py_XSETREF(bases, abstract_get_bases(derived));
+        PyRegion_XSETLOCALREF(bases, abstract_get_bases(derived));
         if (bases == NULL) {
             if (PyErr_Occurred())
                 return -1;
@@ -2642,7 +2829,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
         }
         n = PyTuple_GET_SIZE(bases);
         if (n == 0) {
-            Py_DECREF(bases);
+            PyRegion_CLEARLOCAL(bases);
             return 0;
         }
         /* Avoid recursivity in the single inheritance case */
@@ -2654,7 +2841,7 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
     }
     assert(n >= 2);
     if (_Py_EnterRecursiveCall(" in __issubclass__")) {
-        Py_DECREF(bases);
+        PyRegion_CLEARLOCAL(bases);
         return -1;
     }
     for (i = 0; i < n; i++) {
@@ -2664,13 +2851,14 @@ abstract_issubclass(PyObject *derived, PyObject *cls)
         }
     }
     _Py_LeaveRecursiveCall();
-    Py_DECREF(bases);
+    PyRegion_CLEARLOCAL(bases);
     return r;
 }
 
 static int
 check_class(PyObject *cls, const char *error)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *bases = abstract_get_bases(cls);
     if (bases == NULL) {
         /* Do not mask errors. */
@@ -2680,13 +2868,14 @@ check_class(PyObject *cls, const char *error)
         }
         return 0;
     }
-    Py_DECREF(bases);
+    PyRegion_CLEARLOCAL(bases);
     return -1;
 }
 
 static int
 object_isinstance(PyObject *inst, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *icls;
     int retval;
     if (PyType_Check(cls)) {
@@ -2702,6 +2891,8 @@ object_isinstance(PyObject *inst, PyObject *cls)
                 else {
                     retval = 0;
                 }
+                // Region: classes are always local or frozen
+                assert(!PyRegion_NeedsReadBarrier(icls));
                 Py_DECREF(icls);
             }
         }
@@ -2713,6 +2904,8 @@ object_isinstance(PyObject *inst, PyObject *cls)
         retval = PyObject_GetOptionalAttr(inst, &_Py_ID(__class__), &icls);
         if (icls != NULL) {
             retval = abstract_issubclass(icls, cls);
+            // Region: classes are always local or frozen
+            assert(!PyRegion_NeedsReadBarrier(icls));
             Py_DECREF(icls);
         }
     }
@@ -2723,6 +2916,8 @@ object_isinstance(PyObject *inst, PyObject *cls)
 static int
 object_recursive_isinstance(PyThreadState *tstate, PyObject *inst, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     /* Quick test for an exact match */
     if (Py_IS_TYPE(inst, (PyTypeObject *)cls)) {
         return 1;
@@ -2760,19 +2955,19 @@ object_recursive_isinstance(PyThreadState *tstate, PyObject *inst, PyObject *cls
     PyObject *checker = _PyObject_LookupSpecial(cls, &_Py_ID(__instancecheck__));
     if (checker != NULL) {
         if (_Py_EnterRecursiveCallTstate(tstate, " in __instancecheck__")) {
-            Py_DECREF(checker);
+            PyRegion_CLEARLOCAL(checker);
             return -1;
         }
 
         PyObject *res = PyObject_CallOneArg(checker, inst);
         _Py_LeaveRecursiveCallTstate(tstate);
-        Py_DECREF(checker);
+        PyRegion_CLEARLOCAL(checker);
 
         if (res == NULL) {
             return -1;
         }
         int ok = PyObject_IsTrue(res);
-        Py_DECREF(res);
+        PyRegion_CLEARLOCAL(res);
 
         return ok;
     }
@@ -2796,6 +2991,8 @@ PyObject_IsInstance(PyObject *inst, PyObject *cls)
 static  int
 recursive_issubclass(PyObject *derived, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     if (PyType_Check(cls) && PyType_Check(derived)) {
         /* Fast path (non-recursive) */
         return PyType_IsSubtype((PyTypeObject *)derived, (PyTypeObject *)cls);
@@ -2816,6 +3013,8 @@ recursive_issubclass(PyObject *derived, PyObject *cls)
 static int
 object_issubclass(PyThreadState *tstate, PyObject *derived, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     PyObject *checker;
 
     /* We know what type's __subclasscheck__ does. */
@@ -2852,15 +3051,15 @@ object_issubclass(PyThreadState *tstate, PyObject *derived, PyObject *cls)
     if (checker != NULL) {
         int ok = -1;
         if (_Py_EnterRecursiveCallTstate(tstate, " in __subclasscheck__")) {
-            Py_DECREF(checker);
+            PyRegion_CLEARLOCAL(checker);
             return ok;
         }
         PyObject *res = PyObject_CallOneArg(checker, derived);
         _Py_LeaveRecursiveCallTstate(tstate);
-        Py_DECREF(checker);
+        PyRegion_CLEARLOCAL(checker);
         if (res != NULL) {
             ok = PyObject_IsTrue(res);
-            Py_DECREF(res);
+            PyRegion_CLEARLOCAL(res);
         }
         return ok;
     }
@@ -2876,6 +3075,7 @@ object_issubclass(PyThreadState *tstate, PyObject *derived, PyObject *cls)
 int
 PyObject_IsSubclass(PyObject *derived, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     return object_issubclass(tstate, derived, cls);
 }
@@ -2884,12 +3084,14 @@ PyObject_IsSubclass(PyObject *derived, PyObject *cls)
 int
 _PyObject_RealIsInstance(PyObject *inst, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return object_isinstance(inst, cls);
 }
 
 int
 _PyObject_RealIsSubclass(PyObject *derived, PyObject *cls)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return recursive_issubclass(derived, cls);
 }
 
@@ -2897,6 +3099,7 @@ _PyObject_RealIsSubclass(PyObject *derived, PyObject *cls)
 PyObject *
 PyObject_GetIter(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *t = Py_TYPE(o);
     getiterfunc f;
 
@@ -2907,7 +3110,7 @@ PyObject_GetIter(PyObject *o)
         return type_error("'%.200s' object is not iterable", o);
     }
     else {
-        // FIXME(regions): xFrednet: PyRegion_NotifyTypeUse(t);
+        PyRegion_NotifyTypeUse(t);
         PyObject *res = (*f)(o);
         if (res != NULL && !PyIter_Check(res)) {
             PyErr_Format(PyExc_TypeError,
@@ -2921,6 +3124,7 @@ PyObject_GetIter(PyObject *o)
 
 PyObject *
 PyObject_GetAIter(PyObject *o) {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *t = Py_TYPE(o);
     unaryfunc f;
 
@@ -2928,12 +3132,13 @@ PyObject_GetAIter(PyObject *o) {
         return type_error("'%.200s' object is not an async iterable", o);
     }
     f = t->tp_as_async->am_aiter;
+    PyRegion_NotifyTypeUse(t);
     PyObject *it = (*f)(o);
     if (it != NULL && !PyAIter_Check(it)) {
         PyErr_Format(PyExc_TypeError,
                      "%T.__aiter__() must return an async iterator, not %T",
                      o, it);
-        Py_SETREF(it, NULL);
+        PyRegion_CLEARLOCAL(it);
     }
     return it;
 }
@@ -2941,6 +3146,7 @@ PyObject_GetAIter(PyObject *o) {
 int
 PyIter_Check(PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *tp = Py_TYPE(obj);
     return (tp->tp_iternext != NULL &&
             tp->tp_iternext != &_PyObject_NextNotImplemented);
@@ -2949,6 +3155,7 @@ PyIter_Check(PyObject *obj)
 int
 PyAIter_Check(PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *tp = Py_TYPE(obj);
     return (tp->tp_as_async != NULL &&
             tp->tp_as_async->am_anext != NULL &&
@@ -2958,9 +3165,10 @@ PyAIter_Check(PyObject *obj)
 static int
 iternext(PyObject *iter, PyObject **item)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     iternextfunc tp_iternext = Py_TYPE(iter)->tp_iternext;
 
-    // FIXME(regions): PyRegion_NotifyTypeUse(Py_TYPE(iter));
+    PyRegion_NotifyTypeUse(Py_TYPE(iter));
     if ((*item = tp_iternext(iter))) {
         return 1;
     }
@@ -2987,6 +3195,7 @@ iternext(PyObject *iter, PyObject **item)
 int
 PyIter_NextItem(PyObject *iter, PyObject **item)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(iter != NULL);
     assert(item != NULL);
 
@@ -3010,6 +3219,7 @@ PyIter_NextItem(PyObject *iter, PyObject **item)
 PyObject *
 PyIter_Next(PyObject *iter)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *item;
     (void)iternext(iter, &item);
     return item;
@@ -3018,9 +3228,11 @@ PyIter_Next(PyObject *iter)
 PySendResult
 PyIter_Send(PyObject *iter, PyObject *arg, PyObject **result)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(arg != NULL);
     assert(result != NULL);
     if (Py_TYPE(iter)->tp_as_async && Py_TYPE(iter)->tp_as_async->am_send) {
+        PyRegion_NotifyTypeUse(Py_TYPE(iter));
         PySendResult res = Py_TYPE(iter)->tp_as_async->am_send(iter, arg, result);
         assert(_Py_CheckSlotResult(iter, "am_send", res != PYGEN_ERROR));
         return res;

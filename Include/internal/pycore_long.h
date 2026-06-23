@@ -250,6 +250,7 @@ _PyLong_SignedDigitCount(const PyLongObject *op)
 static inline int
 _PyLong_CompactSign(const PyLongObject *op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyLong_Check(op));
     assert(_PyLong_IsCompact((PyLongObject *)op));
     return 1 - (op->long_value.lv_tag & SIGN_MASK);
@@ -258,6 +259,7 @@ _PyLong_CompactSign(const PyLongObject *op)
 static inline int
 _PyLong_NonCompactSign(const PyLongObject *op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyLong_Check(op));
     assert(!_PyLong_IsCompact((PyLongObject *)op));
     return 1 - (op->long_value.lv_tag & SIGN_MASK);

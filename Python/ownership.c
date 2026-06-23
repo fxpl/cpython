@@ -197,7 +197,15 @@ Py_ssize_t _PyOwnership_get_open_region_tick(void) {
     return state->tick;
 }
 
+// #define DIRTY_REGION_TRACING
+
 int _PyOwnership_notify_untrusted_code(const char* reason) {
+    // FIXME: Parts of the initialization currently trigger this function
+    // before the GIL and interpreter state is initialized. We're ignoring
+    // this for now.
+    if (!Py_IsInitialized()) {
+        return 0;
+    }
     _Py_ownership_state* state = get_ownership_state();
     if (state == NULL) {
         return 1;
@@ -213,6 +221,15 @@ int _PyOwnership_notify_untrusted_code(const char* reason) {
     PyObject* name = PyUnicode_InternFromString(reason);
     if (name != NULL) {
         Py_XSETREF(state->last_dirty_reason, name);
+    }
+#endif
+#ifdef DIRTY_REGION_TRACING
+    {
+        FILE* f = fopen("regions-dirty-reason.txt", "a");
+        if (f != NULL) {
+            fprintf(f, "%s\n", reason);
+            fclose(f);
+        }
     }
 #endif
     // Everything is alright

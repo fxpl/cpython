@@ -1150,6 +1150,7 @@ PyObject_RichCompareBool(PyObject *v, PyObject *w, int op)
 Py_hash_t
 PyObject_HashNotImplemented(PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyErr_Format(PyExc_TypeError, "unhashable type: '%.200s'",
                  Py_TYPE(v)->tp_name);
     return -1;
@@ -1158,9 +1159,12 @@ PyObject_HashNotImplemented(PyObject *v)
 Py_hash_t
 PyObject_Hash(PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *tp = Py_TYPE(v);
-    if (tp->tp_hash != NULL)
+    if (tp->tp_hash != NULL) {
+        PyRegion_NotifyTypeUse(tp);
         return (*tp->tp_hash)(v);
+    }
     /* To keep to the general practice that inheriting
      * solely from object in C code should work without
      * an explicit call to PyType_Ready, we implicitly call
@@ -1169,8 +1173,10 @@ PyObject_Hash(PyObject *v)
     if (!_PyType_IsReady(tp)) {
         if (PyType_Ready(tp) < 0)
             return -1;
-        if (tp->tp_hash != NULL)
+        if (tp->tp_hash != NULL) {
+            PyRegion_NotifyTypeUse(tp);
             return (*tp->tp_hash)(v);
+        }
     }
     /* Otherwise, the object can't be hashed */
     return PyObject_HashNotImplemented(v);
@@ -1179,14 +1185,18 @@ PyObject_Hash(PyObject *v)
 PyObject *
 PyObject_GetAttrString(PyObject *v, const char *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *w, *res;
 
-    if (Py_TYPE(v)->tp_getattr != NULL)
+    if (Py_TYPE(v)->tp_getattr != NULL) {
+        PyRegion_NotifyTypeUse(Py_TYPE(v));
         return (*Py_TYPE(v)->tp_getattr)(v, (char*)name);
+    }
     w = PyUnicode_FromString(name);
     if (w == NULL)
         return NULL;
     res = PyObject_GetAttr(v, w);
+    assert(!PyRegion_NeedsReadBarrier(w) && "Strings are immutable");
     Py_DECREF(w);
     return res;
 }
@@ -1194,9 +1204,10 @@ PyObject_GetAttrString(PyObject *v, const char *name)
 int
 PyObject_HasAttrStringWithError(PyObject *obj, const char *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *res;
     int rc = PyObject_GetOptionalAttrString(obj, name, &res);
-    Py_XDECREF(res);
+    PyRegion_CLEARLOCAL(res);
     return rc;
 }
 
@@ -1279,6 +1290,7 @@ _PyObject_GetAttrId(PyObject *v, _Py_Identifier *name)
 int
 _PyObject_SetAttributeErrorContext(PyObject* v, PyObject* name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyErr_Occurred());
     if (!PyErr_ExceptionMatches(PyExc_AttributeError)){
         return 0;
@@ -1306,6 +1318,7 @@ restore:
 PyObject *
 PyObject_GetAttr(PyObject *v, PyObject *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *tp = Py_TYPE(v);
     if (!PyUnicode_Check(name)) {
         PyErr_Format(PyExc_TypeError,
@@ -1316,6 +1329,7 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
 
     PyObject* result = NULL;
     if (tp->tp_getattro != NULL) {
+        PyRegion_NotifyTypeUse(tp);
         result = (*tp->tp_getattro)(v, name);
     }
     else if (tp->tp_getattr != NULL) {
@@ -1323,6 +1337,7 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
         if (name_str == NULL) {
             return NULL;
         }
+        PyRegion_NotifyTypeUse(tp);
         result = (*tp->tp_getattr)(v, (char *)name_str);
     }
     else {
@@ -1340,6 +1355,7 @@ PyObject_GetAttr(PyObject *v, PyObject *name)
 int
 PyObject_GetOptionalAttr(PyObject *v, PyObject *name, PyObject **result)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *tp = Py_TYPE(v);
 
     if (!PyUnicode_Check(name)) {
@@ -1351,6 +1367,7 @@ PyObject_GetOptionalAttr(PyObject *v, PyObject *name, PyObject **result)
     }
 
     if (tp->tp_getattro == PyObject_GenericGetAttr) {
+        // Pyrona: Dictionaries and objects are already migrated
         *result = _PyObject_GenericGetAttrWithDict(v, name, NULL, 1);
         if (*result != NULL) {
             return 1;
@@ -1380,6 +1397,7 @@ PyObject_GetOptionalAttr(PyObject *v, PyObject *name, PyObject **result)
         return 0;
     }
     else if (tp->tp_getattro != NULL) {
+        PyRegion_NotifyTypeUse(tp);
         *result = (*tp->tp_getattro)(v, name);
     }
     else if (tp->tp_getattr != NULL) {
@@ -1388,6 +1406,7 @@ PyObject_GetOptionalAttr(PyObject *v, PyObject *name, PyObject **result)
             *result = NULL;
             return -1;
         }
+        PyRegion_NotifyTypeUse(tp);
         *result = (*tp->tp_getattr)(v, (char *)name_str);
     }
     else {
@@ -1415,6 +1434,8 @@ PyObject_GetOptionalAttrString(PyObject *obj, const char *name, PyObject **resul
             return -1;
         }
         int rc = PyObject_GetOptionalAttr(obj, oname, result);
+        // Pyrona: oname should always be a string and therefore not need a barrier
+        assert(!PyRegion_NeedsReadBarrier(oname));
         Py_DECREF(oname);
         return rc;
     }
@@ -1826,6 +1847,7 @@ PyObject *
 _PyObject_GenericGetAttrWithDict(PyObject *obj, PyObject *name,
                                  PyObject *dict, int suppress)
 {
+    // TODO(regions): Make sure all branches are migrated
     /* Make sure the logic of _PyObject_GetMethod is in sync with
        this method.
 

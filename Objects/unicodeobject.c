@@ -2111,6 +2111,7 @@ PyUnicode_FromStringAndSize(const char *u, Py_ssize_t size)
 PyObject *
 PyUnicode_FromString(const char *u)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     size_t size = strlen(u);
     if (size > PY_SSIZE_T_MAX) {
         PyErr_SetString(PyExc_OverflowError, "input too long");
@@ -5472,6 +5473,7 @@ PyUnicode_DecodeUTF8Stateful(const char *s,
                              const char *errors,
                              Py_ssize_t *consumed)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return unicode_decode_utf8(s, size,
                                errors ? _Py_ERROR_UNKNOWN : _Py_ERROR_STRICT,
                                errors, consumed);

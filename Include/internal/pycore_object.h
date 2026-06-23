@@ -924,6 +924,7 @@ _PyObject_IS_GC(PyObject *obj)
 static inline Py_hash_t
 _PyObject_HashFast(PyObject *op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyUnicode_CheckExact(op)) {
         Py_hash_t hash = FT_ATOMIC_LOAD_SSIZE_RELAXED(
                              _PyASCIIObject_CAST(op)->hash);

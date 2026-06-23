@@ -4183,29 +4183,35 @@ _PyImport_FiniExternal(PyInterpreterState *interp)
 PyObject *
 PyImport_ImportModuleAttr(PyObject *modname, PyObject *attrname)
 {
+    // TODO(regions): Migrate Module imports for now, mostly unimportant, since
+    // all objects are created local
     PyObject *mod = PyImport_Import(modname);
     if (mod == NULL) {
         return NULL;
     }
     PyObject *result = PyObject_GetAttr(mod, attrname);
-    Py_DECREF(mod);
+    PyRegion_CLEARLOCAL(mod);
     return result;
 }
 
 PyObject *
 PyImport_ImportModuleAttrString(const char *modname, const char *attrname)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *pmodname = PyUnicode_FromString(modname);
     if (pmodname == NULL) {
         return NULL;
     }
     PyObject *pattrname = PyUnicode_FromString(attrname);
     if (pattrname == NULL) {
+        assert(!PyRegion_NeedsReadBarrier(pmodname) && "this value should not need a barrier");
         Py_DECREF(pmodname);
         return NULL;
     }
     PyObject *result = PyImport_ImportModuleAttr(pmodname, pattrname);
+    assert(!PyRegion_NeedsReadBarrier(pattrname) && "this value should not need a barrier");
     Py_DECREF(pattrname);
+    assert(!PyRegion_NeedsReadBarrier(pmodname) && "this value should not need a barrier");
     Py_DECREF(pmodname);
     return result;
 }

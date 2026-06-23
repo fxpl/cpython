@@ -23,9 +23,10 @@
 void
 _PyErr_SetRaisedException(PyThreadState *tstate, PyObject *exc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *old_exc = tstate->current_exception;
     tstate->current_exception = exc;
-    Py_XDECREF(old_exc);
+    PyRegion_CLEARLOCAL(old_exc);
 }
 
 static PyObject*
@@ -58,6 +59,7 @@ void
 _PyErr_Restore(PyThreadState *tstate, PyObject *type, PyObject *value,
                PyObject *traceback)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (type == NULL) {
         assert(value == NULL);
         assert(traceback == NULL);
@@ -70,15 +72,15 @@ _PyErr_Restore(PyThreadState *tstate, PyObject *type, PyObject *value,
 #ifdef Py_DEBUG
         PyObject *tb = PyException_GetTraceback(value);
         assert(tb != Py_None);
-        Py_XDECREF(tb);
+        PyRegion_CLEARLOCAL(tb);
 #endif
     }
     else {
         PyObject *exc = _PyErr_CreateException(type, value);
-        Py_XDECREF(value);
+        PyRegion_CLEARLOCAL(value);
         if (exc == NULL) {
-            Py_DECREF(type);
-            Py_XDECREF(traceback);
+            PyRegion_CLEARLOCAL(type);
+            PyRegion_CLEARLOCAL(traceback);
             return;
         }
         value = exc;
@@ -86,15 +88,15 @@ _PyErr_Restore(PyThreadState *tstate, PyObject *type, PyObject *value,
     assert(PyExceptionInstance_Check(value));
     if (traceback != NULL) {
         if (PyException_SetTraceback(value, traceback) < 0) {
-            Py_DECREF(traceback);
-            Py_DECREF(value);
-            Py_DECREF(type);
+            PyRegion_CLEARLOCAL(traceback);
+            PyRegion_CLEARLOCAL(value);
+            PyRegion_CLEARLOCAL(type);
             return;
         }
-        Py_DECREF(traceback);
+        PyRegion_CLEARLOCAL(traceback);
     }
     _PyErr_SetRaisedException(tstate, value);
-    Py_DECREF(type);
+    PyRegion_CLEARLOCAL(type);
 }
 
 void
@@ -309,6 +311,7 @@ _PyErr_SetLocaleString(PyObject *exception, const char *string)
 PyObject* _Py_HOT_FUNCTION
 PyErr_Occurred(void)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     /* The caller must hold a thread state. */
     _Py_AssertHoldsTstate();
 
@@ -320,6 +323,7 @@ PyErr_Occurred(void)
 int
 PyErr_GivenExceptionMatches(PyObject *err, PyObject *exc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (err == NULL || exc == NULL) {
         /* maybe caused by "import exceptions" that failed early on */
         return 0;
@@ -352,6 +356,7 @@ PyErr_GivenExceptionMatches(PyObject *err, PyObject *exc)
 int
 _PyErr_ExceptionMatches(PyThreadState *tstate, PyObject *exc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyErr_GivenExceptionMatches(_PyErr_Occurred(tstate), exc);
 }
 
@@ -359,6 +364,7 @@ _PyErr_ExceptionMatches(PyThreadState *tstate, PyObject *exc)
 int
 PyErr_ExceptionMatches(PyObject *exc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     return _PyErr_ExceptionMatches(tstate, exc);
 }
@@ -527,6 +533,7 @@ PyErr_Fetch(PyObject **p_type, PyObject **p_value, PyObject **p_traceback)
 void
 _PyErr_Clear(PyThreadState *tstate)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _PyErr_Restore(tstate, NULL, NULL, NULL);
 }
 
@@ -534,6 +541,7 @@ _PyErr_Clear(PyThreadState *tstate)
 void
 PyErr_Clear(void)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     _PyErr_Clear(tstate);
 }
@@ -2087,6 +2095,7 @@ PyErr_ProgramTextObject(PyObject *filename, int lineno)
 PyObject *
 _PyErr_WriteToImmutable(PyObject* obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject* string = NULL;
     PyThreadState *tstate = _PyThreadState_GET();
     if (_PyErr_Occurred(tstate)) {
@@ -2103,6 +2112,7 @@ _PyErr_WriteToImmutable(PyObject* obj)
             string = PyUnicode_FromFormat(
                 "object of type %s is immutable and cannot be modified frozen at %S",
                 obj->ob_type->tp_name, freeze_location);
+            assert(!PyRegion_NeedsReadBarrier(freeze_location) && "The location should be a string");
             Py_DECREF(freeze_location);
         }
     }
@@ -2116,6 +2126,7 @@ _PyErr_WriteToImmutable(PyObject* obj)
 
     if (string != NULL) {
         _PyErr_SetObject(tstate, PyExc_TypeError, string);
+        assert(!PyRegion_NeedsReadBarrier(string) && "The string should be a string");
         Py_DECREF(string);
     }
     return NULL;

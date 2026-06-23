@@ -2559,6 +2559,7 @@ int _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown) {
 * on demand to help with debugging.
 */
 void PyRegion_NotifyTypeUse(PyTypeObject* tp) {
+    // Pyrona: This functions was checked and no further migration is needed
     if ((tp->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) != 0) {
         return;
     }

@@ -387,6 +387,7 @@ PyCFunction_Call(PyObject *callable, PyObject *args, PyObject *kwargs)
 PyObject *
 PyObject_CallOneArg(PyObject *func, PyObject *arg)
 {
+    // TODO(regions): Add some way to check if the function is region aware
     EVAL_CALL_STAT_INC_IF_FUNCTION(EVAL_CALL_API, func);
     assert(arg != NULL);
     PyObject *_args[2];
@@ -831,6 +832,7 @@ PyObject *
 PyObject_VectorcallMethod(PyObject *name, PyObject *const *args,
                            size_t nargsf, PyObject *kwnames)
 {
+    // TODO(regions): Migrate this
     assert(name != NULL);
     assert(args != NULL);
     assert(PyVectorcall_NARGS(nargsf) >= 1);
@@ -929,6 +931,7 @@ _PyObject_CallMethodIdObjArgs(PyObject *obj, _Py_Identifier *name, ...)
 PyObject *
 PyObject_CallFunctionObjArgs(PyObject *callable, ...)
 {
+    // TODO(regions): Add some way to check if the function is region aware
     PyThreadState *tstate = _PyThreadState_GET();
     va_list vargs;
     PyObject *result;

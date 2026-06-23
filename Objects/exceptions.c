@@ -517,9 +517,12 @@ static PyGetSetDef BaseException_getset[] = {
 PyObject *
 PyException_GetTraceback(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *traceback;
     Py_BEGIN_CRITICAL_SECTION(self);
-    traceback = Py_XNewRef(PyBaseExceptionObject_CAST(self)->traceback);
+    // FIXME(regions): This migration may be incorrect, since it looks like
+    // the NULL value isn't always seen as an error
+    traceback = PyRegion_XNewRef(PyBaseExceptionObject_CAST(self)->traceback);
     Py_END_CRITICAL_SECTION();
     return traceback;
 }
