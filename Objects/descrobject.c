@@ -24,9 +24,9 @@ descr_dealloc(PyObject *self)
 {
     PyDescrObject *descr = (PyDescrObject *)self;
     _PyObject_GC_UNTRACK(descr);
-    Py_XDECREF(descr->d_type);
-    Py_XDECREF(descr->d_name);
-    Py_XDECREF(descr->d_qualname);
+    PyRegion_CLEAR(descr, descr->d_type);
+    PyRegion_CLEAR(descr, descr->d_name);
+    PyRegion_CLEAR(descr, descr->d_qualname);
     PyObject_GC_Del(descr);
 }
 
@@ -139,7 +139,7 @@ method_get(PyObject *self, PyObject *obj, PyObject *type)
 {
     PyMethodDescrObject *descr = (PyMethodDescrObject *)self;
     if (obj == NULL) {
-        return Py_NewRef(descr);
+        return PyRegion_NewRef(descr);
     }
     if (descr_check((PyDescrObject *)descr, obj) < 0) {
         return NULL;
@@ -164,7 +164,7 @@ member_get(PyObject *self, PyObject *obj, PyObject *type)
 {
     PyMemberDescrObject *descr = (PyMemberDescrObject *)self;
     if (obj == NULL) {
-        return Py_NewRef(descr);
+        return PyRegion_NewRef(descr);
     }
     if (descr_check((PyDescrObject *)descr, obj) < 0) {
         return NULL;
@@ -185,14 +185,20 @@ getset_get(PyObject *self, PyObject *obj, PyObject *type)
 {
     PyGetSetDescrObject *descr = (PyGetSetDescrObject *)self;
     if (obj == NULL) {
-        return Py_NewRef(descr);
+        return PyRegion_NewRef(descr);
     }
     if (descr_check((PyDescrObject *)descr, obj) < 0) {
         return NULL;
     }
-    if (descr->d_getset->get != NULL)
+    if (descr->d_getset->get != NULL) {
+        if (descr->d_common.d_type) {
+            PyRegion_NotifyTypeUse(descr->d_common.d_type);
+        } else {
+            PyRegion_DirtyAllRegions("A descriptor without a type was called");
+        }
         return descr_get_trampoline_call(
             descr->d_getset->get, obj, descr->d_getset->closure);
+    }
     PyErr_Format(PyExc_AttributeError,
                  "attribute '%V' of '%.100s' objects is not readable",
                  descr_name((PyDescrObject *)descr), "?",
@@ -205,7 +211,7 @@ wrapperdescr_get(PyObject *self, PyObject *obj, PyObject *type)
 {
     PyWrapperDescrObject *descr = (PyWrapperDescrObject *)self;
     if (obj == NULL) {
-        return Py_NewRef(descr);
+        return PyRegion_NewRef(descr);
     }
     if (descr_check((PyDescrObject *)descr, obj) < 0) {
         return NULL;
@@ -236,7 +242,7 @@ member_set(PyObject *self, PyObject *obj, PyObject *value)
     if (descr_setcheck((PyDescrObject *)descr, obj, value) < 0) {
         return -1;
     }
-    return PyMember_SetOne((char *)obj, descr->d_member, value);
+    return PyMember_SetOneOn(obj, (char *)obj, descr->d_member, value);
 }
 
 static int
@@ -247,6 +253,11 @@ getset_set(PyObject *self, PyObject *obj, PyObject *value)
         return -1;
     }
     if (descr->d_getset->set != NULL) {
+        if (descr->d_common.d_type) {
+            PyRegion_NotifyTypeUse(descr->d_common.d_type);
+        } else {
+            PyRegion_DirtyAllRegions("A descriptor without a type was called");
+        }
         return descr_set_trampoline_call(
             descr->d_getset->set, obj, value,
             descr->d_getset->closure);
@@ -508,7 +519,7 @@ classmethoddescr_call(PyObject *_descr, PyObject *args,
     }
     PyObject *res = PyObject_VectorcallDict(bound, _PyTuple_ITEMS(args)+1,
                                            argc-1, kwds);
-    Py_DECREF(bound);
+    PyRegion_CLEARLOCAL(bound);
     return res;
 }
 
@@ -529,6 +540,13 @@ wrapperdescr_raw_call(PyWrapperDescrObject *descr, PyObject *self,
                      descr->d_base->name);
         return NULL;
     }
+
+    if (descr->d_common.d_type) {
+        PyRegion_NotifyTypeUse(descr->d_common.d_type);
+    } else {
+        PyRegion_DirtyAllRegions("A descriptor without a type was called");
+    }
+
     return (*wrapper)(self, args, descr->d_wrapped);
 }
 
@@ -568,7 +586,7 @@ wrapperdescr_call(PyObject *_descr, PyObject *args, PyObject *kwds)
         return NULL;
     }
     result = wrapperdescr_raw_call(descr, self, args, kwds);
-    Py_DECREF(args);
+    PyRegion_CLEARLOCAL(args);
     return result;
 }
 
@@ -608,12 +626,12 @@ calculate_qualname(PyDescrObject *descr)
     if (!PyUnicode_Check(type_qualname)) {
         PyErr_SetString(PyExc_TypeError, "<descriptor>.__objclass__."
                         "__qualname__ is not a unicode object");
-        Py_XDECREF(type_qualname);
+        PyRegion_CLEARLOCAL(type_qualname);
         return NULL;
     }
 
     res = PyUnicode_FromFormat("%S.%S", type_qualname, descr->d_name);
-    Py_DECREF(type_qualname);
+    PyRegion_CLEARLOCAL(type_qualname);
     return res;
 }
 
@@ -623,7 +641,7 @@ descr_get_qualname(PyObject *self, void *Py_UNUSED(ignored))
     PyDescrObject *descr = (PyDescrObject *)self;
     if (descr->d_qualname == NULL)
         descr->d_qualname = calculate_qualname(descr);
-    return Py_XNewRef(descr->d_qualname);
+    return PyRegion_XNewRef(descr->d_qualname);
 }
 
 static PyObject *
@@ -752,6 +770,7 @@ PyTypeObject PyMethodDescr_Type = {
     method_get,                                 /* tp_descr_get */
     0,                                          /* tp_descr_set */
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /* This is for METH_CLASS in C, not for "f = classmethod(f)" in Python! */
@@ -791,6 +810,7 @@ PyTypeObject PyClassMethodDescr_Type = {
     classmethod_get,                            /* tp_descr_get */
     0,                                          /* tp_descr_set */
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyTypeObject PyMemberDescr_Type = {
@@ -829,6 +849,7 @@ PyTypeObject PyMemberDescr_Type = {
     member_get,                                 /* tp_descr_get */
     member_set,                                 /* tp_descr_set */
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyTypeObject PyGetSetDescr_Type = {
@@ -867,6 +888,7 @@ PyTypeObject PyGetSetDescr_Type = {
     getset_get,                                 /* tp_descr_get */
     getset_set,                                 /* tp_descr_set */
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE
 };
 
 PyTypeObject PyWrapperDescr_Type = {
@@ -906,6 +928,7 @@ PyTypeObject PyWrapperDescr_Type = {
     wrapperdescr_get,                           /* tp_descr_get */
     0,                                          /* tp_descr_set */
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyDescrObject *
@@ -916,6 +939,10 @@ descr_new(PyTypeObject *descrtype, PyTypeObject *type, const char *name)
     descr = (PyDescrObject *)PyType_GenericAlloc(descrtype, 0);
     if (descr != NULL) {
         _PyObject_SetDeferredRefcount((PyObject *)descr);
+        if (PyRegion_AddLocalRef(type)) {
+            Py_DECREF(descr);
+            return NULL;
+        }
         descr->d_type = (PyTypeObject*)Py_XNewRef(type);
         descr->d_name = PyUnicode_InternFromString(name);
         if (descr->d_name == NULL) {
@@ -1406,7 +1433,7 @@ wrapper_objclass(PyObject *wp, void *Py_UNUSED(ignored))
 {
     PyObject *c = (PyObject *)PyDescr_TYPE(((wrapperobject *)wp)->descr);
 
-    return Py_NewRef(c);
+    return PyRegion_NewRef(c);
 }
 
 static PyObject *
@@ -1517,7 +1544,7 @@ PyWrapper_New(PyObject *d, PyObject *self)
     wp = PyObject_GC_New(wrapperobject, &_PyMethodWrapper_Type);
     if (wp == NULL)
         return NULL;
-    if (PyRegion_AddRef(wp, descr)){
+    if (PyRegion_AddRefs(wp, descr, self)){
         Py_DECREF(wp);
         return NULL;
     }
@@ -1660,11 +1687,11 @@ property_dealloc(PyObject *self)
     propertyobject *gs = (propertyobject *)self;
 
     _PyObject_GC_UNTRACK(self);
-    Py_XDECREF(gs->prop_get);
-    Py_XDECREF(gs->prop_set);
-    Py_XDECREF(gs->prop_del);
-    Py_XDECREF(gs->prop_doc);
-    Py_XDECREF(gs->prop_name);
+    PyRegion_CLEAR(gs, gs->prop_get);
+    PyRegion_CLEAR(gs, gs->prop_set);
+    PyRegion_CLEAR(gs, gs->prop_del);
+    PyRegion_CLEAR(gs, gs->prop_doc);
+    PyRegion_CLEAR(gs, gs->prop_name);
     Py_TYPE(self)->tp_free(self);
 }
 

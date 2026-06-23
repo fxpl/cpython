@@ -236,7 +236,7 @@ int _PyOwnership_notify_untrusted_code(const char* reason) {
     return 0;
 }
 
-PyObject* _PyOwnership_get_last_dirty_region(void) {
+PyObject* _PyOwnership_get_last_dirty_reason(void) {
 #ifdef Py_DEBUG
     _Py_ownership_state* state = get_ownership_state();
     if (state == NULL) {

@@ -147,7 +147,7 @@ static PyObject *
 regions_get_last_dirty_reason_impl(PyObject *module)
 /*[clinic end generated code: output=7fa56844889d85b8 input=56996052e520f95d]*/
 {
-    return _PyOwnership_get_last_dirty_region();
+    return _PyOwnership_get_last_dirty_reason();
 }
 
 static struct PyMethodDef regions_methods[] = {

@@ -62,7 +62,7 @@ _Py_CheckFunctionResult(PyThreadState *tstate, PyObject *callable,
                Py_FatalError() logs the SystemError exception raised above. */
             Py_FatalError("a function returned a result with an exception set");
 #endif
-            Py_DECREF(result);
+            PyRegion_CLEARLOCAL(result);
             return NULL;
         }
     }
@@ -182,12 +182,12 @@ object_is_not_callable(PyThreadState *tstate, PyObject *callable)
                           "'%.200s' object is not callable. "
                           "Did you mean: '%U.%U(...)'?",
                           Py_TYPE(callable)->tp_name, name, name);
-            Py_DECREF(attr);
-            Py_DECREF(name);
+            PyRegion_CLEARLOCAL(attr);
+            PyRegion_CLEARLOCAL(name);
             return;
         }
-        Py_XDECREF(attr);
-        Py_DECREF(name);
+        PyRegion_CLEARLOCAL(attr);
+        PyRegion_CLEARLOCAL(name);
     }
 basic_type_error:
     _PyErr_Format(tstate, PyExc_TypeError, "'%.200s' object is not callable",
@@ -226,8 +226,7 @@ _PyObject_MakeTpCall(PyThreadState *tstate, PyObject *callable,
             assert(args != NULL);
             kwdict = _PyStack_AsDict(args + nargs, keywords);
             if (kwdict == NULL) {
-                PyRegion_RemoveLocalRef(argstuple);
-                Py_DECREF(argstuple);
+                PyRegion_CLEARLOCAL(argstuple);
                 return NULL;
             }
         }
@@ -239,16 +238,15 @@ _PyObject_MakeTpCall(PyThreadState *tstate, PyObject *callable,
     PyObject *result = NULL;
     if (_Py_EnterRecursiveCallTstate(tstate, " while calling a Python object") == 0)
     {
+        PyRegion_NotifyTypeUse(Py_TYPE(callable));
         result = _PyCFunctionWithKeywords_TrampolineCall(
             (PyCFunctionWithKeywords)call, callable, argstuple, kwdict);
         _Py_LeaveRecursiveCallTstate(tstate);
     }
 
-    PyRegion_RemoveLocalRef(argstuple);
-    Py_DECREF(argstuple);
+    PyRegion_CLEARLOCAL(argstuple);
     if (kwdict != keywords) {
-        PyRegion_RemoveLocalRef(kwdict);
-        Py_DECREF(kwdict);
+        PyRegion_CLEARLOCAL(kwdict);
     }
 
     return _Py_CheckFunctionResult(tstate, callable, result, NULL);
@@ -557,6 +555,7 @@ _PyObject_CallFunctionVa(PyThreadState *tstate, PyObject *callable,
     }
 
     for (i = 0; i < nargs; ++i) {
+        PyRegion_RemoveLocalRef(stack[i]);
         Py_DECREF(stack[i]);
     }
     if (stack != small_stack) {
@@ -648,7 +647,7 @@ PyObject_CallMethod(PyObject *obj, const char *name, const char *format, ...)
     PyObject *retval = callmethod(tstate, callable, format, va);
     va_end(va);
 
-    Py_DECREF(callable);
+    PyRegion_CLEARLOCAL(callable);
     return retval;
 }
 
@@ -673,7 +672,7 @@ PyEval_CallMethod(PyObject *obj, const char *name, const char *format, ...)
     PyObject *retval = callmethod(tstate, callable, format, va);
     va_end(va);
 
-    Py_DECREF(callable);
+    PyRegion_CLEARLOCAL(callable);
     return retval;
 }
 
@@ -697,7 +696,7 @@ _PyObject_CallMethod(PyObject *obj, PyObject *name,
     PyObject *retval = callmethod(tstate, callable, format, va);
     va_end(va);
 
-    Py_DECREF(callable);
+    PyRegion_CLEARLOCAL(callable);
     return retval;
 }
 
@@ -721,7 +720,7 @@ _PyObject_CallMethodId(PyObject *obj, _Py_Identifier *name,
     PyObject *retval = callmethod(tstate, callable, format, va);
     va_end(va);
 
-    Py_DECREF(callable);
+    PyRegion_CLEARLOCAL(callable);
     return retval;
 }
 
@@ -758,7 +757,7 @@ _PyObject_CallMethod_SizeT(PyObject *obj, const char *name,
     PyObject *retval = callmethod(tstate, callable, format, va);
     va_end(va);
 
-    Py_DECREF(callable);
+    PyRegion_CLEARLOCAL(callable);
     return retval;
 }
 
@@ -1045,6 +1044,7 @@ _PyStack_UnpackDict_Free(PyObject *const *stack, Py_ssize_t nargs,
 {
     Py_ssize_t n = PyTuple_GET_SIZE(kwnames) + nargs;
     for (Py_ssize_t i = 0; i < n; i++) {
+        PyRegion_RemoveLocalRef(stack[i]);
         Py_DECREF(stack[i]);
     }
     _PyStack_UnpackDict_FreeNoDecRef(stack, kwnames);
@@ -1054,7 +1054,7 @@ void
 _PyStack_UnpackDict_FreeNoDecRef(PyObject *const *stack, PyObject *kwnames)
 {
     PyMem_Free((PyObject **)stack - 1);
-    Py_DECREF(kwnames);
+    PyRegion_CLEARLOCAL(kwnames);
 }
 
 // Export for the stable ABI

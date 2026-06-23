@@ -7853,8 +7853,11 @@ _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict)
             return 0;
         }
         if (_PyDict_DetachFromObject(dict, obj) == 0) {
+            if (PyRegion_AddRef(obj, new_dict)) {
+                return -1;
+            }
             _PyObject_ManagedDictPointer(obj)->dict = (PyDictObject *)Py_XNewRef(new_dict);
-            Py_DECREF(dict);
+            PyRegion_RemoveRef(obj, dict);
             return 0;
         }
         assert(new_dict == NULL);
@@ -7868,6 +7871,9 @@ _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict)
 
         dict = _PyObject_ManagedDictPointer(obj)->dict;
 
+        if (PyRegion_AddRef(obj, new_dict)) {
+            return -1;
+        }
         FT_ATOMIC_STORE_PTR(_PyObject_ManagedDictPointer(obj)->dict,
                             (PyDictObject *)Py_XNewRef(new_dict));
 
@@ -8041,7 +8047,7 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
 {
     PyTypeObject *tp = Py_TYPE(obj);
     if (_PyType_HasFeature(tp, Py_TPFLAGS_MANAGED_DICT)) {
-        return Py_XNewRef(ensure_managed_dict(obj));
+        return PyRegion_XNewRef(ensure_managed_dict(obj));
     }
     else {
         PyObject **dictptr = _PyObject_ComputedDictPointer(obj);
@@ -8051,7 +8057,7 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
             return NULL;
         }
 
-        return Py_XNewRef(ensure_nonmanaged_dict(obj, dictptr));
+        return PyRegion_XNewRef(ensure_nonmanaged_dict(obj, dictptr));
     }
 }
 

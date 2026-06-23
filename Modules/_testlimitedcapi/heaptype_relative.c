@@ -217,7 +217,7 @@ static PyObject *
 heaptype_with_member_set_memb(PyObject *self, PyObject *value)
 {
     PyMemberDef *def = heaptype_with_member_extract_and_check_memb(self);
-    int r = PyMember_SetOne((char *)self, def, value);
+    int r = PyMember_SetOneOn(self, (char *)self, def, value);
     if (r < 0) {
         return NULL;
     }
@@ -242,7 +242,7 @@ static PyObject *
 heaptype_with_member_set_memb_relative(PyObject *self, PyObject *value)
 {
     PyMemberDef def = {"memb", Py_T_BYTE, sizeof(PyObject), Py_RELATIVE_OFFSET};
-    int r = PyMember_SetOne((char *)self, &def, value);
+    int r = PyMember_SetOneOn(self, (char *)self, &def, value);
     if (r < 0) {
         return NULL;
     }

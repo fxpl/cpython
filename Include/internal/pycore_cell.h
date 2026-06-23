@@ -21,32 +21,19 @@ PyCell_SwapTakeRef(PyCellObject *cell, PyObject *value, int* result)
     PyObject *old_value = NULL;
     *result = 0;
     Py_BEGIN_CRITICAL_SECTION(cell);
-    do {
-        if(!Py_CHECKWRITE(cell)){
-            PyRegion_CLEARLOCAL(value);
-            *result = -1;
-            break;
-        }
+    if (!Py_CHECKWRITE(cell)) {
+        PyErr_WriteToImmutable(cell);
+        *result = -1;
+        PyRegion_CLEARLOCAL(value);
+    } else if (PyRegion_TakeRef(cell, value)) {
+        *result = -1;
+        PyRegion_CLEARLOCAL(value);
+    }
 
-        // Simple and fast clear
-        if (PyRegion_IsLocal(cell)) {
-            old_value = cell->ob_ref;
-            FT_ATOMIC_STORE_PTR_RELEASE(cell->ob_ref, value);
-            break;
-        }
-
+    if (*result == 0) {
         old_value = cell->ob_ref;
-        if (PyRegion_AddLocalRef(old_value)) {
-            assert(false && "This should never fail, since we have a ref to cell");
-        }
-        if (PyRegion_TakeRef(cell, value)) {
-            PyRegion_CLEARLOCAL(value);
-            *result = -1;
-            break;
-        }
         FT_ATOMIC_STORE_PTR_RELEASE(cell->ob_ref, value);
-        PyRegion_RemoveRef(cell, old_value);
-    } while (false);
+    }
     Py_END_CRITICAL_SECTION();
     return old_value;
 }
