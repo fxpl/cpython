@@ -882,6 +882,9 @@ the first borrow succeeded and the second failed.
 
 **`PyRegion_RemoveLocalRef(tgt)`** — remove a borrow (decrement LRC). Call
 *before* the matching `Py_DECREF` on a stack-held value. Does not fail.
+Calling it on `NULL` or on an immortal/immutable value is safe — it is a
+no-op in both cases, so the barrier is always well-defined even when `tgt`
+might be `NULL` or might be an immortal singleton such as `Py_None`.
 
 **`PyRegion_CLEARLOCAL(local)`** — clears a stack-held local reference (removes
 the borrow and DECREFs). Prefer it over a manual `RemoveLocalRef` + `Py_DECREF`

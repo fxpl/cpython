@@ -3039,6 +3039,7 @@ _PyBytes_FromIterator(PyObject *it, PyObject *x)
 PyObject *
 PyBytes_FromObject(PyObject *x)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *it, *result;
 
     if (x == NULL) {

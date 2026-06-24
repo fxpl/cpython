@@ -875,6 +875,7 @@ extern void _Py_PrintReferenceAddresses(PyInterpreterState *, FILE *);
 static inline PyObject **
 _PyObject_GET_WEAKREFS_LISTPTR(PyObject *op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyType_Check(op) &&
             ((PyTypeObject *)op)->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
@@ -1018,6 +1019,7 @@ _PyObject_ManagedDictPointer(PyObject *obj)
 static inline PyDictObject *
 _PyObject_GetManagedDict(PyObject *obj)
 {
+    // Pyrona: This returns a borrowed reference
     PyManagedDictPointer *dorv = _PyObject_ManagedDictPointer(obj);
     return (PyDictObject *)FT_ATOMIC_LOAD_PTR_ACQUIRE(dorv->dict);
 }

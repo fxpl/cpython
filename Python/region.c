@@ -2617,7 +2617,7 @@ void PyRegion_RecycleObject(PyObject *obj) {
 //      - Solution 1: Remove "Stage Reference" write barriers
 //      - Solution 2: Force keep these regions open, maybe with a special OPEN value
 // TODO(regions): xFrednet: Track Weak Reference in LRC
-// TODO(regions): xFrednet: Weak Reference into regions
+// TODO(regions): xFrednet: Handle weak reference into regions and `_TryIncRef`
 // TODO(regions): xFrednet: Add new `MergedRegion` so that the Region type
 //                          correlates with it being the bridge.
 // TODO(regions): xFrednet: Add notion of movability.
@@ -2631,9 +2631,22 @@ void PyRegion_RecycleObject(PyObject *obj) {
 //                          leak of the region objects
 // TODO(regions): xFrednet: Make LRC++ unfailable, if that fails we have a deep fundamental
 //                          problem, throwing an exception will not fix it.
-// TODO(regions): xFrednet: Migrate object.c
 // TODO(regions): xFrednet: Migrate call.c
 // TODO(regions): xFrednet: Migrate ceval.c
+// TODO(regions): xFrednet: Migrate typeobject.c
+// TODO(regions): xFrednet: Currently it can happen that the managed dictionary of an object is
+//                          inside a region while the owning object is in the local regions. This
+//                          is BAD because:
+//          - Managed dicts can use the inline storage of an object to store values, as long as
+//            the inline space is big enough. This makes the reference owner *weird*
+//          - Values with `__slots__` can be split over the object and a managed dict. This means
+//            that assigning to the instance dict vs the owning object would be have differently
+//            if they're not in the same region.
+//          - This is just hard for write barriers, because we always have to ensure that we
+//            use the managed dict object for the barrier call and not the object itself
+//          ==> The solution should be to forbid the managed dict to be in a separate region from
+//              its owning object. The question is how do we enforce this? We could add a backref
+//              from the managed dict to the owner, but that would increase the dict object size...
 // FIXME(regions): xFrednet: Several write barriers in listobject don't undo the entire operation
 // FIXME(regions): xFrednet: We could add an assert that verifies that a LRC increase which
 //                           opens the region is always a reference to a bride. This should be

@@ -500,6 +500,11 @@ struct type_cache {
     struct type_cache_entry hashtable[1 << MCACHE_SIZE_EXP];
 };
 
+// FIXME(Immutability): It looks like this allows static types to have runtime
+// state. For static types this seems to be stored in the per-interpreter state.
+// In the paper we mention that ´tp_subclasses´ can be solved with escape hatches.
+// It seems like this works for now, so freezing this and sharing this across
+// sub-interpreters may be an optimization and not a must
 typedef struct {
     PyTypeObject *type;
     int isbuiltin;

@@ -1158,6 +1158,7 @@ _Py_GetMainModule(PyThreadState *tstate)
     }
     PyObject *module = NULL;
     (void)PyMapping_GetOptionalItem(modules, &_Py_ID(__main__), &module);
+    assert(!PyRegion_NeedsReadBarrier(modules));
     Py_DECREF(modules);
     if (module == NULL && !PyErr_Occurred()) {
         Py_RETURN_NONE;

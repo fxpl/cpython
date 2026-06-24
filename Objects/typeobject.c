@@ -234,6 +234,7 @@ type_from_ref(PyObject *ref)
 static inline int
 managed_static_type_index_is_set(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return self->tp_subclasses != NULL;
 }
 #endif
@@ -241,6 +242,7 @@ managed_static_type_index_is_set(PyTypeObject *self)
 static inline size_t
 managed_static_type_index_get(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(managed_static_type_index_is_set(self));
     /* We store a 1-based index so 0 can mean "not initialized". */
     return (size_t)self->tp_subclasses - 1;
@@ -249,6 +251,7 @@ managed_static_type_index_get(PyTypeObject *self)
 static inline void
 managed_static_type_index_set(PyTypeObject *self, size_t index)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(index < _Py_MAX_MANAGED_STATIC_BUILTIN_TYPES);
     /* We store a 1-based index so 0 can mean "not initialized". */
     self->tp_subclasses = (PyObject *)(index + 1);
@@ -287,6 +290,8 @@ static_ext_type_lookup(PyInterpreterState *interp, size_t index,
 static managed_static_type_state *
 managed_static_type_state_get(PyInterpreterState *interp, PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     // It's probably a builtin type.
     size_t index = managed_static_type_index_get(self);
     managed_static_type_state *state =
@@ -313,6 +318,7 @@ static void
 managed_static_type_state_init(PyInterpreterState *interp, PyTypeObject *self,
                                int isbuiltin, int initial)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(interp->runtime == &_PyRuntime);
 
     size_t index;
@@ -457,6 +463,7 @@ _PyStaticType_GetBuiltins(void)
 static void
 type_set_flags(PyTypeObject *tp, unsigned long flags)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     ASSERT_WORLD_STOPPED_OR_NEW_TYPE(tp);
     tp->tp_flags = flags;
 }
@@ -472,18 +479,21 @@ type_set_flags_with_mask(PyTypeObject *tp, unsigned long mask, unsigned long fla
 static void
 type_add_flags(PyTypeObject *tp, unsigned long flag)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     type_set_flags(tp, tp->tp_flags | flag);
 }
 
 static void
 type_clear_flags(PyTypeObject *tp, unsigned long flag)
 {
+    // // Pyrona: This functions was checked and no further migration is needed
     type_set_flags(tp, tp->tp_flags & ~flag);
 }
 
 static inline void
 start_readying(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (type->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = managed_static_type_state_get(interp, type);
@@ -499,6 +509,7 @@ start_readying(PyTypeObject *type)
 static inline void
 stop_readying(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (type->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = managed_static_type_state_get(interp, type);
@@ -530,10 +541,14 @@ is_readying(PyTypeObject *type)
 static inline PyObject *
 lookup_tp_dict(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = _PyStaticType_GetState(interp, self);
         assert(state != NULL);
+        // TODO(Immutability): This state is retrieved from the per-interpreter
+        // state, this is a problem for immutable types, as they should be frozen
+        // and then shared, meaning no per-interpreter state. WHY IS THIS A THING?
         return state->tp_dict;
     }
     return self->tp_dict;
@@ -2977,13 +2992,15 @@ PyType_IsSubtype(PyTypeObject *a, PyTypeObject *b)
 PyObject *
 _PyObject_LookupSpecial(PyObject *self, PyObject *attr)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *res;
 
     res = _PyType_LookupRef(Py_TYPE(self), attr);
     if (res != NULL) {
         descrgetfunc f;
         if ((f = Py_TYPE(res)->tp_descr_get) != NULL) {
-            Py_SETREF(res, f(res, self, (PyObject *)(Py_TYPE(self))));
+            PyRegion_NotifyTypeUse(Py_TYPE(self));
+            PyRegion_XSETLOCALREF(res, f(res, self, (PyObject *)(Py_TYPE(self))));
         }
     }
     return res;
@@ -4035,6 +4052,7 @@ subtype_dict(PyObject *obj, void *context)
 int
 _PyObject_SetDict(PyObject *obj, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (value != NULL && !PyDict_Check(value)) {
         PyErr_Format(PyExc_TypeError,
                      "__dict__ must be set to a dictionary, "
@@ -5732,6 +5750,7 @@ PyType_FromSpecWithBases(PyType_Spec *spec, PyObject *bases)
 PyObject *
 PyType_FromSpec(PyType_Spec *spec)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyType_FromMetaclass(NULL, NULL, spec, NULL);
 }
 
@@ -6764,6 +6783,7 @@ _PyTypes_FiniExtTypes(PyInterpreterState *interp)
 void
 _PyStaticType_FiniBuiltin(PyInterpreterState *interp, PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     fini_static_type(interp, type, 1, _Py_IsMainInterpreter(interp));
 }
 
@@ -8826,6 +8846,8 @@ static int add_tp_new_wrapper(PyTypeObject *type);
 static int
 type_ready_pre_checks(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     /* Consistency checks for PEP 590:
      * - Py_TPFLAGS_METHOD_DESCRIPTOR requires tp_descr_get
      * - Py_TPFLAGS_HAVE_VECTORCALL requires tp_call and
@@ -9315,6 +9337,7 @@ type_ready_post_checks(PyTypeObject *type)
 static int
 type_ready(PyTypeObject *type, int initial)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     ASSERT_TYPE_LOCK_HELD();
 
     _PyObject_ASSERT((PyObject *)type, !is_readying(type));
@@ -9429,6 +9452,7 @@ static int
 init_static_type(PyInterpreterState *interp, PyTypeObject *self,
                  int isbuiltin, int initial)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(_Py_IsImmortal((PyObject *)self));
     assert(!(self->tp_flags & Py_TPFLAGS_HEAPTYPE));
     assert(!(self->tp_flags & Py_TPFLAGS_MANAGED_DICT));
@@ -9474,6 +9498,7 @@ _PyStaticType_InitForExtension(PyInterpreterState *interp, PyTypeObject *self)
 int
 _PyStaticType_InitBuiltin(PyInterpreterState *interp, PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return init_static_type(interp, self, 1, _Py_IsMainInterpreter(interp));
 }
 

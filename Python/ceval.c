@@ -2744,6 +2744,7 @@ PyEval_GetLocals(void)
 PyObject *
 _PyEval_GetFrameLocals(void)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
      _PyInterpreterFrame *current_frame = _PyThreadState_GetFrame(tstate);
     if (current_frame == NULL) {
@@ -2759,14 +2760,18 @@ _PyEval_GetFrameLocals(void)
     if (PyFrameLocalsProxy_Check(locals)) {
         PyObject* ret = PyDict_New();
         if (ret == NULL) {
+            assert(!PyRegion_NeedsReadBarrier(locals));
             Py_DECREF(locals);
             return NULL;
         }
         if (PyDict_Update(ret, locals) < 0) {
+            assert(!PyRegion_NeedsReadBarrier(ret));
             Py_DECREF(ret);
+            assert(!PyRegion_NeedsReadBarrier(locals));
             Py_DECREF(locals);
             return NULL;
         }
+        assert(!PyRegion_NeedsReadBarrier(locals));
         Py_DECREF(locals);
         return ret;
     }
@@ -2795,16 +2800,17 @@ PyEval_GetGlobals(void)
 PyObject *
 _PyEval_GetGlobalsFromRunningMain(PyThreadState *tstate)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!_PyInterpreterState_IsRunningMain(tstate->interp)) {
         return NULL;
     }
     PyObject *mod = _Py_GetMainModule(tstate);
     if (_Py_CheckMainModule(mod) < 0) {
-        Py_XDECREF(mod);
+        PyRegion_CLEARLOCAL(mod);
         return NULL;
     }
     PyObject *globals = PyModule_GetDict(mod);  // borrowed
-    Py_DECREF(mod);
+    PyRegion_CLEARLOCAL(mod);
     return globals;
 }
 

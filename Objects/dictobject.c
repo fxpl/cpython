@@ -1268,6 +1268,8 @@ When the key isn't found a DKIX_EMPTY is returned.
 Py_ssize_t
 _Py_dict_lookup(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     PyDictKeysObject *dk;
     DictKeysKind kind;
     Py_ssize_t ix;
@@ -2585,6 +2587,8 @@ _PyDict_GetItemRef_Unicode_LockHeld(PyDictObject *op, PyObject *key, PyObject **
 PyObject *
 PyDict_GetItemWithError(PyObject *op, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     Py_ssize_t ix; (void)ix;
     Py_hash_t hash;
     PyDictObject*mp = (PyDictObject *)op;
@@ -7495,6 +7499,7 @@ store_instance_attr_dict(PyObject *obj, PyDictObject *dict, PyObject *name, PyOb
 int
 _PyObject_StoreInstanceAttribute(PyObject *obj, PyObject *name, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyDictValues *values = _PyObject_InlineValues(obj);
     if (!FT_ATOMIC_LOAD_UINT8(values->valid)) {
         PyDictObject *dict = _PyObject_GetManagedDict(obj);
@@ -7578,6 +7583,7 @@ _PyObject_ManagedDictValidityCheck(PyObject *obj)
 bool
 _PyObject_TryGetInstanceAttribute(PyObject *obj, PyObject *name, PyObject **attr)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyUnicode_CheckExact(name));
     PyDictValues *values = _PyObject_InlineValues(obj);
     if (!FT_ATOMIC_LOAD_UINT8(values->valid)) {
@@ -7724,17 +7730,25 @@ clear_inline_values(PyObject *dict, PyDictValues *values)
     }
 }
 
-static void
+static int
 set_dict_inline_values(PyObject *obj, PyDictObject *new_dict)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(obj);
 
     PyDictValues *values = _PyObject_InlineValues(obj);
 
+    // Regions: The given dictionary should always be in the local region or NULL.
+    // This call should always succeed. Since this is a private funciton we changed
+    // it to be failable to support other circumstances 
+    if (PyRegion_AddRef(obj, new_dict)) {
+        return -1;
+    }
     Py_XINCREF(new_dict);
     FT_ATOMIC_STORE_PTR(_PyObject_ManagedDictPointer(obj)->dict, new_dict);
 
     clear_inline_values(obj, values);
+    return 0;
 }
 
 #ifdef Py_GIL_DISABLED
@@ -7815,6 +7829,7 @@ decref_maybe_delay(PyObject *obj, bool delay)
 int
 _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
 #ifndef NDEBUG
     Py_BEGIN_CRITICAL_SECTION(obj);
@@ -7863,17 +7878,27 @@ _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict)
 
         return 0;
 #else
+        if (!(PyRegion_IsLocal(new_dict) || PyRegion_SameRegion(obj, new_dict) || new_dict == NULL)) {
+            PyErr_Format(PyExc_RuntimeError,
+                "new dict must be local, in the same region as the object, or NULL, "
+                "got object=%R and new_dict=%R", obj, new_dict);
+            return -1;
+        }
         PyDictObject *dict = _PyObject_GetManagedDict(obj);
         if (dict == NULL) {
-            set_dict_inline_values(obj, (PyDictObject *)new_dict);
-            return 0;
+            return set_dict_inline_values(obj, (PyDictObject *)new_dict);
         }
         if (_PyDict_DetachFromObject(dict, obj) == 0) {
+            // Regions: The function above moves all objects into `dict`. On failure,
+            // dict remains set. The failure should therefore not clear the fields
+            // but only move them into the managed dict.
+            // This should always succeed, due to the local or same region check above.
             if (PyRegion_AddRef(obj, new_dict)) {
                 return -1;
             }
             _PyObject_ManagedDictPointer(obj)->dict = (PyDictObject *)Py_XNewRef(new_dict);
             PyRegion_RemoveRef(obj, dict);
+            Py_DECREF(dict);
             return 0;
         }
         assert(new_dict == NULL);
@@ -7903,8 +7928,19 @@ _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict)
 static int
 detach_dict_from_object(PyDictObject *mp, PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(_PyObject_ManagedDictPointer(obj)->dict == mp);
     assert(_PyObject_InlineValuesConsistencyCheck(obj));
+
+    // Immutability: During deallocation of immutable objects, the object is
+    // unfrozen. Here is can happen that the object itself is turned mutable
+    // while the dict stayed immutable. This case explicitly allows this.
+    if (!(PyRegion_SameRegion(mp, obj) || (!_Py_IsImmutable(obj) && _Py_IsImmutable(mp)))) {
+        PyErr_Format(PyExc_RuntimeError,
+                "the instance dictionary has to be in the same region as the object"
+                "got object=%R and dict=%R", obj, mp);
+        return -1;
+    }
 
     if (FT_ATOMIC_LOAD_PTR_RELAXED(mp->ma_values) != _PyObject_InlineValues(obj)) {
         return 0;
@@ -7980,6 +8016,7 @@ PyObject_ClearManagedDict(PyObject *obj)
 int
 _PyDict_DetachFromObject(PyDictObject *mp, PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     ASSERT_WORLD_STOPPED_OR_OBJ_LOCKED(obj);
 
     return detach_dict_from_object(mp, obj);
@@ -8264,6 +8301,7 @@ _PyDict_SendEvent(int watcher_bits,
 static int
 _PyObject_InlineValuesConsistencyCheck(PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if ((Py_TYPE(obj)->tp_flags & Py_TPFLAGS_INLINE_VALUES) == 0) {
         return 1;
     }

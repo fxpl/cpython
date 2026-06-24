@@ -33,8 +33,6 @@ PyCell_SwapTakeRef(PyCellObject *cell, PyObject *value, int* result)
     if (*result == 0) {
         old_value = cell->ob_ref;
         FT_ATOMIC_STORE_PTR_RELEASE(cell->ob_ref, value);
-        PyRegion_AddLocalRef(old_value);
-        PyRegion_RemoveRef(cell, old_value);
     }
     Py_END_CRITICAL_SECTION();
     return old_value;
@@ -45,6 +43,8 @@ PyCell_SetTakeRef(PyCellObject *cell, PyObject *value)
 {
     int result = 0;
     PyObject *old_value = PyCell_SwapTakeRef(cell, value, &result);
+    PyRegion_AddLocalRef(old_value);
+    PyRegion_RemoveRef(cell, old_value);
     return result;
 }
 
