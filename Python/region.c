@@ -1395,14 +1395,17 @@ int _add_to_region_visit(PyObject *src, PyObject *tgt, void *state_void) {
     // added to the merge region by a previous iteration. This therefore only
     // adjusts the LRC
     if (tgt_region == state->subject_region) {
-        trace("    - %lx: %p -> %p: Intra-region reference (LRC--)", merge_data, src, tgt);
-        // The LRC of the merge region can go negative by this operation as
-        // this also includes references which should be subtract from the
-        // LRC of the subject region.
-        merge_data->lrc -= 1;
-        // Problem, dictionary gets populated by the set attribute, the visit then
-        // subtracts for this reference. Just freeze dict and don't use the default
-        // write barrier for population.
+        // This is only an intra-region ref, if the source is currently pending.
+        if (_PyRegion_Get(src) == state->merge_region) {
+            trace("    - %lx: %p -> %p: Intra-region reference (LRC--)", merge_data, src, tgt);
+            // The LRC of the merge region can go negative by this operation as
+            // this also includes references which should be subtract from the
+            // LRC of the subject region.
+            merge_data->lrc -= 1;
+            // Problem, dictionary gets populated by the set attribute, the visit then
+            // subtracts for this reference. Just freeze dict and don't use the default
+            // write barrier for population.
+        }
 
         // The object should not be traversed.
         return Py_OWNERSHIP_TRAVERSE_SKIP;
