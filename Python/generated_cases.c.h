@@ -5202,7 +5202,7 @@
                 JUMP_TO_LABEL(error);
             }
             _PyFrame_SetStackPointer(frame, stack_pointer);
-            Py_DECREF(oldobj);
+            PyRegion_CLEARLOCAL(oldobj);
             stack_pointer = _PyFrame_GetStackPointer(frame);
             DISPATCH();
         }

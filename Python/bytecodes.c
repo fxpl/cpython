@@ -1952,7 +1952,7 @@ dummy_func(
                 _PyEval_FormatExcUnbound(tstate, _PyFrame_GetCode(frame), oparg);
                 ERROR_NO_POP();
             }
-            Py_DECREF(oldobj);
+            PyRegion_CLEARLOCAL(oldobj);
         }
 
         inst(LOAD_FROM_DICT_OR_DEREF, (class_dict_st -- value)) {

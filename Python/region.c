@@ -2613,8 +2613,6 @@ void PyRegion_RecycleObject(PyObject *obj) {
 // TODO(regions): xFrednet: Regions with pending merges can still be closed and send off.
 //      - Solution 1: Remove "Stage Reference" write barriers
 //      - Solution 2: Force keep these regions open, maybe with a special OPEN value
-// TODO(regions): xFrednet: Write Barrier in: Dictionary (Partially done)
-// TODO(regions): xFrednet: Dirty on C code (Currently this always triggers)
 // TODO(regions): xFrednet: Track Weak Reference in LRC
 // TODO(regions): xFrednet: Weak Reference into regions
 // TODO(regions): xFrednet: Add new `MergedRegion` so that the Region type
@@ -2626,6 +2624,10 @@ void PyRegion_RecycleObject(PyObject *obj) {
 //          - Explicit (Can be owned but require an explicit `r.take(x)` / `r.own(x)` call)
 //          - Implicit (Can be owned and are added implicitly)
 // TODO(regions): xFrednet: Add GC operating in individual regions
+// TODO(regions): xFrednet: Deallocating an object doesn't clear the region, this causes a memory
+//                          leak of the region objects
+// TODO(regions): xFrednet: Make LRC++ unfailable, if that fails we have a deep fundamental
+//                          problem, throwing an exception will not fix it.
 // FIXME(regions): xFrednet: Several write barriers in listobject don't undo the entire operation
 // FIXME(regions): xFrednet: We could add an assert that verifies that a LRC increase which
 //                           opens the region is always a reference to a bride. This should be
@@ -2634,3 +2636,7 @@ void PyRegion_RecycleObject(PyObject *obj) {
 // FIXME(regions): xFrednet: Write barriers in bytecode seems to be working verify this
 // FIXME(regions): xFrednet: Region opt-in/out is currently on a per type basis, for modules we
 //                           might want to use slots to allow opt-in/out on a module level.
+
+
+// TODO(regions): xFrednet: Write Barrier in: Dictionary (Partially done)
+// TODO(regions): xFrednet: Dirty on C code (Currently this always triggers)

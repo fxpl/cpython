@@ -49,7 +49,7 @@ _PyErr_CreateException(PyObject *exception_type, PyObject *value)
                      "calling %R should have returned an instance of "
                      "BaseException, not %s",
                      exception_type, Py_TYPE(exc)->tp_name);
-        Py_CLEAR(exc);
+        PyRegion_CLEARLOCAL(exc);
     }
 
     return exc;
@@ -144,7 +144,7 @@ get_normalization_failure_note(PyThreadState *tstate, PyObject *exception, PyObj
     else {
         note = PyUnicode_FromFormat("Normalization failed: type=%s args=%S",
                                     tpname, args);
-        Py_DECREF(args);
+        PyRegion_CLEARLOCAL(args);
     }
     return note;
 }
@@ -171,6 +171,10 @@ _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
             return;
         }
     }
+    if (PyRegion_AddLocalRef(value)) {
+        assert(false);
+        return;
+    }
     Py_XINCREF(value);
     if (!is_subclass) {
         /* We must normalize the value right now */
@@ -185,21 +189,25 @@ _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
             assert(PyExceptionInstance_Check(exc));
 
             PyObject *note = get_normalization_failure_note(tstate, exception, value);
-            Py_XDECREF(value);
+            PyRegion_CLEARLOCAL(value);
             if (note != NULL) {
                 /* ignore errors in _PyException_AddNote - they will be overwritten below */
                 _PyException_AddNote(exc, note);
-                Py_DECREF(note);
+                PyRegion_CLEARLOCAL(note);
             }
             _PyErr_SetRaisedException(tstate, exc);
             return;
         }
-        Py_XSETREF(value, fixed_value);
+        PyRegion_XSETLOCALREF(value, fixed_value);
     }
 
     exc_value = _PyErr_GetTopmostException(tstate)->exc_value;
     if (exc_value != NULL && exc_value != Py_None) {
         /* Implicit exception chaining */
+        if (PyRegion_AddLocalRef(exc_value)) {
+            PyRegion_CLEARLOCAL(value);
+            return;
+        }
         Py_INCREF(exc_value);
         /* Avoid creating new reference cycles through the
            context chain, while taking care not to hang on
@@ -212,6 +220,7 @@ _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
             PyObject *slow_o = o;  /* Floyd's cycle detection algo */
             int slow_update_toggle = 0;
             while ((context = PyException_GetContext(o))) {
+                PyRegion_RemoveLocalRef(context);
                 Py_DECREF(context);
                 if (context == value) {
                     PyException_SetContext(o, NULL);
@@ -225,14 +234,14 @@ _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
                 }
                 if (slow_update_toggle) {
                     slow_o = PyException_GetContext(slow_o);
-                    Py_DECREF(slow_o);
+                    PyRegion_CLEARLOCAL(slow_o);
                 }
                 slow_update_toggle = !slow_update_toggle;
             }
             PyException_SetContext(value, exc_value);
         }
         else {
-            Py_DECREF(exc_value);
+            PyRegion_CLEARLOCAL(exc_value);
         }
     }
     assert(value != NULL);
@@ -744,7 +753,7 @@ _PyErr_ChainStackItem(void)
 
     /* _PyErr_SetObject sets the context from PyThreadState. */
     _PyErr_SetObject(tstate, (PyObject *) Py_TYPE(exc), exc);
-    Py_DECREF(exc);  // since _PyErr_Occurred was true
+    PyRegion_CLEARLOCAL(exc);  // since _PyErr_Occurred was true
 }
 
 static PyObject *

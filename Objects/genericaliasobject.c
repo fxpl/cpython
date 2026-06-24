@@ -1038,15 +1038,13 @@ PyTypeObject Py_GenericAliasType = {
 PyObject *
 Py_GenericAlias(PyObject *origin, PyObject *args)
 {
-    // Pyrona: This functions was checked and no further migration is needed
     gaobject *alias = (gaobject*) PyType_GenericAlloc(
             (PyTypeObject *)&Py_GenericAliasType, 0);
     if (alias == NULL) {
         return NULL;
     }
     if (!setup_ga(alias, origin, args)) {
-        assert(!PyRegion_NeedsReadBarrier(alias) && "this value should not need a barrier");
-        Py_DECREF(alias);
+        PyRegion_CLEARLOCAL(alias);
         return NULL;
     }
     return (PyObject *)alias;

@@ -94,6 +94,10 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
                 return NULL;
             }
         }
+        if (PyRegion_AddRef(om, cls)) {
+            Py_DECREF(om);
+            return NULL;
+        }
         om->mm_class = (PyTypeObject*)Py_NewRef(cls);
         op = (PyCFunctionObject *)om;
     } else {
@@ -112,6 +116,10 @@ PyCMethod_New(PyMethodDef *ml, PyObject *self, PyObject *module, PyTypeObject *c
         }
     }
 
+    if (PyRegion_AddRefs(op, self, module)) {
+        Py_DECREF(op);
+        return NULL;
+    }
     op->m_weakreflist = NULL;
     op->m_ml = ml;
     op->m_self = Py_XNewRef(self);
@@ -175,9 +183,10 @@ meth_dealloc(PyObject *self)
     int ml_flags = m->m_ml->ml_flags;
     // Dereference class before m_self: PyCFunction_GET_CLASS accesses
     // PyMethodDef m_ml, which could be kept alive by m_self
+    PyRegion_RemoveRef(self, PyCFunction_GET_CLASS(m));
     Py_XDECREF(PyCFunction_GET_CLASS(m));
-    Py_XDECREF(m->m_self);
-    Py_XDECREF(m->m_module);
+    PyRegion_CLEAR(m, m->m_self);
+    PyRegion_CLEAR(m, m->m_module);
     if (ml_flags & METH_METHOD) {
         assert(Py_IS_TYPE(self, &PyCMethod_Type));
         _Py_FREELIST_FREE_OBJ(pycmethodobject, m, PyObject_GC_Del);

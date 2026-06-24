@@ -133,7 +133,9 @@ module_init_dict(PyModuleObject *mod, PyObject *md_dict,
     if (PyDict_SetItem(md_dict, &_Py_ID(__spec__), Py_None) != 0)
         return -1;
     if (PyUnicode_CheckExact(name)) {
-        Py_XSETREF(mod->md_name, Py_NewRef(name));
+        if (PyRegion_XSETNEWREF(mod, mod->md_name, name)) {
+            return -1;
+        }
     }
 
     return 0;
@@ -156,6 +158,10 @@ new_module_notrack(PyTypeObject *mt)
         Py_DECREF(m);
         return NULL;
     }
+
+    // No write barriers should be needed, since all objects should be local
+    assert(PyRegion_IsLocal(m));
+
     return m;
 }
 
@@ -189,7 +195,7 @@ PyModule_NewObject(PyObject *name)
     return (PyObject *)m;
 
  fail:
-    Py_DECREF(m);
+    PyRegion_CLEARLOCAL(m);
     return NULL;
 }
 
@@ -201,7 +207,7 @@ PyModule_New(const char *name)
     if (nameobj == NULL)
         return NULL;
     module = PyModule_NewObject(nameobj);
-    Py_DECREF(nameobj);
+    PyRegion_CLEARLOCAL(nameobj);
     return module;
 }
 
@@ -245,10 +251,10 @@ _add_methods_to_object(PyObject *module, PyObject *name, PyMethodDef *functions)
         }
         _PyObject_SetDeferredRefcount(func);
         if (PyObject_SetAttrString(module, fdef->ml_name, func) != 0) {
-            Py_DECREF(func);
+            PyRegion_CLEARLOCAL(func);
             return -1;
         }
-        Py_DECREF(func);
+        PyRegion_CLEARLOCAL(func);
     }
 
     return 0;
@@ -293,7 +299,7 @@ _PyModule_CreateInitialized(PyModuleDef* module, int module_api_version)
         m->md_state = PyMem_Malloc(module->m_size);
         if (!m->md_state) {
             PyErr_NoMemory();
-            Py_DECREF(m);
+            PyRegion_CLEARLOCAL(m);
             return NULL;
         }
         memset(m->md_state, 0, module->m_size);
@@ -301,13 +307,13 @@ _PyModule_CreateInitialized(PyModuleDef* module, int module_api_version)
 
     if (module->m_methods != NULL) {
         if (PyModule_AddFunctions((PyObject *) m, module->m_methods) != 0) {
-            Py_DECREF(m);
+            PyRegion_CLEARLOCAL(m);
             return NULL;
         }
     }
     if (module->m_doc != NULL) {
         if (PyModule_SetDocString((PyObject *) m, module->m_doc) != 0) {
-            Py_DECREF(m);
+            PyRegion_CLEARLOCAL(m);
             return NULL;
         }
     }
@@ -496,12 +502,12 @@ PyModule_FromDefAndSpec2(PyModuleDef* def, PyObject *spec, int module_api_versio
         }
     }
 
-    Py_DECREF(nameobj);
+    PyRegion_CLEARLOCAL(nameobj);
     return m;
 
 error:
-    Py_DECREF(nameobj);
-    Py_XDECREF(m);
+    PyRegion_CLEARLOCAL(nameobj);
+    PyRegion_CLEARLOCAL(m);
     return NULL;
 }
 
@@ -604,7 +610,7 @@ PyModule_AddFunctions(PyObject *m, PyMethodDef *functions)
     }
 
     res = _add_methods_to_object(m, name, functions);
-    Py_DECREF(name);
+    PyRegion_CLEARLOCAL(name);
     return res;
 }
 
@@ -621,10 +627,10 @@ PyModule_SetDocString(PyObject *m, const char *doc)
 
     v = PyUnicode_FromString(doc);
     if (v == NULL || PyObject_SetAttr(m, &_Py_ID(__doc__), v) != 0) {
-        Py_XDECREF(v);
+        PyRegion_CLEARLOCAL(v);
         return -1;
     }
-    Py_DECREF(v);
+    PyRegion_CLEARLOCAL(v);
     return 0;
 }
 
@@ -655,7 +661,7 @@ PyModule_GetNameObject(PyObject *mod)
         goto error;
     }
     if (!PyUnicode_Check(name)) {
-        Py_DECREF(name);
+        PyRegion_CLEARLOCAL(name);
         goto error;
     }
     return name;
@@ -675,6 +681,7 @@ PyModule_GetName(PyObject *m)
         return NULL;
     }
     assert(Py_REFCNT(name) >= 2);
+    PyRegion_RemoveLocalRef(name);
     Py_DECREF(name);   /* module dict has still a reference */
     return PyUnicode_AsUTF8(name);
 }
@@ -707,7 +714,7 @@ _PyModule_GetFilenameObject(PyObject *mod)
         Py_RETURN_NONE;
     }
     if (!PyUnicode_Check(fileobj)) {
-        Py_DECREF(fileobj);
+        PyRegion_CLEARLOCAL(fileobj);
         Py_RETURN_NONE;
     }
     return fileobj;
@@ -736,7 +743,7 @@ PyModule_GetFilename(PyObject *m)
     if (fileobj == NULL)
         return NULL;
     utf8 = PyUnicode_AsUTF8(fileobj);
-    Py_DECREF(fileobj);   /* module dict has still a reference */
+    PyRegion_CLEARLOCAL(fileobj);   /* module dict has still a reference */
     return utf8;
 }
 
@@ -767,6 +774,8 @@ _PyModule_GetFilenameUTF8(PyObject *mod, char *buffer, Py_ssize_t maxlen)
             (void)strcpy(buffer, filename);
         }
     }
+    // `filenameobj` is either `None` or a string and therefore doesn't need a barrier
+    assert(!PyRegion_NeedsReadBarrier(filenameobj));
     Py_DECREF(filenameobj);
     return size;
 }
@@ -912,8 +921,8 @@ module_dealloc(PyObject *self)
         m->md_def->m_free(m);
     }
 
-    Py_XDECREF(m->md_dict);
-    Py_XDECREF(m->md_name);
+    PyRegion_CLEAR(m, m->md_dict);
+    PyRegion_CLEAR(m, m->md_name);
     if (m->md_state != NULL)
         PyMem_Free(m->md_state);
     Py_TYPE(m)->tp_free((PyObject *)m);
@@ -939,7 +948,7 @@ _PyModuleSpec_IsInitializing(PyObject *spec)
     int rc = PyObject_GetOptionalAttr(spec, &_Py_ID(_initializing), &value);
     if (rc > 0) {
         rc = PyObject_IsTrue(value);
-        Py_DECREF(value);
+        PyRegion_CLEARLOCAL(value);
     }
     return rc;
 }
@@ -958,7 +967,7 @@ _PyModuleSpec_IsUninitializedSubmodule(PyObject *spec, PyObject *name)
     int rc = PyObject_GetOptionalAttr(spec, &_Py_ID(_uninitialized_submodules), &value);
     if (rc > 0) {
         rc = PySequence_Contains(value, name);
-        Py_DECREF(value);
+        PyRegion_CLEARLOCAL(value);
     }
     return rc;
 }
@@ -975,7 +984,7 @@ _PyModuleSpec_GetFileOrigin(PyObject *spec, PyObject **p_origin)
     // back to module.__file__. But the cases in which module.__file__ is not __spec__.origin
     // are cases in which we probably shouldn't be guessing.
     rc = PyObject_IsTrue(has_location);
-    Py_DECREF(has_location);
+    PyRegion_CLEARLOCAL(has_location);
     if (rc <= 0) {
         return rc;
     }
@@ -987,7 +996,7 @@ _PyModuleSpec_GetFileOrigin(PyObject *spec, PyObject **p_origin)
     }
     assert(origin != NULL);
     if (!PyUnicode_Check(origin)) {
-        Py_DECREF(origin);
+        PyRegion_CLEARLOCAL(origin);
         return 0;
     }
     *p_origin = origin;
@@ -1092,7 +1101,7 @@ _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress)
             // suppress AttributeError
             PyErr_Clear();
         }
-        Py_DECREF(getattr);
+        PyRegion_CLEARLOCAL(getattr);
         return result;
     }
 
@@ -1105,21 +1114,21 @@ _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress)
         return NULL;
     }
     if (!mod_name || !PyUnicode_Check(mod_name)) {
-        Py_XDECREF(mod_name);
+        PyRegion_CLEARLOCAL(mod_name);
         PyErr_Format(PyExc_AttributeError,
                     "module has no attribute '%U'", name);
         return NULL;
     }
     PyObject *spec;
     if (PyDict_GetItemRef(m->md_dict, &_Py_ID(__spec__), &spec) < 0) {
-        Py_DECREF(mod_name);
+        PyRegion_CLEARLOCAL(mod_name);
         return NULL;
     }
     if (spec == NULL) {
         PyErr_Format(PyExc_AttributeError,
                      "module '%U' has no attribute '%U'",
                      mod_name, name);
-        Py_DECREF(mod_name);
+        PyRegion_CLEARLOCAL(mod_name);
         return NULL;
     }
 
@@ -1141,11 +1150,11 @@ _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress)
         if (stdlib_modules && PyAnySet_Check(stdlib_modules)) {
             is_possibly_shadowing_stdlib = PySet_Contains(stdlib_modules, mod_name);
             if (is_possibly_shadowing_stdlib < 0) {
-                Py_DECREF(stdlib_modules);
+                PyRegion_CLEARLOCAL(stdlib_modules);
                 goto done;
             }
         }
-        Py_XDECREF(stdlib_modules);
+        PyRegion_CLEARLOCAL(stdlib_modules);
     }
 
     if (is_possibly_shadowing_stdlib) {
@@ -1206,9 +1215,9 @@ _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress)
     }
 
 done:
-    Py_XDECREF(origin);
-    Py_DECREF(spec);
-    Py_DECREF(mod_name);
+    PyRegion_CLEARLOCAL(origin);
+    PyRegion_CLEARLOCAL(spec);
+    PyRegion_CLEARLOCAL(mod_name);
     return NULL;
 }
 
@@ -1267,7 +1276,7 @@ module_clear(PyObject *self)
         if (res)
             return res;
     }
-    Py_CLEAR(m->md_dict);
+    PyRegion_CLEAR(m, m->md_dict);
     return 0;
 }
 
@@ -1292,7 +1301,7 @@ module_dir(PyObject *self, PyObject *args)
         }
     }
 
-    Py_XDECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return result;
 }
 
@@ -1311,7 +1320,7 @@ module_get_dict(PyModuleObject *m)
     }
     if (!PyDict_Check(dict)) {
         PyErr_Format(PyExc_TypeError, "<module>.__dict__ is not a dictionary");
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return NULL;
     }
     return dict;
@@ -1331,10 +1340,11 @@ module_get_annotate(PyObject *self, void *Py_UNUSED(ignored))
     if (PyDict_GetItemRef(dict, &_Py_ID(__annotate__), &annotate) == 0) {
         annotate = Py_None;
         if (PyDict_SetItem(dict, &_Py_ID(__annotate__), annotate) == -1) {
+            assert(!PyRegion_NeedsReadBarrier(annotate));
             Py_CLEAR(annotate);
         }
     }
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return annotate;
 }
 
@@ -1361,21 +1371,21 @@ module_set_annotate(PyObject *self, PyObject *value, void *Py_UNUSED(ignored))
 
     if (!Py_IsNone(value) && !PyCallable_Check(value)) {
         PyErr_SetString(PyExc_TypeError, "__annotate__ must be callable or None");
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return -1;
     }
 
     if (PyDict_SetItem(dict, &_Py_ID(__annotate__), value) == -1) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return -1;
     }
     if (!Py_IsNone(value)) {
         if (PyDict_Pop(dict, &_Py_ID(__annotations__), NULL) == -1) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return -1;
         }
     }
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return 0;
 }
 
@@ -1393,18 +1403,18 @@ module_get_annotations(PyObject *self, void *Py_UNUSED(ignored))
     if (PyDict_GetItemRef(dict, &_Py_ID(__annotations__), &annotations) == 0) {
         PyObject *spec;
         if (PyDict_GetItemRef(m->md_dict, &_Py_ID(__spec__), &spec) < 0) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return NULL;
         }
         bool is_initializing = false;
         if (spec != NULL) {
             int rc = _PyModuleSpec_IsInitializing(spec);
             if (rc < 0) {
-                Py_DECREF(spec);
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(spec);
+                PyRegion_CLEARLOCAL(dict);
                 return NULL;
             }
-            Py_DECREF(spec);
+            PyRegion_CLEARLOCAL(spec);
             if (rc) {
                 is_initializing = true;
             }
@@ -1413,41 +1423,41 @@ module_get_annotations(PyObject *self, void *Py_UNUSED(ignored))
         PyObject *annotate;
         int annotate_result = PyDict_GetItemRef(dict, &_Py_ID(__annotate__), &annotate);
         if (annotate_result < 0) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return NULL;
         }
         if (annotate_result == 1 && PyCallable_Check(annotate)) {
             PyObject *one = _PyLong_GetOne();
             annotations = _PyObject_CallOneArg(annotate, one);
             if (annotations == NULL) {
-                Py_DECREF(annotate);
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(annotate);
+                PyRegion_CLEARLOCAL(dict);
                 return NULL;
             }
             if (!PyDict_Check(annotations)) {
                 PyErr_Format(PyExc_TypeError,
                              "__annotate__() must return a dict, not %T",
                              annotations);
-                Py_DECREF(annotate);
-                Py_DECREF(annotations);
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(annotate);
+                PyRegion_CLEARLOCAL(annotations);
+                PyRegion_CLEARLOCAL(dict);
                 return NULL;
             }
         }
         else {
             annotations = PyDict_New();
         }
-        Py_XDECREF(annotate);
+        PyRegion_CLEARLOCAL(annotate);
         // Do not cache annotations if the module is still initializing
         if (annotations && !is_initializing) {
             int result = PyDict_SetItem(
                     dict, &_Py_ID(__annotations__), annotations);
             if (result) {
-                Py_CLEAR(annotations);
+                PyRegion_CLEARLOCAL(annotations);
             }
         }
     }
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return annotations;
 }
 
@@ -1487,7 +1497,7 @@ module_set_annotations(PyObject *self, PyObject *value, void *Py_UNUSED(ignored)
         ret = -1;
     }
 
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return ret;
 }
 
@@ -1538,6 +1548,15 @@ module_make_immutable_proxy(PyObject *self) {
         // Make sure failure keeps self intact
         Py_DECREF(mut_state);
         return -1;
+    }
+
+    if (!PyRegion_SameRegion(m, mut_state)) {
+        if (PyRegion_AddRefs(mut_state, m->md_name, m->md_dict, m->md_weaklist)) {
+            Py_DECREF(mut_state);
+            return -1;
+        }
+        PyRegion_RemoveRef(m, m->md_dict);
+        PyRegion_RemoveRef(m, m->md_weaklist);
     }
 
     // Copy mutable state
@@ -1616,6 +1635,7 @@ PyTypeObject PyModule_Type = {
     PyObject_GC_Del,                            /* tp_free */
     .tp_reachable = module_reachable,
     .tp_prefreeze = module_prefreeze,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyTypeObject _PyImmModule_Type = {
@@ -1660,4 +1680,5 @@ PyTypeObject _PyImmModule_Type = {
     .tp_new = NULL, /* Intentionally NULL since it should not be instantiated. */
     .tp_free = PyObject_GC_Del,                            /* tp_free */
     .tp_reachable = module_reachable,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };

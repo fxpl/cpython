@@ -336,6 +336,10 @@ init_interned_dict(PyInterpreterState *interp)
     PyObject *interned;
     if (has_shared_intern_dict(interp)) {
         interned = get_interned_dict(_PyInterpreterState_Main());
+        // Regions: All interned strings should be frozen, (at least when
+        // they're reachable from a region) we, therefore, don't need to
+        // call a write barrier here
+        assert(!PyRegion_NeedsReadBarrier(interned));
         Py_INCREF(interned);
     }
     else {
@@ -357,7 +361,7 @@ clear_interned_dict(PyInterpreterState *interp)
             // only clear if the dict belongs to this interpreter
             PyDict_Clear(interned);
         }
-        Py_DECREF(interned);
+        PyRegion_CLEARLOCAL(interned);
         _Py_INTERP_CACHED_OBJECT(interp, interned_strings) = NULL;
     }
 }
@@ -605,7 +609,7 @@ unicode_check_encoding_errors(const char *encoding, const char *errors)
         if (handler == NULL) {
             return -1;
         }
-        Py_DECREF(handler);
+        PyRegion_CLEARLOCAL(handler);
     }
 
     if (errors != NULL
@@ -620,7 +624,7 @@ unicode_check_encoding_errors(const char *encoding, const char *errors)
         if (handler == NULL) {
             return -1;
         }
-        Py_DECREF(handler);
+        PyRegion_CLEARLOCAL(handler);
     }
     return 0;
 }
@@ -757,7 +761,7 @@ unicode_result(PyObject *unicode)
     if (length == 0) {
         PyObject *empty = unicode_get_empty();
         if (unicode != empty) {
-            Py_DECREF(unicode);
+            PyRegion_CLEARLOCAL(unicode);
         }
         return empty;
     }
@@ -769,7 +773,7 @@ unicode_result(PyObject *unicode)
             Py_UCS1 ch = data[0];
             PyObject *latin1_char = LATIN1(ch);
             if (unicode != latin1_char) {
-                Py_DECREF(unicode);
+                PyRegion_CLEARLOCAL(unicode);
             }
             return latin1_char;
         }
@@ -783,7 +787,7 @@ static PyObject*
 unicode_result_unchanged(PyObject *unicode)
 {
     if (PyUnicode_CheckExact(unicode)) {
-        return Py_NewRef(unicode);
+        return PyRegion_NewRef(unicode);
     }
     else
         /* Subtype -- return genuine unicode string with the same value. */
@@ -1113,7 +1117,7 @@ resize_compact(PyObject *unicode, Py_ssize_t length)
         if (copy == NULL) {
             return NULL;
         }
-        Py_DECREF(unicode);
+        PyRegion_CLEARLOCAL(unicode);
         return copy;
     }
     assert(PyUnicode_IS_COMPACT(unicode));
@@ -1800,7 +1804,9 @@ unicode_resize(PyObject **p_unicode, Py_ssize_t length)
 
     if (length == 0) {
         PyObject *empty = unicode_get_empty();
-        Py_SETREF(*p_unicode, empty);
+        // FIXME(regions): xFrednet: This feels wrong, but this should
+        // be fine for our prototype
+        PyRegion_XSETLOCALREF(*p_unicode, empty);
         return 0;
     }
 
@@ -1808,7 +1814,9 @@ unicode_resize(PyObject **p_unicode, Py_ssize_t length)
         PyObject *copy = resize_copy(unicode, length);
         if (copy == NULL)
             return -1;
-        Py_SETREF(*p_unicode, copy);
+        // FIXME(regions): xFrednet: This feels wrong, but this should
+        // be fine for our prototype
+        PyRegion_XSETLOCALREF(*p_unicode, copy);
         return 0;
     }
 
@@ -2111,7 +2119,6 @@ PyUnicode_FromStringAndSize(const char *u, Py_ssize_t size)
 PyObject *
 PyUnicode_FromString(const char *u)
 {
-    // Pyrona: This functions was checked and no further migration is needed
     size_t size = strlen(u);
     if (size > PY_SSIZE_T_MAX) {
         PyErr_SetString(PyExc_OverflowError, "input too long");
@@ -2192,6 +2199,9 @@ unicode_clear_identifiers(struct _Py_unicode_state *state)
 {
     struct _Py_unicode_ids *ids = &state->ids;
     for (Py_ssize_t i=0; i < ids->size; i++) {
+        // FIXME(regions): xFrednet: This feels wrong, but this should
+        // be fine for our prototype
+        PyRegion_RemoveLocalRef(ids->array[i]);
         Py_XDECREF(ids->array[i]);
     }
     ids->size = 0;
@@ -2457,7 +2467,7 @@ unicode_adjust_maxchar(PyObject **p_unicode)
     copy = PyUnicode_New(len, max_char);
     if (copy != NULL)
         _PyUnicode_FastCopyCharacters(copy, 0, unicode, 0, len);
-    Py_DECREF(unicode);
+    PyRegion_CLEARLOCAL(unicode);
     *p_unicode = copy;
 }
 
@@ -2684,7 +2694,7 @@ unicode_fromformat_write_utf8(_PyUnicodeWriter *writer, const char *str,
 
     int res = unicode_fromformat_write_str(writer, unicode,
                                            width, -1, flags);
-    Py_DECREF(unicode);
+    PyRegion_CLEARLOCAL(unicode);
     return res;
 }
 
@@ -2713,7 +2723,7 @@ unicode_fromformat_write_wcstr(_PyUnicodeWriter *writer, const wchar_t *str,
         return -1;
 
     int res = unicode_fromformat_write_str(writer, unicode, width, -1, flags);
-    Py_DECREF(unicode);
+    PyRegion_CLEARLOCAL(unicode);
     return res;
 }
 
@@ -3033,10 +3043,10 @@ unicode_fromformat_arg(_PyUnicodeWriter *writer,
         if (!str)
             return NULL;
         if (unicode_fromformat_write_str(writer, str, width, precision, flags) == -1) {
-            Py_DECREF(str);
+            PyRegion_CLEARLOCAL(str);
             return NULL;
         }
-        Py_DECREF(str);
+        PyRegion_CLEARLOCAL(str);
         break;
     }
 
@@ -3049,10 +3059,10 @@ unicode_fromformat_arg(_PyUnicodeWriter *writer,
         if (!repr)
             return NULL;
         if (unicode_fromformat_write_str(writer, repr, width, precision, flags) == -1) {
-            Py_DECREF(repr);
+            PyRegion_CLEARLOCAL(repr);
             return NULL;
         }
-        Py_DECREF(repr);
+        PyRegion_CLEARLOCAL(repr);
         break;
     }
 
@@ -3065,16 +3075,19 @@ unicode_fromformat_arg(_PyUnicodeWriter *writer,
         if (!ascii)
             return NULL;
         if (unicode_fromformat_write_str(writer, ascii, width, precision, flags) == -1) {
-            Py_DECREF(ascii);
+            PyRegion_CLEARLOCAL(ascii);
             return NULL;
         }
-        Py_DECREF(ascii);
+        PyRegion_CLEARLOCAL(ascii);
         break;
     }
 
     case 'T':
     {
         PyObject *obj = va_arg(*vargs, PyObject *);
+        if (PyRegion_AddLocalRef(Py_TYPE(obj))) {
+            return NULL;
+        }
         PyTypeObject *type = (PyTypeObject *)Py_NewRef(Py_TYPE(obj));
 
         PyObject *type_name;
@@ -3084,17 +3097,17 @@ unicode_fromformat_arg(_PyUnicodeWriter *writer,
         else {
             type_name = PyType_GetFullyQualifiedName(type);
         }
-        Py_DECREF(type);
+        PyRegion_CLEARLOCAL(type);
         if (!type_name) {
             return NULL;
         }
 
         if (unicode_fromformat_write_str(writer, type_name,
                                          width, precision, flags) == -1) {
-            Py_DECREF(type_name);
+            PyRegion_CLEARLOCAL(type_name);
             return NULL;
         }
-        Py_DECREF(type_name);
+        PyRegion_CLEARLOCAL(type_name);
         break;
     }
 
@@ -3121,10 +3134,10 @@ unicode_fromformat_arg(_PyUnicodeWriter *writer,
         }
         if (unicode_fromformat_write_str(writer, type_name,
                                          width, precision, flags) == -1) {
-            Py_DECREF(type_name);
+            PyRegion_CLEARLOCAL(type_name);
             return NULL;
         }
-        Py_DECREF(type_name);
+        PyRegion_CLEARLOCAL(type_name);
         break;
     }
 
@@ -3476,7 +3489,7 @@ PyUnicode_FromObject(PyObject *obj)
     /* XXX Perhaps we should make this API an alias of
        PyObject_Str() instead ?! */
     if (PyUnicode_CheckExact(obj)) {
-        return Py_NewRef(obj);
+        return PyRegion_NewRef(obj);
     }
     if (PyUnicode_Check(obj)) {
         /* For a Unicode subtype that's not a Unicode object,
@@ -3670,14 +3683,14 @@ PyUnicode_Decode(const char *s,
                      "use codecs.decode() to decode to arbitrary types",
                      encoding,
                      Py_TYPE(unicode)->tp_name);
-        Py_DECREF(unicode);
+        PyRegion_CLEARLOCAL(unicode);
         goto onError;
     }
-    Py_DECREF(buffer);
+    PyRegion_CLEARLOCAL(buffer);
     return unicode_result(unicode);
 
   onError:
-    Py_XDECREF(buffer);
+    PyRegion_CLEARLOCAL(buffer);
     return NULL;
 }
 
@@ -3723,7 +3736,7 @@ PyUnicode_AsDecodedUnicode(PyObject *unicode,
                      "use codecs.decode() to decode to arbitrary types",
                      encoding,
                      Py_TYPE(unicode)->tp_name);
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         goto onError;
     }
     return unicode_result(v);
@@ -3791,7 +3804,7 @@ unicode_encode_locale(PyObject *unicode, _Py_error_handler error_handler,
                     reason);
             if (exc != NULL) {
                 PyCodec_StrictErrors(exc);
-                Py_DECREF(exc);
+                PyRegion_CLEARLOCAL(exc);
             }
         }
         else if (res == -3) {
@@ -3930,13 +3943,13 @@ PyUnicode_AsEncodedString(PyObject *unicode,
             "use codecs.encode() to encode to arbitrary types",
             encoding);
         if (error) {
-            Py_DECREF(v);
+            PyRegion_CLEARLOCAL(v);
             return NULL;
         }
 
         b = PyBytes_FromStringAndSize(PyByteArray_AS_STRING(v),
                                       PyByteArray_GET_SIZE(v));
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         return b;
     }
 
@@ -3945,7 +3958,7 @@ PyUnicode_AsEncodedString(PyObject *unicode,
                  "use codecs.encode() to encode to arbitrary types",
                  encoding,
                  Py_TYPE(v)->tp_name);
-    Py_DECREF(v);
+    PyRegion_CLEARLOCAL(v);
     return NULL;
 }
 
@@ -3974,7 +3987,7 @@ PyUnicode_AsEncodedUnicode(PyObject *unicode,
                      "use codecs.encode() to encode to arbitrary types",
                      encoding,
                      Py_TYPE(v)->tp_name);
-        Py_DECREF(v);
+        PyRegion_CLEARLOCAL(v);
         goto onError;
     }
     return v;
@@ -4007,7 +4020,7 @@ unicode_decode_locale(const char *str, Py_ssize_t len,
                                         reason);
             if (exc != NULL) {
                 PyCodec_StrictErrors(exc);
-                Py_DECREF(exc);
+                PyRegion_CLEARLOCAL(exc);
             }
         }
         else if (res == -3) {
@@ -4091,6 +4104,9 @@ PyUnicode_FSConverter(PyObject* arg, void* addr)
     Py_ssize_t size;
     const char *data;
     if (arg == NULL) {
+        // FIXME(regions): xFrednet: This feels wrong, but this should
+        // be fine for our prototype
+        PyRegion_RemoveLocalRef(*(PyObject**)addr);
         Py_DECREF(*(PyObject**)addr);
         *(PyObject**)addr = NULL;
         return 1;
@@ -4104,7 +4120,7 @@ PyUnicode_FSConverter(PyObject* arg, void* addr)
     }
     else {  // PyOS_FSPath() guarantees its returned value is bytes or str.
         output = PyUnicode_EncodeFSDefault(path);
-        Py_DECREF(path);
+        PyRegion_CLEARLOCAL(path);
         if (!output) {
             return 0;
         }
@@ -4115,7 +4131,7 @@ PyUnicode_FSConverter(PyObject* arg, void* addr)
     data = PyBytes_AS_STRING(output);
     if ((size_t)size != strlen(data)) {
         PyErr_SetString(PyExc_ValueError, "embedded null byte");
-        Py_DECREF(output);
+        PyRegion_CLEARLOCAL(output);
         return 0;
     }
     *(PyObject**)addr = output;
@@ -4127,6 +4143,9 @@ int
 PyUnicode_FSDecoder(PyObject* arg, void* addr)
 {
     if (arg == NULL) {
+        // FIXME(regions): xFrednet: This feels wrong, but this should
+        // be fine for our prototype
+        PyRegion_RemoveLocalRef(*(PyObject**)addr);
         Py_DECREF(*(PyObject**)addr);
         *(PyObject**)addr = NULL;
         return 1;
@@ -4144,7 +4163,7 @@ PyUnicode_FSDecoder(PyObject* arg, void* addr)
     else if (PyBytes_Check(path)) {
         output = PyUnicode_DecodeFSDefaultAndSize(PyBytes_AS_STRING(path),
                                                   PyBytes_GET_SIZE(path));
-        Py_DECREF(path);
+        PyRegion_CLEARLOCAL(path);
         if (!output) {
             return 0;
         }
@@ -4153,14 +4172,14 @@ PyUnicode_FSDecoder(PyObject* arg, void* addr)
         PyErr_Format(PyExc_TypeError,
                      "path should be string, bytes, or os.PathLike, not %.200s",
                      Py_TYPE(arg)->tp_name);
-        Py_DECREF(path);
+        PyRegion_CLEARLOCAL(path);
         return 0;
     }
 
     if (findchar(PyUnicode_DATA(output), PyUnicode_KIND(output),
                  PyUnicode_GET_LENGTH(output), 0, 1) >= 0) {
         PyErr_SetString(PyExc_ValueError, "embedded null character");
-        Py_DECREF(output);
+        PyRegion_CLEARLOCAL(output);
         return 0;
     }
     *(PyObject**)addr = output;
@@ -4402,7 +4421,7 @@ unicode_decode_call_errorhandler_wchar(
     *inend = *input + insize;
     /* we can DECREF safely, as the exception has another reference,
        so the object won't go away. */
-    Py_DECREF(inputobj);
+    PyRegion_CLEARLOCAL(inputobj);
 
     if (newpos<0)
         newpos = insize+newpos;
@@ -4440,7 +4459,7 @@ unicode_decode_call_errorhandler_wchar(
     *inptr = *input + newpos;
 
     /* we made it! */
-    Py_DECREF(restuple);
+    PyRegion_CLEARLOCAL(restuple);
     return 0;
 
   overflow:
@@ -4448,7 +4467,7 @@ unicode_decode_call_errorhandler_wchar(
                     "decoded result is too long for a Python string");
 
   onError:
-    Py_XDECREF(restuple);
+    PyRegion_CLEARLOCAL(restuple);
     return -1;
 }
 #endif   /* MS_WINDOWS */
@@ -4508,7 +4527,7 @@ unicode_decode_call_errorhandler_writer(
     *inend = *input + insize;
     /* we can DECREF safely, as the exception has another reference,
        so the object won't go away. */
-    Py_DECREF(inputobj);
+    PyRegion_CLEARLOCAL(inputobj);
 
     if (newpos<0)
         newpos = insize+newpos;
@@ -4545,11 +4564,11 @@ unicode_decode_call_errorhandler_writer(
     *inptr = new_inptr;
 
     /* we made it! */
-    Py_DECREF(restuple);
+    PyRegion_CLEARLOCAL(restuple);
     return 0;
 
   onError:
-    Py_XDECREF(restuple);
+    PyRegion_CLEARLOCAL(restuple);
     return -1;
 }
 
@@ -4820,8 +4839,8 @@ utf7Error:
             if (writer.pos != shiftOutStart && writer.maxchar > 127) {
                 PyObject *result = PyUnicode_FromKindAndData(
                         writer.kind, writer.data, shiftOutStart);
-                Py_XDECREF(errorHandler);
-                Py_XDECREF(exc);
+                PyRegion_CLEARLOCAL(errorHandler);
+                PyRegion_CLEARLOCAL(exc);
                 _PyUnicodeWriter_Dealloc(&writer);
                 return result;
             }
@@ -4832,13 +4851,13 @@ utf7Error:
         }
     }
 
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return _PyUnicodeWriter_Finish(&writer);
 
   onError:
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     _PyUnicodeWriter_Dealloc(&writer);
     return NULL;
 }
@@ -5320,13 +5339,13 @@ End:
     if (consumed)
         *consumed = s - starts;
 
-    Py_XDECREF(error_handler_obj);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
     return 0;
 
 onError:
-    Py_XDECREF(error_handler_obj);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
     return -1;
 }
 
@@ -5473,7 +5492,6 @@ PyUnicode_DecodeUTF8Stateful(const char *s,
                              const char *errors,
                              Py_ssize_t *consumed)
 {
-    // Pyrona: This functions was checked and no further migration is needed
     return unicode_decode_utf8(s, size,
                                errors ? _Py_ERROR_UNKNOWN : _Py_ERROR_STRICT,
                                errors, consumed);
@@ -6018,14 +6036,14 @@ PyUnicode_DecodeUTF32Stateful(const char *s,
     if (consumed)
         *consumed = (const char *)q-starts;
 
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return _PyUnicodeWriter_Finish(&writer);
 
   onError:
     _PyUnicodeWriter_Dealloc(&writer);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return NULL;
 }
 
@@ -6167,8 +6185,8 @@ _PyUnicode_EncodeUTF32(PyObject *str,
         Py_CLEAR(rep);
     }
 
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
 
     /* Cut back to size actually needed. This is necessary for, for example,
        encoding of a string containing isolated surrogates and the 'ignore'
@@ -6176,9 +6194,9 @@ _PyUnicode_EncodeUTF32(PyObject *str,
     return PyBytesWriter_FinishWithPointer(writer, out);
 
   error:
-    Py_XDECREF(rep);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(rep);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     PyBytesWriter_Discard(writer);
     return NULL;
 }
@@ -6344,14 +6362,14 @@ End:
     if (consumed)
         *consumed = (const char *)q-starts;
 
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return _PyUnicodeWriter_Finish(&writer);
 
   onError:
     _PyUnicodeWriter_Dealloc(&writer);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return NULL;
 }
 
@@ -6505,8 +6523,8 @@ _PyUnicode_EncodeUTF16(PyObject *str,
         Py_CLEAR(rep);
     }
 
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
 
     /* Cut back to size actually needed. This is necessary for, for example,
     encoding of a string containing isolated surrogates and the 'ignore' handler
@@ -6514,9 +6532,9 @@ _PyUnicode_EncodeUTF16(PyObject *str,
     return PyBytesWriter_FinishWithPointer(writer, out);
 
   error:
-    Py_XDECREF(rep);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(rep);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     PyBytesWriter_Discard(writer);
     return NULL;
 }
@@ -6785,14 +6803,14 @@ _PyUnicode_DecodeUnicodeEscapeInternal2(const char *s,
 #undef WRITE_CHAR
     }
 
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return _PyUnicodeWriter_Finish(&writer);
 
   onError:
     _PyUnicodeWriter_Dealloc(&writer);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return NULL;
 }
 
@@ -6817,7 +6835,7 @@ _PyUnicode_DecodeUnicodeEscapeStateful(const char *s,
                                  "Such sequences will not work in the future. ",
                                  first_invalid_escape_char) < 0)
             {
-                Py_DECREF(result);
+                PyRegion_CLEARLOCAL(result);
                 return NULL;
             }
         }
@@ -6827,7 +6845,7 @@ _PyUnicode_DecodeUnicodeEscapeStateful(const char *s,
                                  "Such sequences will not work in the future. ",
                                  first_invalid_escape_char) < 0)
             {
-                Py_DECREF(result);
+                PyRegion_CLEARLOCAL(result);
                 return NULL;
             }
         }
@@ -7073,14 +7091,14 @@ _PyUnicode_DecodeRawUnicodeEscapeStateful(const char *s,
 
 #undef WRITE_CHAR
     }
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return _PyUnicodeWriter_Finish(&writer);
 
   onError:
     _PyUnicodeWriter_Dealloc(&writer);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return NULL;
 }
 
@@ -7244,28 +7262,32 @@ unicode_encode_call_errorhandler(const char *errors,
         return NULL;
     if (!PyTuple_Check(restuple)) {
         PyErr_SetString(PyExc_TypeError, &argparse[3]);
-        Py_DECREF(restuple);
+        PyRegion_CLEARLOCAL(restuple);
         return NULL;
     }
     if (!PyArg_ParseTuple(restuple, argparse,
                           &resunicode, newpos)) {
-        Py_DECREF(restuple);
+        PyRegion_CLEARLOCAL(restuple);
         return NULL;
     }
     if (!PyUnicode_Check(resunicode) && !PyBytes_Check(resunicode)) {
         PyErr_SetString(PyExc_TypeError, &argparse[3]);
-        Py_DECREF(restuple);
+        PyRegion_CLEARLOCAL(restuple);
         return NULL;
     }
     if (*newpos<0)
         *newpos = len + *newpos;
     if (*newpos<0 || *newpos>len) {
         PyErr_Format(PyExc_IndexError, "position %zd from error handler out of bounds", *newpos);
-        Py_DECREF(restuple);
+        PyRegion_CLEARLOCAL(restuple);
+        return NULL;
+    }
+    if (PyRegion_AddLocalRef(resunicode)) {
+        PyRegion_CLEARLOCAL(restuple);
         return NULL;
     }
     Py_INCREF(resunicode);
-    Py_DECREF(restuple);
+    PyRegion_CLEARLOCAL(restuple);
     return resunicode;
 }
 
@@ -7440,15 +7462,15 @@ unicode_encode_ucs1(PyObject *unicode,
         }
     }
 
-    Py_XDECREF(error_handler_obj);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
     return PyBytesWriter_FinishWithPointer(writer, str);
 
   onError:
-    Py_XDECREF(rep);
+    PyRegion_CLEARLOCAL(rep);
     PyBytesWriter_Discard(writer);
-    Py_XDECREF(error_handler_obj);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
     return NULL;
 }
 
@@ -7565,14 +7587,14 @@ PyUnicode_DecodeASCII(const char *s,
             data = writer.data;
         }
     }
-    Py_XDECREF(error_handler_obj);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
     return _PyUnicodeWriter_Finish(&writer);
 
   onError:
     _PyUnicodeWriter_Dealloc(&writer);
-    Py_XDECREF(error_handler_obj);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
     return NULL;
 }
 
@@ -7813,9 +7835,9 @@ decode_code_page_errors(UINT code_page,
     ret = Py_SAFE_DOWNCAST(in - startin, Py_ssize_t, int);
 
 error:
-    Py_XDECREF(encoding_obj);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(encoding_obj);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return ret;
 }
 
@@ -8072,9 +8094,9 @@ encode_code_page_errors(UINT code_page, PyBytesWriter **writer,
         make_encode_exception(&exc, encoding, unicode, 0, 0, reason);
         if (exc != NULL) {
             PyCodec_StrictErrors(exc);
-            Py_DECREF(exc);
+            PyRegion_CLEARLOCAL(exc);
         }
-        Py_XDECREF(encoding_obj);
+        PyRegion_CLEARLOCAL(encoding_obj);
         return -1;
     }
 
@@ -8154,7 +8176,7 @@ encode_code_page_errors(UINT code_page, PyBytesWriter **writer,
             if (morebytes > 0) {
                 out = PyBytesWriter_GrowAndUpdatePointer(*writer, morebytes, out);
                 if (out == NULL) {
-                    Py_DECREF(rep);
+                    PyRegion_CLEARLOCAL(rep);
                     goto error;
                 }
             }
@@ -8171,7 +8193,7 @@ encode_code_page_errors(UINT code_page, PyBytesWriter **writer,
             if (morebytes > 0) {
                 out = PyBytesWriter_GrowAndUpdatePointer(*writer, morebytes, out);
                 if (out == NULL) {
-                    Py_DECREF(rep);
+                    PyRegion_CLEARLOCAL(rep);
                     goto error;
                 }
             }
@@ -8184,7 +8206,7 @@ encode_code_page_errors(UINT code_page, PyBytesWriter **writer,
                         encoding, unicode,
                         pos, pos + 1,
                         "unable to encode error handler result to ASCII");
-                    Py_DECREF(rep);
+                    PyRegion_CLEARLOCAL(rep);
                     goto error;
                 }
                 *out = (unsigned char)ch;
@@ -8192,7 +8214,7 @@ encode_code_page_errors(UINT code_page, PyBytesWriter **writer,
             }
         }
         pos = newpos;
-        Py_DECREF(rep);
+        PyRegion_CLEARLOCAL(rep);
     }
     /* write a NUL byte */
     *out = 0;
@@ -8204,9 +8226,9 @@ encode_code_page_errors(UINT code_page, PyBytesWriter **writer,
     ret = 0;
 
 error:
-    Py_XDECREF(encoding_obj);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(encoding_obj);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return ret;
 }
 
@@ -8389,13 +8411,13 @@ Error:
             goto onError;
         ++s;
     }
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return 0;
 
 onError:
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return -1;
 }
 
@@ -8424,7 +8446,7 @@ charmap_decode_mapping(const char *s,
             goto onError;
 
         int rc = PyMapping_GetOptionalItem(mapping, key, &item);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         if (rc == 0) {
             /* No mapping found means: mapping is undefined. */
             goto Undefined;
@@ -8492,14 +8514,14 @@ Undefined:
             goto onError;
         }
     }
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return 0;
 
 onError:
-    Py_XDECREF(item);
-    Py_XDECREF(errorHandler);
-    Py_XDECREF(exc);
+    PyRegion_CLEARLOCAL(item);
+    PyRegion_CLEARLOCAL(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
     return -1;
 }
 
@@ -8578,6 +8600,7 @@ static PyTypeObject EncodingMapType = {
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_methods = encoding_map_methods,
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyObject*
@@ -8640,20 +8663,20 @@ PyUnicode_BuildEncodingMap(PyObject* string)
             Py_UCS4 c = PyUnicode_READ(kind, data, i);
             PyObject *key = PyLong_FromLong(c);
             if (key == NULL) {
-                Py_DECREF(result);
+                PyRegion_CLEARLOCAL(result);
                 return NULL;
             }
             PyObject *value = PyLong_FromLong(i);
             if (value == NULL) {
-                Py_DECREF(key);
-                Py_DECREF(result);
+                PyRegion_CLEARLOCAL(key);
+                PyRegion_CLEARLOCAL(result);
                 return NULL;
             }
             int rc = PyDict_SetItem(result, key, value);
-            Py_DECREF(key);
-            Py_DECREF(value);
+            PyRegion_CLEARLOCAL(key);
+            PyRegion_CLEARLOCAL(value);
             if (rc < 0) {
-                Py_DECREF(result);
+                PyRegion_CLEARLOCAL(result);
                 return NULL;
             }
         }
@@ -8741,7 +8764,7 @@ charmapencode_lookup(Py_UCS4 c, PyObject *mapping, unsigned char *replace)
     if (w == NULL)
         return NULL;
     int rc = PyMapping_GetOptionalItem(mapping, w, &x);
-    Py_DECREF(w);
+    PyRegion_CLEARLOCAL(w);
     if (rc == 0) {
         /* No mapping found means: mapping is undefined. */
         Py_RETURN_NONE;
@@ -8761,7 +8784,7 @@ charmapencode_lookup(Py_UCS4 c, PyObject *mapping, unsigned char *replace)
         if (value < 0 || value > 255) {
             PyErr_SetString(PyExc_TypeError,
                             "character mapping must be in range(256)");
-            Py_DECREF(x);
+            PyRegion_CLEARLOCAL(x);
             return NULL;
         }
         *replace = (unsigned char)value;
@@ -8774,7 +8797,7 @@ charmapencode_lookup(Py_UCS4 c, PyObject *mapping, unsigned char *replace)
         PyErr_Format(PyExc_TypeError,
                      "character mapping must return integer, bytes or None, not %.400s",
                      Py_TYPE(x)->tp_name);
-        Py_DECREF(x);
+        PyRegion_CLEARLOCAL(x);
         return NULL;
     }
 }
@@ -8828,14 +8851,14 @@ charmapencode_output(Py_UCS4 c, PyObject *mapping,
     if (rep==NULL)
         return enc_EXCEPTION;
     else if (rep==Py_None) {
-        Py_DECREF(rep);
+        PyRegion_CLEARLOCAL(rep);
         return enc_FAILED;
     } else {
         if (PyLong_Check(rep)) {
             Py_ssize_t requiredsize = *outpos+1;
             if (outsize<requiredsize)
                 if (charmapencode_resize(writer, outpos, requiredsize)) {
-                    Py_DECREF(rep);
+                    PyRegion_CLEARLOCAL(rep);
                     return enc_EXCEPTION;
                 }
             outstart = _PyBytesWriter_GetData(writer);
@@ -8847,7 +8870,7 @@ charmapencode_output(Py_UCS4 c, PyObject *mapping,
             Py_ssize_t requiredsize = *outpos+repsize;
             if (outsize<requiredsize)
                 if (charmapencode_resize(writer, outpos, requiredsize)) {
-                    Py_DECREF(rep);
+                    PyRegion_CLEARLOCAL(rep);
                     return enc_EXCEPTION;
                 }
             outstart = _PyBytesWriter_GetData(writer);
@@ -8855,7 +8878,7 @@ charmapencode_output(Py_UCS4 c, PyObject *mapping,
             *outpos += repsize;
         }
     }
-    Py_DECREF(rep);
+    PyRegion_CLEARLOCAL(rep);
     return enc_SUCCESS;
 }
 
@@ -8903,10 +8926,10 @@ charmap_encoding_error(
         if (rep==NULL)
             return -1;
         else if (rep!=Py_None) {
-            Py_DECREF(rep);
+            PyRegion_CLEARLOCAL(rep);
             break;
         }
-        Py_DECREF(rep);
+        PyRegion_CLEARLOCAL(rep);
         ++collendpos;
     }
     /* cache callback name lookup
@@ -8969,14 +8992,14 @@ charmap_encoding_error(
             if (requiredsize > outsize)
                 /* Make room for all additional bytes. */
                 if (charmapencode_resize(writer, respos, requiredsize)) {
-                    Py_DECREF(repunicode);
+                    PyRegion_CLEARLOCAL(repunicode);
                     return -1;
                 }
             memcpy((char*)PyBytesWriter_GetData(writer) + *respos,
                    PyBytes_AsString(repunicode),  repsize);
             *respos += repsize;
             *inpos = newpos;
-            Py_DECREF(repunicode);
+            PyRegion_CLEARLOCAL(repunicode);
             break;
         }
         /* generate replacement  */
@@ -8987,17 +9010,17 @@ charmap_encoding_error(
             Py_UCS4 repch = PyUnicode_READ(kind, data, index);
             x = charmapencode_output(repch, mapping, writer, respos);
             if (x==enc_EXCEPTION) {
-                Py_DECREF(repunicode);
+                PyRegion_CLEARLOCAL(repunicode);
                 return -1;
             }
             else if (x==enc_FAILED) {
-                Py_DECREF(repunicode);
+                PyRegion_CLEARLOCAL(repunicode);
                 raise_encode_exception(exceptionObject, encoding, unicode, collstartpos, collendpos, reason);
                 return -1;
             }
         }
         *inpos = newpos;
-        Py_DECREF(repunicode);
+        PyRegion_CLEARLOCAL(repunicode);
     }
     return 0;
 }
@@ -9098,16 +9121,16 @@ enc_FAILED:
         }
     }
 
-    Py_XDECREF(exc);
-    Py_XDECREF(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
 
     /* Resize if we allocated too much */
     return PyBytesWriter_FinishWithSize(writer, respos);
 
   onError:
     PyBytesWriter_Discard(writer);
-    Py_XDECREF(exc);
-    Py_XDECREF(error_handler_obj);
+    PyRegion_CLEARLOCAL(exc);
+    PyRegion_CLEARLOCAL(error_handler_obj);
     return NULL;
 }
 
@@ -9180,12 +9203,12 @@ unicode_translate_call_errorhandler(const char *errors,
         return NULL;
     if (!PyTuple_Check(restuple)) {
         PyErr_SetString(PyExc_TypeError, &argparse[3]);
-        Py_DECREF(restuple);
+        PyRegion_CLEARLOCAL(restuple);
         return NULL;
     }
     if (!PyArg_ParseTuple(restuple, argparse,
                           &resunicode, &i_newpos)) {
-        Py_DECREF(restuple);
+        PyRegion_CLEARLOCAL(restuple);
         return NULL;
     }
     if (i_newpos<0)
@@ -9194,11 +9217,15 @@ unicode_translate_call_errorhandler(const char *errors,
         *newpos = i_newpos;
     if (*newpos<0 || *newpos>PyUnicode_GET_LENGTH(unicode)) {
         PyErr_Format(PyExc_IndexError, "position %zd from error handler out of bounds", *newpos);
-        Py_DECREF(restuple);
+        PyRegion_CLEARLOCAL(restuple);
+        return NULL;
+    }
+    if (PyRegion_AddLocalRef(resunicode)) {
+        PyRegion_CLEARLOCAL(restuple);
         return NULL;
     }
     Py_INCREF(resunicode);
-    Py_DECREF(restuple);
+    PyRegion_CLEARLOCAL(restuple);
     return resunicode;
 }
 
@@ -9216,7 +9243,7 @@ charmaptranslate_lookup(Py_UCS4 c, PyObject *mapping, PyObject **result, Py_UCS4
     if (w == NULL)
         return -1;
     int rc = PyMapping_GetOptionalItem(mapping, w, &x);
-    Py_DECREF(w);
+    PyRegion_CLEARLOCAL(w);
     if (rc == 0) {
         /* No mapping found means: use 1:1 mapping. */
         *result = NULL;
@@ -9241,7 +9268,7 @@ charmaptranslate_lookup(Py_UCS4 c, PyObject *mapping, PyObject **result, Py_UCS4
             PyErr_Format(PyExc_ValueError,
                          "character mapping must be in range(0x%x)",
                          MAX_UNICODE+1);
-            Py_DECREF(x);
+            PyRegion_CLEARLOCAL(x);
             return -1;
         }
         *result = x;
@@ -9256,7 +9283,7 @@ charmaptranslate_lookup(Py_UCS4 c, PyObject *mapping, PyObject **result, Py_UCS4
         /* wrong return value */
         PyErr_SetString(PyExc_TypeError,
                         "character mapping must return integer, None or str");
-        Py_DECREF(x);
+        PyRegion_CLEARLOCAL(x);
         return -1;
     }
 }
@@ -9283,30 +9310,30 @@ charmaptranslate_output(Py_UCS4 ch, PyObject *mapping,
     }
 
     if (item == Py_None) {
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         return 0;
     }
 
     if (PyLong_Check(item)) {
         if (_PyUnicodeWriter_WriteCharInline(writer, replace) < 0) {
-            Py_DECREF(item);
+            PyRegion_CLEARLOCAL(item);
             return -1;
         }
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         return 1;
     }
 
     if (!PyUnicode_Check(item)) {
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         return -1;
     }
 
     if (_PyUnicodeWriter_WriteStr(writer, item) < 0) {
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         return -1;
     }
 
-    Py_DECREF(item);
+    PyRegion_CLEARLOCAL(item);
     return 1;
 }
 
@@ -9355,7 +9382,7 @@ unicode_fast_translate_lookup(PyObject *mapping, Py_UCS1 ch,
     ret = 1;
 
   exit:
-    Py_DECREF(item);
+    PyRegion_CLEARLOCAL(item);
     return ret;
 }
 
@@ -9496,7 +9523,7 @@ _PyUnicode_TranslateCharmap(PyObject *input,
             ch = PyUnicode_READ(kind, data, collend);
             if (charmaptranslate_lookup(ch, mapping, &x, &replace))
                 goto onError;
-            Py_XDECREF(x);
+            PyRegion_CLEARLOCAL(x);
             if (x != Py_None)
                 break;
             ++collend;
@@ -9512,21 +9539,21 @@ _PyUnicode_TranslateCharmap(PyObject *input,
             if (repunicode == NULL)
                 goto onError;
             if (_PyUnicodeWriter_WriteStr(&writer, repunicode) < 0) {
-                Py_DECREF(repunicode);
+                PyRegion_CLEARLOCAL(repunicode);
                 goto onError;
             }
-            Py_DECREF(repunicode);
+            PyRegion_CLEARLOCAL(repunicode);
             i = newpos;
         }
     }
-    Py_XDECREF(exc);
-    Py_XDECREF(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
     return _PyUnicodeWriter_Finish(&writer);
 
   onError:
     _PyUnicodeWriter_Dealloc(&writer);
-    Py_XDECREF(exc);
-    Py_XDECREF(errorHandler);
+    PyRegion_CLEARLOCAL(exc);
+    PyRegion_CLEARLOCAL(errorHandler);
     return NULL;
 }
 
@@ -9549,7 +9576,7 @@ _PyUnicode_TransformDecimalAndSpaceToASCII(PyObject *unicode)
     }
     if (PyUnicode_IS_ASCII(unicode)) {
         /* If the string is already ASCII, just return the same string */
-        return Py_NewRef(unicode);
+        return PyRegion_NewRef(unicode);
     }
 
     Py_ssize_t len = PyUnicode_GET_LENGTH(unicode);
@@ -10066,7 +10093,7 @@ PyUnicode_Join(PyObject *separator, PyObject *seq)
 
     Py_END_CRITICAL_SECTION_SEQUENCE_FAST();
 
-    Py_DECREF(fseq);
+    PyRegion_CLEARLOCAL(fseq);
     return res;
 }
 
@@ -10095,7 +10122,7 @@ _PyUnicode_JoinArray(PyObject *separator, PyObject *const *items, Py_ssize_t seq
     if (seqlen == 1) {
         if (PyUnicode_CheckExact(items[0])) {
             res = items[0];
-            return Py_NewRef(res);
+            return PyRegion_NewRef(res);
         }
         seplen = 0;
         maxchar = 0;
@@ -10121,6 +10148,9 @@ _PyUnicode_JoinArray(PyObject *separator, PyObject *const *items, Py_ssize_t seq
             sep = separator;
             seplen = PyUnicode_GET_LENGTH(separator);
             maxchar = PyUnicode_MAX_CHAR_VALUE(separator);
+            if (PyRegion_AddLocalRef(sep)) {
+                goto onError;
+            }
             /* inc refcount to keep this code path symmetric with the
                above case of a blank separator */
             Py_INCREF(sep);
@@ -10227,13 +10257,13 @@ _PyUnicode_JoinArray(PyObject *separator, PyObject *const *items, Py_ssize_t seq
         assert(res_offset == PyUnicode_GET_LENGTH(res));
     }
 
-    Py_XDECREF(sep);
+    PyRegion_CLEARLOCAL(sep);
     assert(_PyUnicode_CheckConsistency(res, 1));
     return res;
 
   onError:
-    Py_XDECREF(sep);
-    Py_XDECREF(res);
+    PyRegion_CLEARLOCAL(sep);
+    PyRegion_CLEARLOCAL(res);
     return NULL;
 }
 
@@ -10415,6 +10445,10 @@ split(PyObject *self,
         out = PyList_New(1);
         if (out == NULL)
             return NULL;
+        if (PyRegion_AddRef(out, self)) {
+            PyRegion_CLEARLOCAL(out);
+            return NULL;
+        }
         PyList_SET_ITEM(out, 0, Py_NewRef(self));
         return out;
     }
@@ -10507,6 +10541,10 @@ rsplit(PyObject *self,
         out = PyList_New(1);
         if (out == NULL)
             return NULL;
+        if (PyRegion_AddRef(out, self)) {
+            PyRegion_CLEARLOCAL(out);
+            return NULL;
+        }
         PyList_SET_ITEM(out, 0, Py_NewRef(self));
         return out;
     }
@@ -11498,7 +11536,12 @@ PyUnicode_Append(PyObject **p_left, PyObject *right)
     /* Shortcuts */
     PyObject *empty = unicode_get_empty();  // Borrowed reference
     if (left == empty) {
-        Py_DECREF(left);
+        PyRegion_CLEARLOCAL(left);
+        // FIXME(regions): xFrednet: This feels wrong, but this should
+        // be fine for our prototype
+        if (PyRegion_AddLocalRef(right)) {
+            return;
+        }
         *p_left = Py_NewRef(right);
         return;
     }
@@ -11542,7 +11585,7 @@ PyUnicode_Append(PyObject **p_left, PyObject *right)
             goto error;
         _PyUnicode_FastCopyCharacters(res, 0, left, 0, left_len);
         _PyUnicode_FastCopyCharacters(res, left_len, right, 0, right_len);
-        Py_DECREF(left);
+        PyRegion_CLEARLOCAL(left);
         *p_left = res;
     }
     assert(_PyUnicode_CheckConsistency(*p_left, 1));
@@ -11556,7 +11599,7 @@ void
 PyUnicode_AppendAndDel(PyObject **pleft, PyObject *right)
 {
     PyUnicode_Append(pleft, right);
-    Py_XDECREF(right);
+    PyRegion_CLEARLOCAL(right);
 }
 
 /*[clinic input]
@@ -13257,12 +13300,12 @@ unicode_maketrans_impl(PyObject *x, PyObject *y, PyObject *z)
                 goto err;
             value = PyLong_FromLong(PyUnicode_READ(y_kind, y_data, i));
             if (!value) {
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 goto err;
             }
             res = PyDict_SetItem(new, key, value);
-            Py_DECREF(key);
-            Py_DECREF(value);
+            PyRegion_CLEARLOCAL(key);
+            PyRegion_CLEARLOCAL(value);
             if (res < 0)
                 goto err;
         }
@@ -13275,7 +13318,7 @@ unicode_maketrans_impl(PyObject *x, PyObject *y, PyObject *z)
                 if (!key)
                     goto err;
                 res = PyDict_SetItem(new, key, Py_None);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 if (res < 0)
                     goto err;
             }
@@ -13306,7 +13349,7 @@ unicode_maketrans_impl(PyObject *x, PyObject *y, PyObject *z)
                 if (!newkey)
                     goto err;
                 res = PyDict_SetItem(new, newkey, value);
-                Py_DECREF(newkey);
+                PyRegion_CLEARLOCAL(newkey);
                 if (res < 0)
                     goto err;
             } else if (PyLong_Check(key)) {
@@ -13322,7 +13365,7 @@ unicode_maketrans_impl(PyObject *x, PyObject *y, PyObject *z)
     }
     return new;
   err:
-    Py_DECREF(new);
+    PyRegion_CLEARLOCAL(new);
     return NULL;
 }
 
@@ -13667,7 +13710,7 @@ _PyUnicodeWriter_PrepareInternal(_PyUnicodeWriter *writer,
                 return -1;
             _PyUnicode_FastCopyCharacters(newbuffer, 0,
                                           writer->buffer, 0, writer->pos);
-            Py_DECREF(writer->buffer);
+            PyRegion_CLEARLOCAL(writer->buffer);
             writer->readonly = 0;
         }
         else {
@@ -13746,6 +13789,12 @@ _PyUnicodeWriter_WriteStr(_PyUnicodeWriter *writer, PyObject *str)
     if (maxchar > writer->maxchar || len > writer->size - writer->pos) {
         if (writer->buffer == NULL && !writer->overallocate) {
             assert(_PyUnicode_CheckConsistency(str, 1));
+            // Regions: `_PyUnicodeWriter` is not a PyObject but a struct.
+            // We therefore can't call AddRef. Instead we count this as a
+            // local ref for now.
+            if (PyRegion_AddLocalRef(str)) {
+                return -1;
+            }
             writer->readonly = 1;
             writer->buffer = Py_NewRef(str);
             _PyUnicodeWriter_Update(writer);
@@ -13779,7 +13828,7 @@ PyUnicodeWriter_WriteStr(PyUnicodeWriter *writer, PyObject *obj)
     }
 
     int res = _PyUnicodeWriter_WriteStr((_PyUnicodeWriter*)writer, str);
-    Py_DECREF(str);
+    PyRegion_CLEARLOCAL(str);
     return res;
 }
 
@@ -13797,7 +13846,7 @@ PyUnicodeWriter_WriteRepr(PyUnicodeWriter *writer, PyObject *obj)
     }
 
     int res = _PyUnicodeWriter_WriteStr((_PyUnicodeWriter*)writer, repr);
-    Py_DECREF(repr);
+    PyRegion_CLEARLOCAL(repr);
     return res;
 }
 
@@ -14013,7 +14062,7 @@ _PyUnicodeWriter_Finish(_PyUnicodeWriter *writer)
         PyObject *str2;
         str2 = resize_compact(str, writer->pos);
         if (str2 == NULL) {
-            Py_DECREF(str);
+            PyRegion_CLEARLOCAL(str);
             return NULL;
         }
         str = str2;
@@ -14037,7 +14086,13 @@ PyUnicodeWriter_Finish(PyUnicodeWriter *writer)
 void
 _PyUnicodeWriter_Dealloc(_PyUnicodeWriter *writer)
 {
-    Py_CLEAR(writer->buffer);
+    // _PyUnicodeWriter is a C struct, not a Python heap object: it has no
+    // region identity and cannot be passed as `src` to PyRegion_CLEAR.
+    // writer->buffer is always held within the local execution context
+    // (the struct is either stack-allocated or from a C-level freelist),
+    // so plain refcount management is correct here.
+    // See: comment in: _PyUnicodeWriter_WriteStr
+    PyRegion_CLEARLOCAL(writer->buffer);
 }
 
 #include "stringlib/unicode_format.h"
@@ -14221,7 +14276,7 @@ _PyUnicode_Dedent(PyObject *unicode)
     }
     assert(src_len >= 0);
     if (src_len == 0) {
-        return Py_NewRef(unicode);
+        return PyRegion_NewRef(unicode);
     }
 
     const char *const end = src + src_len;
@@ -14233,7 +14288,7 @@ _PyUnicode_Dedent(PyObject *unicode)
         src, end, &whitespace_start);
 
     if (whitespace_len == 0) {
-        return Py_NewRef(unicode);
+        return PyRegion_NewRef(unicode);
     }
 
     // now we should trigger a dedent
@@ -14471,7 +14526,7 @@ unicode_new_impl(PyTypeObject *type, PyObject *x, const char *encoding,
     }
 
     if (unicode != NULL && type != &PyUnicode_Type) {
-        Py_SETREF(unicode, unicode_subtype_new(type, unicode));
+        PyRegion_XSETLOCALREF(unicode, unicode_subtype_new(type, unicode));
     }
     return unicode;
 }
@@ -14503,12 +14558,12 @@ unicode_vectorcall(PyObject *type, PyObject *const *args,
         }
         PyObject *dict = _PyStack_AsDict(args + nargs, kwnames);
         if (dict == NULL) {
-            Py_DECREF(tuple);
+            PyRegion_CLEARLOCAL(tuple);
             return NULL;
         }
         PyObject *ret = unicode_new(_PyType_CAST(type), tuple, dict);
-        Py_DECREF(tuple);
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(tuple);
+        PyRegion_CLEARLOCAL(dict);
         return ret;
     }
     if (!_PyArg_CheckPositional("str", nargs, 0, 3)) {
@@ -14608,7 +14663,7 @@ unicode_subtype_new(PyTypeObject *type, PyObject *unicode)
     return self;
 
 onError:
-    Py_DECREF(self);
+    PyRegion_CLEARLOCAL(self);
     return NULL;
 }
 
@@ -14678,6 +14733,7 @@ PyTypeObject PyUnicode_Type = {
     PyObject_Free,                /* tp_free */
     .tp_vectorcall = unicode_vectorcall,
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /* Initialize the Unicode implementation */
@@ -14782,8 +14838,8 @@ intern_static(PyInterpreterState *interp, PyObject *s /* stolen */)
     if (r != NULL && r != s) {
         assert(_PyUnicode_STATE(r).interned == SSTATE_INTERNED_IMMORTAL_STATIC);
         assert(_PyUnicode_CHECK(r));
-        Py_DECREF(s);
-        return Py_NewRef(r);
+        PyRegion_CLEARLOCAL(s);
+        return PyRegion_NewRef(r);
     }
 
     if (_Py_hashtable_set(INTERNED_STRINGS, s, s) < -1) {
@@ -14877,7 +14933,7 @@ intern_common(PyInterpreterState *interp, PyObject *s /* stolen */,
                 PyUnicode_KIND(s) == PyUnicode_1BYTE_KIND) {
         PyObject *r = LATIN1(*(unsigned char*)PyUnicode_DATA(s));
         assert(PyUnicode_CHECK_INTERNED(r));
-        Py_DECREF(s);
+        PyRegion_CLEARLOCAL(s);
         return r;
     }
 #ifdef Py_DEBUG
@@ -14890,8 +14946,8 @@ intern_common(PyInterpreterState *interp, PyObject *s /* stolen */,
         if (r != NULL) {
             assert(_PyUnicode_STATE(r).statically_allocated);
             assert(r != s);  // r must be statically_allocated; s is not
-            Py_DECREF(s);
-            return Py_NewRef(r);
+            PyRegion_CLEARLOCAL(s);
+            return PyRegion_NewRef(r);
         }
     }
 
@@ -14912,6 +14968,7 @@ intern_common(PyInterpreterState *interp, PyObject *s /* stolen */,
         }
         else if (res == 1) {
             // value was already present (not inserted)
+            PyRegion_RemoveLocalRef(s);
             Py_DECREF(s);
             if (immortalize &&
                     PyUnicode_CHECK_INTERNED(t) == SSTATE_INTERNED_MORTAL) {
@@ -14923,7 +14980,7 @@ intern_common(PyInterpreterState *interp, PyObject *s /* stolen */,
         else {
             // value was newly inserted
             assert (s == t);
-            Py_DECREF(t);
+            PyRegion_CLEARLOCAL(t);
         }
     }
 
@@ -14934,6 +14991,8 @@ intern_common(PyInterpreterState *interp, PyObject *s /* stolen */,
     if (!_Py_IsImmortal(s)) {
         /* The two references in interned dict (key and value) are not counted.
         unicode_dealloc() and _PyUnicode_ClearInterned() take care of this. */
+        PyRegion_RemoveLocalRef(s);
+        PyRegion_RemoveLocalRef(s);
         Py_DECREF(s);
         Py_DECREF(s);
     }
@@ -15085,6 +15144,9 @@ _PyUnicode_ClearInterned(PyInterpreterState *interp)
     struct _Py_unicode_state *state = &interp->unicode;
     struct _Py_unicode_ids *ids = &state->ids;
     for (Py_ssize_t i=0; i < ids->size; i++) {
+        // Regions: All interned strings should be frozen, (at least when
+        // they're reachable from a region) we, therefore, don't need to
+        // call a write barrier here
         Py_XINCREF(ids->array[i]);
     }
     clear_interned_dict(interp);
@@ -15107,7 +15169,7 @@ unicodeiter_dealloc(PyObject *op)
 {
     unicodeiterobject *it = (unicodeiterobject *)op;
     _PyObject_GC_UNTRACK(it);
-    Py_XDECREF(it->it_seq);
+    PyRegion_CLEAR(it, it->it_seq);
     PyObject_GC_Del(it);
 }
 
@@ -15139,8 +15201,7 @@ unicodeiter_next(PyObject *op)
         return unicode_char(chr);
     }
 
-    it->it_seq = NULL;
-    Py_DECREF(seq);
+    PyRegion_CLEAR(it, it->it_seq);
     return NULL;
 }
 
@@ -15162,8 +15223,7 @@ unicode_ascii_iter_next(PyObject *op)
         it->it_index++;
         return (PyObject*)&_Py_SINGLETON(strings).ascii[chr];
     }
-    it->it_seq = NULL;
-    Py_DECREF(seq);
+    PyRegion_CLEAR(it, it->it_seq);
     return NULL;
 }
 
@@ -15194,7 +15254,7 @@ unicodeiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
     } else {
         PyObject *u = unicode_get_empty();
         if (u == NULL) {
-            Py_XDECREF(iter);
+            PyRegion_CLEARLOCAL(iter);
             return NULL;
         }
         return Py_BuildValue("N(N)", iter, u);
@@ -15261,6 +15321,7 @@ PyTypeObject PyUnicodeIter_Type = {
     unicodeiter_methods,            /* tp_methods */
     0,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 PyTypeObject _PyUnicodeASCIIIter_Type = {
@@ -15275,6 +15336,7 @@ PyTypeObject _PyUnicodeASCIIIter_Type = {
     .tp_iternext = unicode_ascii_iter_next,
     .tp_methods = unicodeiter_methods,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyObject *
@@ -15294,7 +15356,14 @@ unicode_iter(PyObject *seq)
     }
     if (it == NULL)
         return NULL;
+
     it->it_index = 0;
+    it->it_seq = NULL; 
+    if (PyRegion_AddLocalRef(seq)) {
+        assert(!PyRegion_NeedsReadBarrier(it));
+        Py_DECREF(it);
+        return NULL;
+    }
     it->it_seq = Py_NewRef(seq);
     _PyObject_GC_TRACK(it);
     return (PyObject *)it;
@@ -15339,7 +15408,7 @@ config_get_codec_name(wchar_t **config_encoding)
     }
 
     wchar_t *wname = PyUnicode_AsWideCharString(name_obj, NULL);
-    Py_DECREF(name_obj);
+    PyRegion_CLEARLOCAL(name_obj);
     if (wname == NULL) {
         goto error;
     }
@@ -15358,8 +15427,8 @@ config_get_codec_name(wchar_t **config_encoding)
     return 0;
 
 error:
-    Py_XDECREF(codec);
-    Py_XDECREF(name_obj);
+    PyRegion_CLEARLOCAL(codec);
+    PyRegion_CLEARLOCAL(name_obj);
     return -1;
 }
 

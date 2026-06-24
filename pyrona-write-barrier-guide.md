@@ -961,20 +961,18 @@ need to be inside it. Place it immediately before the slot call:
 PyRegion_NotifyTypeUse(Py_TYPE(obj));
 result = Py_TYPE(obj)->tp_repr(obj);   // the dispatch
 ```
-Common cases that *are* dispatches needing a guard: direct slot calls
-(`tp_repr`, `tp_richcompare`, `mp_ass_subscript`, `sq_ass_item`, `tp_iternext`,
-etc.). High-level helper APIs that dispatch internally must be treated the same
-way — add `PyRegion_NotifyTypeUse(Py_TYPE(obj))` immediately before the call:
+`NotifyTypeUse` is required only at **direct slot calls** — places where your
+code calls a function pointer from a type object (`tp_repr`, `tp_richcompare`,
+`mp_ass_subscript`, `sq_ass_item`, `tp_iternext`, etc.) or a C function
+pointer obtained from a type struct (`bf_getbuffer`, slot wrappers, etc.).
 
-| Helper | Dispatches through |
-|--------|--------------------|
-| `PyObject_Repr(obj)` | `tp_repr` |
-| `PyObject_RichCompareBool(a, b, op)` / `PyObject_RichCompare` | `tp_richcompare` |
-| `PyObject_Hash(obj)` | `tp_hash` |
-| `PyObject_GetAttr(obj, name)` | `tp_getattro` |
-| `PyObject_SetAttr(obj, name, val)` | `tp_setattro` |
-| `PyObject_CallMethod(obj, ...)` | slot dispatch chain |
-| `PyObject_GetIter(obj)` | `tp_iter` |
+**High-level `PyObject_*` helpers do not need a `NotifyTypeUse` at the call
+site.** Functions such as `PyObject_Repr`, `PyObject_RichCompareBool`,
+`PyObject_Hash`, `PyObject_GetAttr`, `PyObject_SetAttr`, `PyObject_GetIter`,
+`PyObject_CallOneArg`, and similar already live in `abstract.c`, which has
+been migrated: each one inserts `NotifyTypeUse` internally before it dispatches
+through the slot. Duplicating the call in the caller is harmless but
+unnecessary; the authoritative location is inside the helper.
 
 When the dispatch target is a type you just migrated (and thus region-aware),
 the `NotifyTypeUse` call is a no-op and harmless. When the target is an

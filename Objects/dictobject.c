@@ -1982,6 +1982,11 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
             PyDictKeyEntry *ep = &DK_ENTRIES(mp->ma_keys)[ix];
             STORE_VALUE(ep, value);
         }
+    } else {
+        PyRegion_CLEARLOCAL(key);
+        PyRegion_CLEARLOCAL(value);
+        ASSERT_CONSISTENT(mp);
+        return 0;
     }
     PyRegion_RemoveRef(mp, old_value);
     Py_XDECREF(old_value); /* which **CAN** re-enter (see issue #22653) */
@@ -2795,6 +2800,7 @@ _PyDict_SetItem_Take2(PyDictObject *mp, PyObject *key, PyObject *value)
 int
 PyDict_SetItem(PyObject *op, PyObject *key, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
         return -1;
@@ -3410,19 +3416,25 @@ dict_set_fromkeys(PyInterpreterState *interp, PyDictObject *mp,
         estimate_log2_keysize(PySet_GET_SIZE(iterable)),
         DK_LOG_SIZE(mp->ma_keys));
     if (dictresize(mp, new_size, 0)) {
-        Py_DECREF(mp);
+        PyRegion_CLEARLOCAL(mp);
         return NULL;
     }
 
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(iterable);
-    // FIXME(regions): xFrednet: Write Barrier is missing because FML
     while (_PySet_NextEntryRef(iterable, &pos, &key, &hash)) {
+        if (PyRegion_AddLocalRef(value)) {
+            PyRegion_CLEARLOCAL(key);
+            goto Fail;
+        }
         if (insertdict(interp, mp, key, hash, Py_NewRef(value))) {
-            Py_DECREF(mp);
+            PyRegion_CLEARLOCAL(mp);
             return NULL;
         }
     }
     return mp;
+Fail:
+    PyRegion_CLEARLOCAL(mp);
+    return NULL;
 }
 
 /* Internal version of dict.from_keys().  It is subclass-friendly. */
@@ -3461,7 +3473,7 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
 
     it = PyObject_GetIter(iterable);
     if (it == NULL){
-        // FIXME(regions): xFrednet: Does this need a WB?
+        assert(!PyRegion_NeedsReadBarrier(d));
         Py_DECREF(d);
         return NULL;
     }
@@ -5391,12 +5403,14 @@ PyDict_GetItemString(PyObject *v, const char *key)
 int
 PyDict_GetItemStringRef(PyObject *v, const char *key, PyObject **result)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *key_obj = PyUnicode_FromString(key);
     if (key_obj == NULL) {
         *result = NULL;
         return -1;
     }
     int res = PyDict_GetItemRef(v, key_obj, result);
+    assert(!PyRegion_NeedsReadBarrier(key_obj));
     Py_DECREF(key_obj);
     return res;
 }
@@ -5414,6 +5428,7 @@ _PyDict_SetItemId(PyObject *v, _Py_Identifier *key, PyObject *item)
 int
 PyDict_SetItemString(PyObject *v, const char *key, PyObject *item)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *kv;
     int err;
     kv = PyUnicode_FromString(key);
@@ -5422,6 +5437,7 @@ PyDict_SetItemString(PyObject *v, const char *key, PyObject *item)
     PyInterpreterState *interp = _PyInterpreterState_GET();
     _PyUnicode_InternImmortal(interp, &kv); /* XXX Should we really? */
     err = PyDict_SetItem(v, kv, item);
+    assert(!PyRegion_NeedsReadBarrier(kv));
     Py_DECREF(kv);
     return err;
 }
