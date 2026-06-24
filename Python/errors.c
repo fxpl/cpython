@@ -152,6 +152,7 @@ get_normalization_failure_note(PyThreadState *tstate, PyObject *exception, PyObj
 void
 _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *exc_value;
     PyObject *tb = NULL;
 
@@ -253,6 +254,7 @@ _PyErr_SetObject(PyThreadState *tstate, PyObject *exception, PyObject *value)
 void
 PyErr_SetObject(PyObject *exception, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     _PyErr_SetObject(tstate, exception, value);
 }

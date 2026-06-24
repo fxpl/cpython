@@ -649,7 +649,7 @@ swap_trace_func_arg(PyThreadState *tstate, Py_tracefunc func, PyObject *arg)
     int delta = (func != NULL) - (tstate->c_tracefunc != NULL);
     tstate->c_tracefunc = func;
     PyObject *old_traceobj = tstate->c_traceobj;
-    tstate->c_traceobj = Py_XNewRef(arg);
+    tstate->c_traceobj = PyRegion_XNewRef(arg);
     tstate->interp->sys_tracing_threads += delta;
     assert(tstate->interp->sys_tracing_threads >= 0);
     return old_traceobj;
@@ -718,7 +718,7 @@ _PyEval_SetTrace(PyThreadState *tstate, Py_tracefunc func, PyObject *arg)
     }
 done:
     _PyEval_StartTheWorld(interp);
-    Py_XDECREF(old_traceobj);  // needs to be decref'd outside stop-the-world
+    PyRegion_CLEARLOCAL(old_traceobj);  // needs to be decref'd outside stop-the-world
     return err;
 }
 
@@ -753,6 +753,7 @@ _PyEval_SetTraceAllThreads(PyInterpreterState *interp, Py_tracefunc func, PyObje
     }
     _Py_FOR_EACH_TSTATE_UNLOCKED(interp, tstate) {
         PyObject *old = swap_trace_func_arg(tstate, func, arg);
+        assert(!PyRegion_NeedsReadBarrier(old_trace_objs));
         PyTuple_SET_ITEM(old_trace_objs, --num_thread_states, old);
     }
     if (interp->sys_tracing_threads) {
@@ -761,7 +762,7 @@ _PyEval_SetTraceAllThreads(PyInterpreterState *interp, Py_tracefunc func, PyObje
             if (err != 0) {
                 HEAD_UNLOCK(&_PyRuntime);
                 _PyEval_StartTheWorld(interp);
-                Py_XDECREF(old_trace_objs);
+                PyRegion_CLEARLOCAL(old_trace_objs);
                 return -1;
             }
         }
@@ -769,6 +770,6 @@ _PyEval_SetTraceAllThreads(PyInterpreterState *interp, Py_tracefunc func, PyObje
     HEAD_UNLOCK(&_PyRuntime);
     int err = set_monitoring_trace_events(interp);
     _PyEval_StartTheWorld(interp);
-    Py_XDECREF(old_trace_objs);  // needs to be decref'd outside of stop-the-world
+    PyRegion_CLEARLOCAL(old_trace_objs);  // needs to be decref'd outside of stop-the-world
     return err;
 }

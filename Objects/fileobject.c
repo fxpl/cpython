@@ -106,6 +106,7 @@ PyFile_GetLine(PyObject *f, int n)
 int
 PyFile_WriteObject(PyObject *v, PyObject *f, int flags)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *writer, *value, *result;
 
     if (f == NULL) {
@@ -121,15 +122,16 @@ PyFile_WriteObject(PyObject *v, PyObject *f, int flags)
     else
         value = PyObject_Repr(v);
     if (value == NULL) {
-        Py_DECREF(writer);
+        PyRegion_CLEARLOCAL(writer);
         return -1;
     }
     result = PyObject_CallOneArg(writer, value);
+    assert(!PyRegion_NeedsReadBarrier(value));
     Py_DECREF(value);
-    Py_DECREF(writer);
+    PyRegion_CLEARLOCAL(writer);
     if (result == NULL)
         return -1;
-    Py_DECREF(result);
+    PyRegion_CLEARLOCAL(result);
     return 0;
 }
 

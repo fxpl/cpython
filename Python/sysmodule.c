@@ -78,6 +78,7 @@ module sys
 PyObject *
 PySys_GetAttr(PyObject *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyUnicode_Check(name)) {
         PyErr_Format(PyExc_TypeError,
                      "attribute name must be string, not '%T'",
@@ -100,6 +101,7 @@ PySys_GetAttr(PyObject *name)
 PyObject *
 PySys_GetAttrString(const char *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     PyObject *sysdict = tstate->interp->sysdict;
     if (sysdict == NULL) {
@@ -116,6 +118,7 @@ PySys_GetAttrString(const char *name)
 int
 PySys_GetOptionalAttr(PyObject *name, PyObject **value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyUnicode_Check(name)) {
         PyErr_Format(PyExc_TypeError,
                      "attribute name must be string, not '%T'",
@@ -135,6 +138,7 @@ PySys_GetOptionalAttr(PyObject *name, PyObject **value)
 int
 PySys_GetOptionalAttrString(const char *name, PyObject **value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     PyObject *sysdict = tstate->interp->sysdict;
     if (sysdict == NULL) {
@@ -147,6 +151,7 @@ PySys_GetOptionalAttrString(const char *name, PyObject **value)
 PyObject *
 PySys_GetObject(const char *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     PyObject *sysdict = tstate->interp->sysdict;
     if (sysdict == NULL) {
@@ -161,6 +166,7 @@ PySys_GetObject(const char *name)
         PyErr_FormatUnraisable("Exception ignored in PySys_GetObject()");
     }
     _PyErr_SetRaisedException(tstate, exc);
+    PyRegion_RemoveLocalRef(value);
     Py_XDECREF(value);  // return a borrowed reference
     return value;
 }
@@ -168,6 +174,7 @@ PySys_GetObject(const char *name)
 static int
 sys_set_object(PyInterpreterState *interp, PyObject *key, PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (key == NULL) {
         return -1;
     }
@@ -190,6 +197,7 @@ sys_set_object(PyInterpreterState *interp, PyObject *key, PyObject *v)
 int
 _PySys_SetAttr(PyObject *key, PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyInterpreterState *interp = _PyInterpreterState_GET();
     return sys_set_object(interp, key, v);
 }
@@ -197,9 +205,11 @@ _PySys_SetAttr(PyObject *key, PyObject *v)
 static int
 sys_set_object_str(PyInterpreterState *interp, const char *name, PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *key = v ? PyUnicode_InternFromString(name)
                       : PyUnicode_FromString(name);
     int r = sys_set_object(interp, key, v);
+    assert(!PyRegion_NeedsReadBarrier(key));
     Py_XDECREF(key);
     return r;
 }
@@ -207,6 +217,7 @@ sys_set_object_str(PyInterpreterState *interp, const char *name, PyObject *v)
 int
 PySys_SetObject(const char *name, PyObject *v)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyInterpreterState *interp = _PyInterpreterState_GET();
     return sys_set_object_str(interp, name, v);
 }
@@ -215,6 +226,7 @@ int
 _PySys_ClearAttrString(PyInterpreterState *interp,
                        const char *name, int verbose)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (verbose) {
         PySys_WriteStderr("# clear sys.%s\n", name);
     }
@@ -229,6 +241,7 @@ _PySys_ClearAttrString(PyInterpreterState *interp,
 static int
 should_audit(PyInterpreterState *interp)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     /* interp must not be NULL, but test it just in case for extra safety */
     assert(interp != NULL);
     if (!interp) {
@@ -244,6 +257,7 @@ static int
 sys_audit_tstate(PyThreadState *ts, const char *event,
                  const char *argFormat, va_list vargs)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(event != NULL);
     assert(!argFormat || !strchr(argFormat, 'N'));
 
@@ -278,7 +292,10 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
         eventArgs = Py_VaBuildValue(argFormat, vargs);
         if (eventArgs && !PyTuple_Check(eventArgs)) {
             PyObject *argTuple = PyTuple_Pack(1, eventArgs);
-            Py_SETREF(eventArgs, argTuple);
+            if (PyRegion_XSETLOCALREF(eventArgs, argTuple)) {
+                Py_DECREF(argTuple);
+                goto exit;
+            }
         }
     }
     else {
@@ -294,6 +311,7 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
      * since that would not leave is in an inconsistent state. */
     _Py_AuditHookEntry *e = is->runtime->audit_hooks.head;
     for (; e; e = e->next) {
+        PyRegion_DirtyAllRegions("Calling unknown `_Py_AuditHookEntry`");
         if (e->hookCFunction(event, eventArgs, e->userData) < 0) {
             goto exit;
         }
@@ -323,7 +341,7 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
             int canTrace = PyObject_GetOptionalAttr(hook, &_Py_ID(__cantrace__), &o);
             if (o) {
                 canTrace = PyObject_IsTrue(o);
-                Py_DECREF(o);
+                PyRegion_CLEARLOCAL(o);
             }
             if (canTrace < 0) {
                 break;
@@ -339,8 +357,8 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
             if (!o) {
                 break;
             }
-            Py_DECREF(o);
-            Py_CLEAR(hook);
+            PyRegion_CLEARLOCAL(o);
+            PyRegion_CLEARLOCAL(hook);
         }
         PyThreadState_LeaveTracing(ts);
         if (_PyErr_Occurred(ts)) {
@@ -351,17 +369,17 @@ sys_audit_tstate(PyThreadState *ts, const char *event,
     res = 0;
 
 exit:
-    Py_XDECREF(hook);
-    Py_XDECREF(hooks);
-    Py_XDECREF(eventName);
-    Py_XDECREF(eventArgs);
+    PyRegion_CLEARLOCAL(hook);
+    PyRegion_CLEARLOCAL(hooks);
+    PyRegion_CLEARLOCAL(eventName);
+    PyRegion_CLEARLOCAL(eventArgs);
 
     if (!res) {
         _PyErr_SetRaisedException(ts, exc);
     }
     else {
         assert(_PyErr_Occurred(ts));
-        Py_XDECREF(exc);
+        PyRegion_CLEARLOCAL(exc);
     }
 
     return res;
@@ -371,6 +389,7 @@ int
 _PySys_Audit(PyThreadState *tstate, const char *event,
              const char *argFormat, ...)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     va_list vargs;
     va_start(vargs, argFormat);
     int res = sys_audit_tstate(tstate, event, argFormat, vargs);
@@ -381,6 +400,7 @@ _PySys_Audit(PyThreadState *tstate, const char *event,
 int
 PySys_Audit(const char *event, const char *argFormat, ...)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     va_list vargs;
     va_start(vargs, argFormat);
@@ -392,6 +412,7 @@ PySys_Audit(const char *event, const char *argFormat, ...)
 int
 PySys_AuditTuple(const char *event, PyObject *args)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (args == NULL) {
         return PySys_Audit(event, NULL);
     }
@@ -412,6 +433,7 @@ PySys_AuditTuple(const char *event, PyObject *args)
 void
 _PySys_ClearAuditHooks(PyThreadState *ts)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(ts != NULL);
     if (!ts) {
         return;
@@ -452,6 +474,7 @@ static void
 add_audit_hook_entry_unlocked(_PyRuntimeState *runtime,
                               _Py_AuditHookEntry *entry)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (runtime->audit_hooks.head == NULL) {
         runtime->audit_hooks.head = entry;
     }
@@ -464,9 +487,13 @@ add_audit_hook_entry_unlocked(_PyRuntimeState *runtime,
     }
 }
 
+// FIXME(regions): We should add a second method, that indicates that the
+// given hook is regions aware and doesn't need to mark all regions as
+// dirty.
 int
 PySys_AddAuditHook(Py_AuditHookFunction hook, void *userData)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     /* tstate can be NULL, so access directly _PyRuntime:
        PySys_AddAuditHook() can be called before Python is initialized. */
     _PyRuntimeState *runtime = &_PyRuntime;
@@ -522,6 +549,7 @@ static PyObject *
 sys_addaudithook_impl(PyObject *module, PyObject *hook)
 /*[clinic end generated code: output=4f9c17aaeb02f44e input=0f3e191217a45e34]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
 
     /* Invoke existing audit hooks to allow them an opportunity to abort. */
@@ -565,6 +593,7 @@ static PyObject *
 sys_audit_impl(PyObject *module, const char *event, PyObject *args)
 /*[clinic end generated code: output=1d0fc82da768f49d input=ec3b688527945109]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     _Py_EnsureTstateNotNULL(tstate);
 
@@ -584,6 +613,7 @@ sys_audit_impl(PyObject *module, const char *event, PyObject *args)
 static PyObject *
 sys_breakpointhook(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *keywords)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     assert(!_PyErr_Occurred(tstate));
     char *envar = Py_GETENV("PYTHONBREAKPOINT");
@@ -627,6 +657,7 @@ sys_breakpointhook(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyOb
     }
 
     PyObject *module = PyImport_Import(modulepath);
+    assert(!PyRegion_NeedsReadBarrier(modulepath));
     Py_DECREF(modulepath);
 
     if (module == NULL) {
@@ -638,7 +669,7 @@ sys_breakpointhook(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyOb
     }
 
     PyObject *hook = PyObject_GetAttrString(module, attrname);
-    Py_DECREF(module);
+    PyRegion_CLEARLOCAL(module);
 
     if (hook == NULL) {
         if (_PyErr_ExceptionMatches(tstate, PyExc_AttributeError)) {
@@ -649,7 +680,7 @@ sys_breakpointhook(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyOb
     }
     PyMem_RawFree(envar);
     PyObject *retval = PyObject_Vectorcall(hook, args, nargs, keywords);
-    Py_DECREF(hook);
+    PyRegion_CLEARLOCAL(hook);
     return retval;
 
   warn:
@@ -683,6 +714,7 @@ PyDoc_STRVAR(breakpointhook_doc,
 static int
 sys_displayhook_unencodable(PyObject *outf, PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *stdout_encoding = NULL;
     PyObject *encoded, *escaped_str, *repr_str, *buffer, *result;
     const char *stdout_encoding_str;
@@ -701,31 +733,37 @@ sys_displayhook_unencodable(PyObject *outf, PyObject *o)
     encoded = PyUnicode_AsEncodedString(repr_str,
                                         stdout_encoding_str,
                                         "backslashreplace");
+    assert(!PyRegion_NeedsReadBarrier(repr_str));
     Py_DECREF(repr_str);
     if (encoded == NULL)
         goto error;
 
     if (PyObject_GetOptionalAttr(outf, &_Py_ID(buffer), &buffer) < 0) {
+        assert(!PyRegion_NeedsReadBarrier(encoded));
         Py_DECREF(encoded);
         goto error;
     }
     if (buffer) {
         result = PyObject_CallMethodOneArg(buffer, &_Py_ID(write), encoded);
-        Py_DECREF(buffer);
+        PyRegion_CLEARLOCAL(buffer);
+        assert(!PyRegion_NeedsReadBarrier(encoded));
         Py_DECREF(encoded);
         if (result == NULL)
             goto error;
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
     }
     else {
         escaped_str = PyUnicode_FromEncodedObject(encoded,
                                                   stdout_encoding_str,
                                                   "strict");
+        assert(!PyRegion_NeedsReadBarrier(encoded));
         Py_DECREF(encoded);
         if (PyFile_WriteObject(escaped_str, outf, Py_PRINT_RAW) != 0) {
+            assert(!PyRegion_NeedsReadBarrier(escaped_str));
             Py_DECREF(escaped_str);
             goto error;
         }
+        assert(!PyRegion_NeedsReadBarrier(escaped_str));
         Py_DECREF(escaped_str);
     }
     ret = 0;
@@ -734,7 +772,7 @@ sys_displayhook_unencodable(PyObject *outf, PyObject *o)
 error:
     ret = -1;
 finally:
-    Py_XDECREF(stdout_encoding);
+    PyRegion_CLEARLOCAL(stdout_encoding);
     return ret;
 }
 
@@ -751,6 +789,7 @@ static PyObject *
 sys_displayhook(PyObject *module, PyObject *o)
 /*[clinic end generated code: output=347477d006df92ed input=08ba730166d7ef72]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *outf;
     PyObject *builtins;
     PyThreadState *tstate = _PyThreadState_GET();
@@ -763,6 +802,7 @@ sys_displayhook(PyObject *module, PyObject *o)
         }
         return NULL;
     }
+    PyRegion_RemoveLocalRef(builtins);
     Py_DECREF(builtins);
 
     /* Print value except if None */
@@ -779,7 +819,7 @@ sys_displayhook(PyObject *module, PyObject *o)
     }
     if (outf == Py_None) {
         _PyErr_SetString(tstate, PyExc_RuntimeError, "lost sys.stdout");
-        Py_DECREF(outf);
+        PyRegion_CLEARLOCAL(outf);
         return NULL;
     }
     if (PyFile_WriteObject(o, outf, 0) != 0) {
@@ -790,20 +830,20 @@ sys_displayhook(PyObject *module, PyObject *o)
             _PyErr_Clear(tstate);
             err = sys_displayhook_unencodable(outf, o);
             if (err) {
-                Py_DECREF(outf);
+                PyRegion_CLEARLOCAL(outf);
                 return NULL;
             }
         }
         else {
-            Py_DECREF(outf);
+            PyRegion_CLEARLOCAL(outf);
             return NULL;
         }
     }
     if (PyFile_WriteObject(_Py_LATIN1_CHR('\n'), outf, Py_PRINT_RAW) != 0) {
-        Py_DECREF(outf);
+        PyRegion_CLEARLOCAL(outf);
         return NULL;
     }
-    Py_DECREF(outf);
+    PyRegion_CLEARLOCAL(outf);
     if (PyObject_SetAttr(builtins, _Py_LATIN1_CHR('_'), o) != 0) {
         return NULL;
     }
@@ -846,9 +886,10 @@ static PyObject *
 sys_exception_impl(PyObject *module)
 /*[clinic end generated code: output=2381ee2f25953e40 input=c88fbb94b6287431]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _PyErr_StackItem *err_info = _PyErr_GetTopmostException(_PyThreadState_GET());
     if (err_info->exc_value != NULL) {
-        return Py_NewRef(err_info->exc_value);
+        return PyRegion_NewRef(err_info->exc_value);
     }
     Py_RETURN_NONE;
 }
@@ -867,6 +908,7 @@ static PyObject *
 sys_exc_info_impl(PyObject *module)
 /*[clinic end generated code: output=3afd0940cf3a4d30 input=b5c5bf077788a3e5]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _PyErr_StackItem *err_info = _PyErr_GetTopmostException(_PyThreadState_GET());
     return _PyErr_StackItemToExcInfoTuple(err_info);
 }
@@ -893,6 +935,7 @@ static PyObject *
 sys_unraisablehook(PyObject *module, PyObject *unraisable)
 /*[clinic end generated code: output=bb92838b32abaa14 input=ec3af148294af8d3]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyErr_WriteUnraisableDefaultHook(unraisable);
 }
 
@@ -915,6 +958,7 @@ static PyObject *
 sys_exit_impl(PyObject *module, PyObject *status)
 /*[clinic end generated code: output=13870986c1ab2ec0 input=b86ca9497baa94f2]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     /* Raise SystemExit so callers may catch it or clean up. */
     PyErr_SetObject(PyExc_SystemExit, status);
     return NULL;
@@ -924,8 +968,10 @@ sys_exit_impl(PyObject *module, PyObject *status)
 static PyObject *
 get_utf8_unicode(void)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_DECLARE_STR(utf_8, "utf-8");
     PyObject *ret = &_Py_STR(utf_8);
+    assert(!PyRegion_NeedsReadBarrier(ret));
     return Py_NewRef(ret);
 }
 
@@ -939,6 +985,7 @@ static PyObject *
 sys_getdefaultencoding_impl(PyObject *module)
 /*[clinic end generated code: output=256d19dfcc0711e6 input=d416856ddbef6909]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return get_utf8_unicode();
 }
 
@@ -952,6 +999,7 @@ static PyObject *
 sys_getfilesystemencoding_impl(PyObject *module)
 /*[clinic end generated code: output=1dc4bdbe9be44aa7 input=8475f8649b8c7d8c]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyInterpreterState *interp = _PyInterpreterState_GET();
     const PyConfig *config = _PyInterpreterState_GetConfig(interp);
 
@@ -977,6 +1025,7 @@ static PyObject *
 sys_getfilesystemencodeerrors_impl(PyObject *module)
 /*[clinic end generated code: output=ba77b36bbf7c96f5 input=22a1e8365566f1e5]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyInterpreterState *interp = _PyInterpreterState_GET();
     const PyConfig *config = _PyInterpreterState_GetConfig(interp);
     PyObject *u = PyUnicode_FromWideChar(config->filesystem_errors, -1);
@@ -1004,8 +1053,10 @@ static PyObject *
 sys_intern_impl(PyObject *module, PyObject *s)
 /*[clinic end generated code: output=be680c24f5c9e5d6 input=849483c006924e2f]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyUnicode_CheckExact(s)) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
+        assert(!PyRegion_NeedsReadBarrier(s));
         Py_INCREF(s);
         _PyUnicode_InternMortal(interp, &s);
         return s;
@@ -1031,6 +1082,7 @@ static int
 sys__is_interned_impl(PyObject *module, PyObject *string)
 /*[clinic end generated code: output=c3678267b4e9d7ed input=039843e17883b606]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyUnicode_CHECK_INTERNED(string);
 }
 
@@ -1049,6 +1101,7 @@ static int
 sys__is_immortal_impl(PyObject *module, PyObject *op)
 /*[clinic end generated code: output=c2f5d6a80efb8d1a input=4609c9bf5481db76]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyUnstable_IsImmortal(op);
 }
 
@@ -1072,6 +1125,7 @@ static PyObject *
 call_trampoline(PyThreadState *tstate, PyObject* callback,
                 PyFrameObject *frame, int what, PyObject *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     /* call the Python-level function */
     if (arg == NULL) {
         arg = Py_None;
@@ -1086,6 +1140,7 @@ static int
 profile_trampoline(PyObject *self, PyFrameObject *frame,
                    int what, PyObject *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     PyObject *result = call_trampoline(tstate, self, frame, what, arg);
     if (result == NULL) {
@@ -1093,7 +1148,7 @@ profile_trampoline(PyObject *self, PyFrameObject *frame,
         return -1;
     }
 
-    Py_DECREF(result);
+    PyRegion_CLEARLOCAL(result);
     return 0;
 }
 
@@ -1101,6 +1156,7 @@ static int
 trace_trampoline(PyObject *self, PyFrameObject *frame,
                  int what, PyObject *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *callback;
     if (what == PyTrace_CALL) {
         callback = self;
@@ -1116,15 +1172,18 @@ trace_trampoline(PyObject *self, PyFrameObject *frame,
     PyObject *result = call_trampoline(tstate, callback, frame, what, arg);
     if (result == NULL) {
         _PyEval_SetTrace(tstate, NULL, NULL);
-        Py_CLEAR(frame->f_trace);
+        PyRegion_CLEARLOCAL(frame->f_trace);
         return -1;
     }
 
     if (result != Py_None) {
-        Py_XSETREF(frame->f_trace, result);
+        assert(PyRegion_IsLocal(frame));
+        if (PyRegion_XSETLOCALREF(frame->f_trace, result)) {
+            return -1;
+        }
     }
     else {
-        Py_DECREF(result);
+        PyRegion_CLEARLOCAL(result);
     }
     return 0;
 }
@@ -1145,6 +1204,7 @@ static PyObject *
 sys_settrace(PyObject *module, PyObject *function)
 /*[clinic end generated code: output=999d12e9d6ec4678 input=8107feb01c5f1c4e]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     if (function == Py_None) {
         if (_PyEval_SetTrace(tstate, NULL, NULL) < 0) {
@@ -1176,6 +1236,7 @@ static PyObject *
 sys__settraceallthreads(PyObject *module, PyObject *arg)
 /*[clinic end generated code: output=161cca30207bf3ca input=e5750f5dc01142eb]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject* argument = NULL;
     Py_tracefunc func = NULL;
 
@@ -1203,12 +1264,13 @@ static PyObject *
 sys_gettrace_impl(PyObject *module)
 /*[clinic end generated code: output=e97e3a4d8c971b6e input=373b51bb2147f4d8]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     PyObject *temp = tstate->c_traceobj;
 
     if (temp == NULL)
         temp = Py_None;
-    return Py_NewRef(temp);
+    return PyRegion_NewRef(temp);
 }
 
 /*[clinic input]
@@ -1227,6 +1289,7 @@ static PyObject *
 sys_setprofile(PyObject *module, PyObject *function)
 /*[clinic end generated code: output=1c3503105939db9c input=055d0d7961413a62]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     if (function == Py_None) {
         if (_PyEval_SetProfile(tstate, NULL, NULL) < 0) {
@@ -1258,6 +1321,7 @@ static PyObject *
 sys__setprofileallthreads(PyObject *module, PyObject *arg)
 /*[clinic end generated code: output=2d61319e27b309fe input=9a3dc3352c63b471]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject* argument = NULL;
     Py_tracefunc func = NULL;
 
@@ -1285,12 +1349,13 @@ static PyObject *
 sys_getprofile_impl(PyObject *module)
 /*[clinic end generated code: output=579b96b373448188 input=1b3209d89a32965d]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
     PyObject *temp = tstate->c_profileobj;
 
     if (temp == NULL)
         temp = Py_None;
-    return Py_NewRef(temp);
+    return PyRegion_NewRef(temp);
 }
 
 
@@ -1314,6 +1379,7 @@ static PyObject *
 sys_setswitchinterval_impl(PyObject *module, double interval)
 /*[clinic end generated code: output=65a19629e5153983 input=561b477134df91d9]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (interval <= 0.0) {
         PyErr_SetString(PyExc_ValueError,
                         "switch interval must be strictly positive");
@@ -1354,6 +1420,7 @@ static PyObject *
 sys_setrecursionlimit_impl(PyObject *module, int new_limit)
 /*[clinic end generated code: output=35e1c64754800ace input=b0f7a23393924af3]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyThreadState *tstate = _PyThreadState_GET();
 
     if (new_limit < 1) {
@@ -1394,6 +1461,7 @@ static PyObject *
 sys_set_coroutine_origin_tracking_depth_impl(PyObject *module, int depth)
 /*[clinic end generated code: output=0a2123c1cc6759c5 input=a1d0a05f89d2c426]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (_PyEval_SetCoroutineOriginTrackingDepth(depth) < 0) {
         return NULL;
     }
@@ -1410,6 +1478,7 @@ static int
 sys_get_coroutine_origin_tracking_depth_impl(PyObject *module)
 /*[clinic end generated code: output=3699f7be95a3afb8 input=335266a71205b61a]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyEval_GetCoroutineOriginTrackingDepth();
 }
 
@@ -1437,6 +1506,7 @@ static PyStructSequence_Desc asyncgen_hooks_desc = {
 static PyObject *
 sys_set_asyncgen_hooks(PyObject *self, PyObject *args, PyObject *kw)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     static char *keywords[] = {"firstiter", "finalizer", NULL};
     PyObject *firstiter = NULL;
     PyObject *finalizer = NULL;
@@ -1510,6 +1580,7 @@ static PyObject *
 sys_get_asyncgen_hooks_impl(PyObject *module)
 /*[clinic end generated code: output=53a253707146f6cf input=3676b9ea62b14625]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *res;
     PyObject *firstiter = _PyEval_GetAsyncGenFirstiter();
     PyObject *finalizer = _PyEval_GetAsyncGenFinalizer();
@@ -1525,6 +1596,12 @@ sys_get_asyncgen_hooks_impl(PyObject *module)
 
     if (finalizer == NULL) {
         finalizer = Py_None;
+    }
+
+    if (PyRegion_AddLocalRefs(firstiter, finalizer)) {
+        assert(!PyRegion_NeedsReadBarrier(res));
+        Py_DECREF(res);
+        return NULL;
     }
 
     PyStructSequence_SET_ITEM(res, 0, Py_NewRef(firstiter));
@@ -1567,6 +1644,7 @@ static PyStructSequence_Desc hash_info_desc = {
 static PyObject *
 get_hash_info(PyThreadState *tstate)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *hash_info;
     int field = 0;
     PyHash_FuncDef *hashfunc;
@@ -1576,6 +1654,8 @@ get_hash_info(PyThreadState *tstate)
     }
     hashfunc = PyHash_GetFuncDef();
 
+    // Regions: No write barrier needed since `hash_info` is local.
+    // All objects we handle here should be immutable anyways.
 #define SET_HASH_INFO_ITEM(CALL)                             \
     do {                                                     \
         PyObject *item = (CALL);                             \
@@ -1614,8 +1694,13 @@ static PyObject *
 sys_getrecursionlimit_impl(PyObject *module)
 /*[clinic end generated code: output=d571fb6b4549ef2e input=1c6129fd2efaeea8]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyLong_FromLong(Py_GetRecursionLimit());
 }
+
+// ===============================================
+// FIXME(regions): Migrate the rest of this file.
+// ===============================================
 
 #ifdef MS_WINDOWS
 
@@ -4456,7 +4541,7 @@ sys_write(PyObject *key, FILE *fp, const char *format, va_list va)
         if (sys_pyfile_write(truncated, file) != 0)
             fputs(truncated, fp);
     }
-    Py_XDECREF(file);
+    PyRegion_CLEARLOCAL(file);
     _PyErr_SetRaisedException(tstate, exc);
 }
 
@@ -4473,6 +4558,7 @@ PySys_WriteStdout(const char *format, ...)
 void
 PySys_WriteStderr(const char *format, ...)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     va_list va;
 
     va_start(va, format);

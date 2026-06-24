@@ -2368,8 +2368,8 @@ void _PyRegion_RemoveRef(PyObject *src, PyObject *tgt) {
 
     Py_region_t src_region = _PyRegion_GetFollowPending(src);
     Py_region_t tgt_region = _PyRegion_GetFollowPending(tgt);
-
     if (src_region == tgt_region) {
+
         // Intra-region references are always permitted and not tracket
         return;
     }
@@ -2628,6 +2628,9 @@ void PyRegion_RecycleObject(PyObject *obj) {
 //                          leak of the region objects
 // TODO(regions): xFrednet: Make LRC++ unfailable, if that fails we have a deep fundamental
 //                          problem, throwing an exception will not fix it.
+// TODO(regions): xFrednet: Migrate object.c
+// TODO(regions): xFrednet: Migrate call.c
+// TODO(regions): xFrednet: Migrate ceval.c
 // FIXME(regions): xFrednet: Several write barriers in listobject don't undo the entire operation
 // FIXME(regions): xFrednet: We could add an assert that verifies that a LRC increase which
 //                           opens the region is always a reference to a bride. This should be
