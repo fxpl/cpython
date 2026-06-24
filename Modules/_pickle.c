@@ -3495,10 +3495,11 @@ save_set(PickleState *state, PicklerObject *self, PyObject *obj)
             return -1;
 
         int err = 0;
+        int rc;
         Py_BEGIN_CRITICAL_SECTION(obj);
-        while (_PySet_NextEntryRef(obj, &ppos, &item, &hash)) {
+        while ((rc = _PySet_NextEntryRef(obj, &ppos, &item, &hash)) == 1) {
             err = save(state, self, item, 0);
-            Py_CLEAR(item);
+            PyRegion_CLEARLOCAL(item);
             if (err < 0) {
                 _PyErr_FormatNote("when serializing %T element", obj);
                 break;
@@ -3507,7 +3508,7 @@ save_set(PickleState *state, PicklerObject *self, PyObject *obj)
                 break;
         }
         Py_END_CRITICAL_SECTION();
-        if (err < 0) {
+        if (rc < 0 || err < 0) {
             return -1;
         }
         if (_Pickler_Write(self, &additems_op, 1) < 0)

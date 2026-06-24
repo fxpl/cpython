@@ -33,7 +33,16 @@ set_next_entry(PyObject *self, PyObject *args)
     Py_END_CRITICAL_SECTION();
     if (rc == 1) {
         PyObject *ret = Py_BuildValue("innO", rc, pos, hash, item);
-        Py_DECREF(item);
+        if (ret == NULL) {
+            PyRegion_CLEARLOCAL(item);
+            return NULL;
+        }
+        if (PyRegion_AddRef(ret, item)) {
+            Py_DECREF(ret);
+            PyRegion_CLEARLOCAL(item);
+            return NULL;
+        }
+        PyRegion_CLEARLOCAL(item);
         return ret;
     }
     assert(item == UNINITIALIZED_PTR);

@@ -603,18 +603,19 @@ w_complex_object(PyObject *v, char flag, WFILE *p)
             return;
         }
         Py_ssize_t i = 0;
+        int rc;
         Py_BEGIN_CRITICAL_SECTION(v);
-        while (_PySet_NextEntryRef(v, &pos, &value, &hash)) {
+        while ((rc = _PySet_NextEntryRef(v, &pos, &value, &hash)) == 1) {
             PyObject *dump = _PyMarshal_WriteObjectToString(value,
                                     p->version, p->allow_code);
             if (dump == NULL) {
                 p->error = WFERR_UNMARSHALLABLE;
-                Py_DECREF(value);
+                PyRegion_CLEARLOCAL(value);
                 break;
             }
             PyObject *pair = PyTuple_Pack(2, dump, value);
             Py_DECREF(dump);
-            Py_DECREF(value);
+            PyRegion_CLEARLOCAL(value);
             if (pair == NULL) {
                 p->error = WFERR_NOMEMORY;
                 break;
@@ -622,6 +623,11 @@ w_complex_object(PyObject *v, char flag, WFILE *p)
             PyList_SET_ITEM(pairs, i++, pair);
         }
         Py_END_CRITICAL_SECTION();
+        if (rc < 0) {
+            p->error = WFERR_UNMARSHALLABLE;
+            Py_DECREF(pairs);
+            return;
+        }
         if (p->error == WFERR_UNMARSHALLABLE || p->error == WFERR_NOMEMORY) {
             Py_DECREF(pairs);
             return;

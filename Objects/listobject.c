@@ -1469,9 +1469,31 @@ list_extend_set(PyListObject *self, PySetObject *other)
     Py_hash_t hash;
     PyObject *key;
     PyObject **dest = self->ob_item + m;
-    while (_PySet_NextEntryRef((PyObject *)other, &setpos, &key, &hash)) {
+    int rc;
+    while ((rc = _PySet_NextEntryRef((PyObject *)other, &setpos, &key, &hash)) == 1) {
+        if (PyRegion_TakeRef(self, key)) {
+            PyRegion_CLEARLOCAL(key);
+            while (dest > self->ob_item + m) {
+                --dest;
+                PyRegion_RemoveRef(self, *dest);
+                Py_DECREF(*dest);
+                *dest = NULL;
+            }
+            Py_SET_SIZE(self, m);
+            return -1;
+        }
         FT_ATOMIC_STORE_PTR_RELEASE(*dest, key);
         dest++;
+    }
+    if (rc < 0) {
+        while (dest > self->ob_item + m) {
+            --dest;
+            PyRegion_RemoveRef(self, *dest);
+            Py_DECREF(*dest);
+            *dest = NULL;
+        }
+        Py_SET_SIZE(self, m);
+        return -1;
     }
     Py_SET_SIZE(self, r);
     return 0;

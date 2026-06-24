@@ -1983,6 +1983,14 @@ insertdict(PyInterpreterState *interp, PyDictObject *mp,
             STORE_VALUE(ep, value);
         }
     }
+    else {
+        PyRegion_RemoveLocalRef(key);
+        PyRegion_RemoveLocalRef(value);
+        Py_DECREF(key);
+        Py_DECREF(value);
+        ASSERT_CONSISTENT(mp);
+        return 0;
+    }
     PyRegion_RemoveRef(mp, old_value);
     Py_XDECREF(old_value); /* which **CAN** re-enter (see issue #22653) */
     ASSERT_CONSISTENT(mp);
@@ -3414,14 +3422,25 @@ dict_set_fromkeys(PyInterpreterState *interp, PyDictObject *mp,
     }
 
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(iterable);
-    // FIXME(regions): xFrednet: Write Barrier is missing because FML
-    while (_PySet_NextEntryRef(iterable, &pos, &key, &hash)) {
+    int rc;
+    while ((rc = _PySet_NextEntryRef(iterable, &pos, &key, &hash)) == 1) {
+        if (PyRegion_AddLocalRef(value)) {
+            PyRegion_CLEARLOCAL(key);
+            goto Fail;
+        }
         if (insertdict(interp, mp, key, hash, Py_NewRef(value))) {
             Py_DECREF(mp);
             return NULL;
         }
     }
+    if (rc < 0) {
+        goto Fail;
+    }
     return mp;
+
+Fail:
+    Py_DECREF(mp);
+    return NULL;
 }
 
 /* Internal version of dict.from_keys().  It is subclass-friendly. */

@@ -33,6 +33,7 @@
 
 #include "Python.h"
 #include "pycore_ceval.h"               // _PyEval_GetBuiltin()
+#include "pycore_cown.h"                // _PyCown_Type
 #include "pycore_critical_section.h"    // Py_BEGIN_CRITICAL_SECTION, Py_END_CRITICAL_SECTION
 #include "pycore_dict.h"                // _PyDict_Contains_KnownHash()
 #include "pycore_modsupport.h"          // _PyArg_NoKwnames()
@@ -105,13 +106,27 @@ set_lookkey(PySetObject *so, PyObject *key, Py_hash_t hash)
                     return entry;
                 table = so->table;
                 if (frozenset) {
+                    /* frozenset cannot lose startkey during comparison, so only
+                       the region borrow needs bracketing here. */
+                    if (PyRegion_AddLocalRef(startkey)) {
+                        return NULL;
+                    }
+                    PyRegion_NotifyTypeUse(Py_TYPE(startkey));
+                    PyRegion_NotifyTypeUse(Py_TYPE(key));
                     cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+                    PyRegion_RemoveLocalRef(startkey);
                     if (cmp < 0)
                         return NULL;
                 } else {
                     // incref startkey because it can be removed from the set by the compare
+                    if (PyRegion_AddLocalRef(startkey)) {
+                        return NULL;
+                    }
                     Py_INCREF(startkey);
+                    PyRegion_NotifyTypeUse(Py_TYPE(startkey));
+                    PyRegion_NotifyTypeUse(Py_TYPE(key));
                     cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+                    PyRegion_RemoveLocalRef(startkey);
                     Py_DECREF(startkey);
                     if (cmp < 0)
                         return NULL;
@@ -132,7 +147,130 @@ set_lookkey(PySetObject *so, PyObject *key, Py_hash_t hash)
 static int set_table_resize(PySetObject *, Py_ssize_t);
 
 static int
-set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
+set_add_local_refs_array(PyObject **keys, Py_ssize_t count)
+{
+    for (Py_ssize_t i = 0; i < count; i++) {
+        if (PyRegion_AddLocalRef(keys[i])) {
+            while (i > 0) {
+                PyRegion_RemoveLocalRef(keys[--i]);
+            }
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void
+set_remove_local_refs_array(PyObject **keys, Py_ssize_t count)
+{
+    for (Py_ssize_t i = 0; i < count; i++) {
+        PyRegion_RemoveLocalRef(keys[i]);
+    }
+}
+
+static int
+set_key_in_identity_array(PyObject **keys, Py_ssize_t count, PyObject *key)
+{
+    for (Py_ssize_t i = 0; i < count; i++) {
+        if (keys[i] == key) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int
+set_add_refs_array_except(PyObject *owner, PyObject **keys, Py_ssize_t count,
+                          PyObject **skip_keys, Py_ssize_t skip_count)
+{
+    if (count == 0) {
+        return 0;
+    }
+
+    PyObject **tracked_keys = PyMem_New(PyObject *, count);
+    if (tracked_keys == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    Py_ssize_t tracked_count = 0;
+    for (Py_ssize_t i = 0; i < count; i++) {
+        if ((skip_keys == NULL ||
+             !set_key_in_identity_array(skip_keys, skip_count, keys[i])) &&
+            !PyRegion_SameRegion(owner, keys[i]) &&
+            !_Py_IsImmutable(keys[i]) &&
+            !Py_IS_TYPE(keys[i], &_PyCown_Type))
+        {
+            tracked_keys[tracked_count++] = keys[i];
+        }
+    }
+
+    int res = 0;
+    if (tracked_count > 0) {
+        res = PyRegion_AddRefsArray(owner, (int)tracked_count, tracked_keys);
+    }
+    PyMem_Free(tracked_keys);
+    return res;
+}
+
+static int
+set_add_refs_array(PyObject *owner, PyObject **keys, Py_ssize_t count)
+{
+    return set_add_refs_array_except(owner, keys, count, NULL, 0);
+}
+
+static int
+set_collect_keys(PySetObject *so, PyObject ***keys_out, Py_ssize_t *count_out)
+{
+    Py_ssize_t count = so->used;
+    if (count == 0) {
+        *keys_out = NULL;
+        *count_out = 0;
+        return 0;
+    }
+
+    PyObject **keys = PyMem_New(PyObject *, count);
+    if (keys == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+
+    Py_ssize_t pos = 0;
+    for (setentry *entry = so->table; pos < count; entry++) {
+        if (entry->key != NULL && entry->key != dummy) {
+            keys[pos++] = entry->key;
+        }
+    }
+    *keys_out = keys;
+    *count_out = count;
+    return 0;
+}
+
+static int
+set_preflight_add_refs_from_set(PySetObject *dst, PySetObject *src)
+{
+    PyObject **keys;
+    Py_ssize_t count;
+    if (set_collect_keys(src, &keys, &count) < 0) {
+        return -1;
+    }
+    if (count == 0) {
+        return 0;
+    }
+
+    int res;
+    if (PyRegion_IsLocal((PyObject *)dst)) {
+        res = set_add_local_refs_array(keys, count);
+    }
+    else {
+        res = set_add_refs_array((PyObject *)dst, keys, count);
+    }
+    PyMem_Free(keys);
+    return res;
+}
+
+static int
+set_add_entry_ref(PySetObject *so, PyObject *key, Py_hash_t hash, int take_ref)
 {
     setentry *table;
     setentry *freeslot;
@@ -166,8 +304,14 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
                     && unicode_eq(startkey, key))
                     goto found_active;
                 table = so->table;
+                if (PyRegion_AddLocalRef(startkey)) {
+                    goto comparison_error;
+                }
                 Py_INCREF(startkey);
+                PyRegion_NotifyTypeUse(Py_TYPE(startkey));
+                PyRegion_NotifyTypeUse(Py_TYPE(key));
                 cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+                PyRegion_RemoveLocalRef(startkey);
                 Py_DECREF(startkey);
                 if (cmp > 0)
                     goto found_active;
@@ -190,27 +334,55 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
   found_unused_or_dummy:
     if (freeslot == NULL)
         goto found_unused;
+    if (take_ref) {
+        if (PyRegion_TakeRef((PyObject *)so, key)) {
+            PyRegion_CLEARLOCAL(key);
+            return -1;
+        }
+    }
+    else if (PyRegion_AddRef((PyObject *)so, key)) {
+        return -1;
+    }
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
-    freeslot->key = key;
+    freeslot->key = take_ref ? key : Py_NewRef(key);
     freeslot->hash = hash;
     return 0;
 
   found_unused:
+    if (take_ref) {
+        if (PyRegion_TakeRef((PyObject *)so, key)) {
+            PyRegion_CLEARLOCAL(key);
+            return -1;
+        }
+    }
+    else if (PyRegion_AddRef((PyObject *)so, key)) {
+        return -1;
+    }
     so->fill++;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
-    entry->key = key;
+    entry->key = take_ref ? key : Py_NewRef(key);
     entry->hash = hash;
     if ((size_t)so->fill*5 < mask*3)
         return 0;
     return set_table_resize(so, so->used>50000 ? so->used*2 : so->used*4);
 
   found_active:
-    Py_DECREF(key);
+    if (take_ref) {
+        PyRegion_CLEARLOCAL(key);
+    }
     return 0;
 
   comparison_error:
-    Py_DECREF(key);
+    if (take_ref) {
+        PyRegion_CLEARLOCAL(key);
+    }
     return -1;
+}
+
+static int
+set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
+{
+    return set_add_entry_ref(so, key, hash, 1);
 }
 
 static int
@@ -218,7 +390,13 @@ set_add_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 {
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
 
-    return set_add_entry_takeref(so, Py_NewRef(key), hash);
+    if (PyRegion_AddLocalRef(key)) {
+        return -1;
+    }
+    Py_INCREF(key);
+    int rv = set_add_entry_ref(so, key, hash, 0);
+    PyRegion_CLEARLOCAL(key);
+    return rv;
 }
 
 static void
@@ -231,19 +409,34 @@ set_unhashable_type(PyObject *key)
         return;
     }
 
+    int exc_has_local_ref = 0;
+    if (PyRegion_NeedsReadBarrier(exc)) {
+        if (PyRegion_AddLocalRef(exc)) {
+            Py_DECREF(exc);
+            return;
+        }
+        exc_has_local_ref = 1;
+    }
     PyErr_Format(PyExc_TypeError,
                  "cannot use '%T' as a set element (%S)",
                  key, exc);
-    Py_DECREF(exc);
+    if (exc_has_local_ref) {
+        PyRegion_CLEARLOCAL(exc);
+    }
+    else {
+        assert(!PyRegion_NeedsReadBarrier(exc));  // exc is local or immutable when no borrow was established.
+        Py_DECREF(exc);
+    }
 }
 
 int
 _PySet_AddTakeRef(PySetObject *so, PyObject *key)
 {
+    PyRegion_NotifyTypeUse(Py_TYPE(key));
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         return -1;
     }
     // We don't pre-increment here, the caller holds a strong
@@ -262,6 +455,8 @@ the setobject's fill and used fields.
 static void
 set_insert_clean(setentry *table, size_t mask, PyObject *key, Py_hash_t hash)
 {
+    /* The caller either already owns this reference in the same set, or has
+       preflighted the destination set's region barrier before this transfer. */
     setentry *entry;
     size_t perturb = hash;
     size_t i = (size_t)hash & mask;
@@ -402,6 +597,7 @@ set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
     entry->key = dummy;
     entry->hash = -1;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
+    PyRegion_RemoveRef((PyObject *)so, old_key);
     Py_DECREF(old_key);
     return DISCARD_FOUND;
 }
@@ -415,6 +611,7 @@ set_add_key(PySetObject *so, PyObject *key)
         return -1;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(key));
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
@@ -426,6 +623,7 @@ set_add_key(PySetObject *so, PyObject *key)
 static int
 set_contains_key(PySetObject *so, PyObject *key)
 {
+    PyRegion_NotifyTypeUse(Py_TYPE(key));
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
@@ -437,6 +635,7 @@ set_contains_key(PySetObject *so, PyObject *key)
 static int
 set_discard_key(PySetObject *so, PyObject *key)
 {
+    PyRegion_NotifyTypeUse(Py_TYPE(key));
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
@@ -497,6 +696,7 @@ set_clear_internal(PyObject *self)
     for (entry = table; used > 0; entry++) {
         if (entry->key && entry->key != dummy) {
             used--;
+            PyRegion_RemoveRef(self, entry->key);
             Py_DECREF(entry->key);
         }
     }
@@ -557,6 +757,7 @@ set_dealloc(PyObject *self)
     for (entry = so->table; used > 0; entry++) {
         if (entry->key && entry->key != dummy) {
                 used--;
+                PyRegion_RemoveRef(self, entry->key);
                 Py_DECREF(entry->key);
         }
     }
@@ -593,15 +794,23 @@ set_repr_lock_held(PySetObject *so)
     Py_ssize_t pos = 0, idx = 0;
     setentry *entry;
     while (set_next(so, &pos, &entry)) {
+        if (PyRegion_AddLocalRef(entry->key)) {
+            assert(PyRegion_IsLocal(keys));  // keys was freshly allocated in this frame.
+            Py_DECREF(keys);
+            goto done;
+        }
         PyList_SET_ITEM(keys, idx++, Py_NewRef(entry->key));
     }
 
     /* repr(keys)[1:-1] */
+    PyRegion_NotifyTypeUse(Py_TYPE(keys));
     listrepr = PyObject_Repr(keys);
+    assert(PyRegion_IsLocal(keys));  // keys was freshly allocated in this frame.
     Py_DECREF(keys);
     if (listrepr == NULL)
         goto done;
     tmp = PyUnicode_Substring(listrepr, 1, PyUnicode_GET_LENGTH(listrepr)-1);
+    assert(!PyRegion_NeedsReadBarrier(listrepr));  // unicode repr is immutable.
     Py_DECREF(listrepr);
     if (tmp == NULL)
         goto done;
@@ -613,6 +822,7 @@ set_repr_lock_held(PySetObject *so)
                                       listrepr);
     else
         result = PyUnicode_FromFormat("{%U}", listrepr);
+    assert(!PyRegion_NeedsReadBarrier(listrepr));  // unicode substring is immutable.
     Py_DECREF(listrepr);
 done:
     Py_ReprLeave((PyObject*)so);
@@ -668,6 +878,9 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
     /* If our table is empty, and both tables have the same size, and
        there are no dummies to eliminate, then just copy the pointers. */
     if (so->fill == 0 && so->mask == other->mask && other->fill == other->used) {
+        if (set_preflight_add_refs_from_set(so, other) < 0) {
+            return -1;
+        }
         for (i = 0; i <= other->mask; i++, so_entry++, other_entry++) {
             key = other_entry->key;
             if (key != NULL) {
@@ -685,6 +898,9 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
     if (so->fill == 0) {
         setentry *newtable = so->table;
         size_t newmask = (size_t)so->mask;
+        if (set_preflight_add_refs_from_set(so, other) < 0) {
+            return -1;
+        }
         so->fill = other->used;
         FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, other->used);
         for (i = other->mask + 1; i > 0 ; i--, other_entry++) {
@@ -742,10 +958,14 @@ set_pop_impl(PySetObject *so)
             entry = so->table;
     }
     key = entry->key;
+    if (PyRegion_AddLocalRef(key)) {
+        return NULL;
+    }
     entry->key = dummy;
     entry->hash = -1;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
     so->finger = entry - so->table + 1;   /* next place to start */
+    PyRegion_RemoveRef((PyObject *)so, key);
     return key;
 }
 
@@ -847,6 +1067,7 @@ typedef struct {
     Py_ssize_t si_used;
     Py_ssize_t si_pos;
     Py_ssize_t len;
+    int si_set_is_local;
 } setiterobject;
 
 static void
@@ -855,7 +1076,12 @@ setiter_dealloc(PyObject *self)
     setiterobject *si = (setiterobject*)self;
     /* bpo-31095: UnTrack is needed before calling any callbacks */
     _PyObject_GC_UNTRACK(si);
-    Py_XDECREF(si->si_set);
+    if (si->si_set_is_local) {
+        PyRegion_CLEARLOCAL(si->si_set);
+    }
+    else {
+        PyRegion_CLEAR(si, si->si_set);
+    }
     PyObject_GC_Del(si);
 }
 
@@ -886,11 +1112,16 @@ setiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
 
     /* copy the iterator state */
     setiterobject tmp = *si;
+    tmp.si_set_is_local = 1;
+    if (tmp.si_set != NULL && PyRegion_AddLocalRef((PyObject *)tmp.si_set)) {
+        return NULL;
+    }
     Py_XINCREF(tmp.si_set);
 
     /* iterate the temporary into a list */
+    PyRegion_NotifyTypeUse(Py_TYPE(&tmp));
     PyObject *list = PySequence_List((PyObject*)&tmp);
-    Py_XDECREF(tmp.si_set);
+    PyRegion_CLEARLOCAL(tmp.si_set);
     if (list == NULL) {
         return NULL;
     }
@@ -912,6 +1143,7 @@ static PyObject *setiter_iternext(PyObject *self)
     Py_ssize_t i, mask;
     setentry *entry;
     PySetObject *so = si->si_set;
+    int key_error = 0;
 
     if (so == NULL)
         return NULL;
@@ -935,13 +1167,23 @@ static PyObject *setiter_iternext(PyObject *self)
         i++;
     }
     if (i <= mask) {
-        key = Py_NewRef(entry[i].key);
+        key = PyRegion_NewRef(entry[i].key);
+        if (key == NULL) {
+            key_error = 1;
+        }
     }
     Py_END_CRITICAL_SECTION();
+    if (key_error) {
+        return NULL;
+    }
     si->si_pos = i+1;
     if (key == NULL) {
-        si->si_set = NULL;
-        Py_DECREF(so);
+        if (si->si_set_is_local) {
+            PyRegion_CLEARLOCAL(si->si_set);
+        }
+        else {
+            PyRegion_CLEAR(si, si->si_set);
+        }
         return NULL;
     }
     si->len--;
@@ -979,6 +1221,7 @@ PyTypeObject PySetIter_Type = {
     setiter_iternext,                           /* tp_iternext */
     setiter_methods,                            /* tp_methods */
     0,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyObject *
@@ -988,10 +1231,15 @@ set_iter(PyObject *so)
     setiterobject *si = PyObject_GC_New(setiterobject, &PySetIter_Type);
     if (si == NULL)
         return NULL;
+    if (PyRegion_AddRef((PyObject *)si, so)) {
+        PyObject_GC_Del(si);
+        return NULL;
+    }
     si->si_set = (PySetObject*)Py_NewRef(so);
     si->si_used = size;
     si->si_pos = 0;
     si->len = size;
+    si->si_set_is_local = 0;
     _PyObject_GC_TRACK(si);
     return (PyObject *)si;
 }
@@ -1032,21 +1280,24 @@ set_update_iterable_lock_held(PySetObject *so, PyObject *other)
 {
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
 
+    PyRegion_NotifyTypeUse(Py_TYPE(other));
     PyObject *it = PyObject_GetIter(other);
     if (it == NULL) {
         return -1;
     }
 
     PyObject *key;
+    PyRegion_NotifyTypeUse(Py_TYPE(it));
     while ((key = PyIter_Next(it)) != NULL) {
         if (set_add_key(so, key)) {
-            Py_DECREF(it);
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(it);
+            PyRegion_CLEARLOCAL(key);
             return -1;
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
+        PyRegion_NotifyTypeUse(Py_TYPE(it));
     }
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     if (PyErr_Occurred())
         return -1;
     return 0;
@@ -1167,6 +1418,7 @@ make_new_set(PyTypeObject *type, PyObject *iterable)
 
     if (iterable != NULL) {
         if (set_update_local(so, iterable)) {
+            assert(PyRegion_IsLocal((PyObject *)so));  // so was freshly allocated in this frame.
             Py_DECREF(so);
             return NULL;
         }
@@ -1196,7 +1448,7 @@ make_new_frozenset(PyTypeObject *type, PyObject *iterable)
 
     if (iterable != NULL && PyFrozenSet_CheckExact(iterable)) {
         /* frozenset(f) is idempotent */
-        return Py_NewRef(iterable);
+        return PyRegion_NewRef(iterable);
     }
     return make_new_set(type, iterable);
 }
@@ -1248,18 +1500,72 @@ set_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 
      t=set(a); a.clear(); a.update(b); b.clear(); b.update(t); del t
 
-   The function always succeeds and it leaves both objects in a stable state.
-   Useful for operations that update in-place (by allowing an intermediate
-   result to be swapped into one of the original inputs).
+   The barrier preflight can fail, but the function otherwise leaves both
+   objects in a stable state.  The second set must be a freshly allocated local
+   temporary.  Useful for operations that update in-place (by allowing an
+   intermediate result to be swapped into one of the original inputs).
 */
 
-static void
+static int
 set_swap_bodies(PySetObject *a, PySetObject *b)
 {
+    PyObject **a_keys = NULL, **b_keys = NULL;
+    Py_ssize_t a_count = 0, b_count = 0;
+    int a_is_local = PyRegion_IsLocal((PyObject *)a);
+    int added_a_keys_for_b = 0;
+    int added_b_keys_for_a = 0;
+    int added_a_key_temps = 0;
+    int added_b_key_temps = 0;
+    int incref_b_key_temps = 0;
     Py_ssize_t t;
     setentry *u;
     setentry tab[PySet_MINSIZE];
     Py_hash_t h;
+
+    assert(PyRegion_IsLocal((PyObject *)b));  // b is a freshly allocated temporary set.
+
+    if (set_collect_keys(a, &a_keys, &a_count) < 0) {
+        return -1;
+    }
+    if (set_collect_keys(b, &b_keys, &b_count) < 0) {
+        PyMem_Free(a_keys);
+        return -1;
+    }
+
+    if (set_add_local_refs_array(a_keys, a_count) < 0) {
+        goto error;
+    }
+    added_a_keys_for_b = 1;
+
+    if (set_add_local_refs_array(a_keys, a_count) < 0) {
+        goto error;
+    }
+    added_a_key_temps = 1;
+
+    if (set_add_local_refs_array(b_keys, b_count) < 0) {
+        goto error;
+    }
+    added_b_key_temps = 1;
+
+    for (Py_ssize_t i = 0; i < b_count; i++) {
+        Py_INCREF(b_keys[i]);
+    }
+    incref_b_key_temps = 1;
+
+    if (a_is_local) {
+        if (set_add_local_refs_array(b_keys, b_count) < 0) {
+            goto error;
+        }
+        added_b_keys_for_a = 1;
+    }
+    else if (set_add_refs_array_except((PyObject *)a, b_keys, b_count,
+                                       a_keys, a_count)) {
+        goto error;
+    }
+
+    for (Py_ssize_t i = 0; i < a_count; i++) {
+        Py_INCREF(a_keys[i]);
+    }
 
     t = a->fill;     a->fill   = b->fill;        b->fill  = t;
     t = a->used;
@@ -1290,6 +1596,52 @@ set_swap_bodies(PySetObject *a, PySetObject *b)
         FT_ATOMIC_STORE_SSIZE_RELAXED(a->hash, -1);
         FT_ATOMIC_STORE_SSIZE_RELAXED(b->hash, -1);
     }
+
+    for (Py_ssize_t i = 0; i < a_count; i++) {
+        if (a_is_local) {
+            if (PyRegion_NeedsReadBarrier(a_keys[i])) {
+                PyRegion_RemoveLocalRef(a_keys[i]);
+            }
+        }
+        else {
+            if (!set_key_in_identity_array(b_keys, b_count, a_keys[i])) {
+                PyRegion_RemoveRef((PyObject *)a, a_keys[i]);
+            }
+        }
+        PyRegion_CLEARLOCAL(a_keys[i]);
+    }
+    for (Py_ssize_t i = 0; i < b_count; i++) {
+        if (PyRegion_NeedsReadBarrier(b_keys[i])) {
+            PyRegion_RemoveLocalRef(b_keys[i]);
+        }
+        PyRegion_CLEARLOCAL(b_keys[i]);
+    }
+    PyMem_Free(a_keys);
+    PyMem_Free(b_keys);
+    return 0;
+
+error:
+    if (added_b_keys_for_a) {
+        set_remove_local_refs_array(b_keys, b_count);
+    }
+    if (incref_b_key_temps) {
+        for (Py_ssize_t i = 0; i < b_count; i++) {
+            PyRegion_CLEARLOCAL(b_keys[i]);
+        }
+        added_b_key_temps = 0;
+    }
+    if (added_b_key_temps) {
+        set_remove_local_refs_array(b_keys, b_count);
+    }
+    if (added_a_key_temps) {
+        set_remove_local_refs_array(a_keys, a_count);
+    }
+    if (added_a_keys_for_b) {
+        set_remove_local_refs_array(a_keys, a_count);
+    }
+    PyMem_Free(a_keys);
+    PyMem_Free(b_keys);
+    return -1;
 }
 
 /*[clinic input]
@@ -1310,6 +1662,7 @@ set_copy_impl(PySetObject *so)
         return NULL;
     }
     if (set_merge_lock_held((PySetObject *)copy, (PyObject *)so) < 0) {
+        assert(PyRegion_IsLocal(copy));  // copy was freshly allocated in this frame.
         Py_DECREF(copy);
         return NULL;
     }
@@ -1329,7 +1682,7 @@ frozenset_copy_impl(PySetObject *so)
 /*[clinic end generated code: output=b356263526af9e70 input=fbf5bef131268dd7]*/
 {
     if (PyFrozenSet_CheckExact(so)) {
-        return Py_NewRef(so);
+        return PyRegion_NewRef((PyObject *)so);
     }
     return set_copy_impl(so);
 }
@@ -1380,6 +1733,7 @@ set_union_impl(PySetObject *so, PyObject * const *others,
         if ((PyObject *)so == other)
             continue;
         if (set_update_local(result, other)) {
+            assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
             Py_DECREF(result);
             return NULL;
         }
@@ -1403,6 +1757,7 @@ set_or(PyObject *self, PyObject *other)
         return (PyObject *)result;
     }
     if (set_update_local(result, other)) {
+        assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
         Py_DECREF(result);
         return NULL;
     }
@@ -1419,7 +1774,7 @@ set_ior(PyObject *self, PyObject *other)
     if (set_update_internal(so, other)) {
         return NULL;
     }
-    return Py_NewRef(so);
+    return PyRegion_NewRef((PyObject *)so);
 }
 
 static PyObject *
@@ -1450,32 +1805,43 @@ set_intersection(PySetObject *so, PyObject *other)
         while (set_next((PySetObject *)other, &pos, &entry)) {
             key = entry->key;
             hash = entry->hash;
+            if (PyRegion_AddLocalRef(key)) {
+                assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
+                Py_DECREF(result);
+                return NULL;
+            }
             Py_INCREF(key);
             rv = set_contains_entry(so, key, hash);
             if (rv < 0) {
+                assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
                 Py_DECREF(result);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return NULL;
             }
             if (rv) {
                 if (set_add_entry(result, key, hash)) {
+                    assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
                     Py_DECREF(result);
-                    Py_DECREF(key);
+                    PyRegion_CLEARLOCAL(key);
                     return NULL;
                 }
             }
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
         }
         return (PyObject *)result;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(other));
     it = PyObject_GetIter(other);
     if (it == NULL) {
+        assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
         Py_DECREF(result);
         return NULL;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(it));
     while ((key = PyIter_Next(it)) != NULL) {
+        PyRegion_NotifyTypeUse(Py_TYPE(key));
         hash = PyObject_Hash(key);
         if (hash == -1)
             goto error;
@@ -1486,22 +1852,25 @@ set_intersection(PySetObject *so, PyObject *other)
             if (set_add_entry(result, key, hash))
                 goto error;
             if (PySet_GET_SIZE(result) >= PySet_GET_SIZE(so)) {
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 break;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
+        PyRegion_NotifyTypeUse(Py_TYPE(it));
     }
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     if (PyErr_Occurred()) {
+        assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
         Py_DECREF(result);
         return NULL;
     }
     return (PyObject *)result;
   error:
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
+    assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
     Py_DECREF(result);
-    Py_DECREF(key);
+    PyRegion_CLEARLOCAL(key);
     return NULL;
 }
 
@@ -1524,7 +1893,12 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
         return set_copy((PyObject *)so, NULL);
     }
 
-    PyObject *result = Py_NewRef(so);
+    PyObject *result = (PyObject *)so;
+    if (PyRegion_AddLocalRef(result)) {
+        return NULL;
+    }
+    Py_INCREF(result);
+    int result_needs_local_clear = 1;
     for (i = 0; i < others_length; i++) {
         PyObject *other = others[i];
         PyObject *newresult;
@@ -1532,10 +1906,24 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
         newresult = set_intersection((PySetObject *)result, other);
         Py_END_CRITICAL_SECTION2();
         if (newresult == NULL) {
-            Py_DECREF(result);
+            if (result_needs_local_clear) {
+                PyRegion_CLEARLOCAL(result);
+            }
+            else {
+                assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
+                Py_DECREF(result);
+            }
             return NULL;
         }
-        Py_SETREF(result, newresult);
+        if (result_needs_local_clear) {
+            PyRegion_CLEARLOCAL(result);
+            result_needs_local_clear = 0;
+        }
+        else {
+            assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
+            Py_DECREF(result);
+        }
+        result = newresult;
     }
     return result;
 }
@@ -1548,7 +1936,12 @@ set_intersection_update(PySetObject *so, PyObject *other)
     tmp = set_intersection(so, other);
     if (tmp == NULL)
         return NULL;
-    set_swap_bodies(so, (PySetObject *)tmp);
+    if (set_swap_bodies(so, (PySetObject *)tmp) < 0) {
+        assert(PyRegion_IsLocal(tmp));  // tmp was freshly allocated in this frame.
+        Py_DECREF(tmp);
+        return NULL;
+    }
+    assert(PyRegion_IsLocal(tmp));  // tmp remains a local temporary after the swap.
     Py_DECREF(tmp);
     Py_RETURN_NONE;
 }
@@ -1567,13 +1960,20 @@ set_intersection_update_multi_impl(PySetObject *so, PyObject * const *others,
 /*[clinic end generated code: output=d768b5584675b48d input=782e422fc370e4fc]*/
 {
     PyObject *tmp;
+    int rv;
 
     tmp = set_intersection_multi_impl(so, others, others_length);
     if (tmp == NULL)
         return NULL;
     Py_BEGIN_CRITICAL_SECTION(so);
-    set_swap_bodies(so, (PySetObject *)tmp);
+    rv = set_swap_bodies(so, (PySetObject *)tmp);
     Py_END_CRITICAL_SECTION();
+    if (rv < 0) {
+        assert(PyRegion_IsLocal(tmp));  // tmp was freshly allocated in this frame.
+        Py_DECREF(tmp);
+        return NULL;
+    }
+    assert(PyRegion_IsLocal(tmp));  // tmp remains a local temporary after the swap.
     Py_DECREF(tmp);
     Py_RETURN_NONE;
 }
@@ -1608,8 +2008,9 @@ set_iand(PyObject *self, PyObject *other)
 
     if (result == NULL)
         return NULL;
+    assert(!PyRegion_NeedsReadBarrier(result));  // set_intersection_update returns the immutable None singleton.
     Py_DECREF(result);
-    return Py_NewRef(so);
+    return PyRegion_NewRef((PyObject *)so);
 }
 
 /*[clinic input]
@@ -1647,9 +2048,12 @@ set_isdisjoint_impl(PySetObject *so, PyObject *other)
         }
         while (set_next((PySetObject *)other, &pos, &entry)) {
             PyObject *key = entry->key;
+            if (PyRegion_AddLocalRef(key)) {
+                return NULL;
+            }
             Py_INCREF(key);
             rv = set_contains_entry(so, key, entry->hash);
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
             if (rv < 0) {
                 return NULL;
             }
@@ -1660,23 +2064,26 @@ set_isdisjoint_impl(PySetObject *so, PyObject *other)
         Py_RETURN_TRUE;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(other));
     it = PyObject_GetIter(other);
     if (it == NULL)
         return NULL;
 
+    PyRegion_NotifyTypeUse(Py_TYPE(it));
     while ((key = PyIter_Next(it)) != NULL) {
         rv = set_contains_key(so, key);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         if (rv < 0) {
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             return NULL;
         }
         if (rv) {
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             Py_RETURN_FALSE;
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(it));
     }
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     if (PyErr_Occurred())
         return NULL;
     Py_RETURN_TRUE;
@@ -1694,6 +2101,7 @@ set_difference_update_internal(PySetObject *so, PyObject *other)
     if (PyAnySet_Check(other)) {
         setentry *entry;
         Py_ssize_t pos = 0;
+        int other_is_temp = 0;
 
         /* Optimization:  When the other set is more than 8 times
            larger than the base set, replace the other set with
@@ -1703,37 +2111,66 @@ set_difference_update_internal(PySetObject *so, PyObject *other)
             other = set_intersection(so, other);
             if (other == NULL)
                 return -1;
+            other_is_temp = 1;
         } else {
+            if (PyRegion_AddLocalRef(other)) {
+                return -1;
+            }
             Py_INCREF(other);
         }
 
         while (set_next((PySetObject *)other, &pos, &entry)) {
             PyObject *key = entry->key;
-            Py_INCREF(key);
-            if (set_discard_entry(so, key, entry->hash) < 0) {
-                Py_DECREF(other);
-                Py_DECREF(key);
+            if (PyRegion_AddLocalRef(key)) {
+                if (other_is_temp) {
+                    assert(PyRegion_IsLocal(other));  // other was freshly allocated in this frame.
+                    Py_DECREF(other);
+                }
+                else {
+                    PyRegion_CLEARLOCAL(other);
+                }
                 return -1;
             }
-            Py_DECREF(key);
+            Py_INCREF(key);
+            if (set_discard_entry(so, key, entry->hash) < 0) {
+                if (other_is_temp) {
+                    assert(PyRegion_IsLocal(other));  // other was freshly allocated in this frame.
+                    Py_DECREF(other);
+                }
+                else {
+                    PyRegion_CLEARLOCAL(other);
+                }
+                PyRegion_CLEARLOCAL(key);
+                return -1;
+            }
+            PyRegion_CLEARLOCAL(key);
         }
 
-        Py_DECREF(other);
+        if (other_is_temp) {
+            assert(PyRegion_IsLocal(other));  // other was freshly allocated in this frame.
+            Py_DECREF(other);
+        }
+        else {
+            PyRegion_CLEARLOCAL(other);
+        }
     } else {
         PyObject *key, *it;
+        PyRegion_NotifyTypeUse(Py_TYPE(other));
         it = PyObject_GetIter(other);
         if (it == NULL)
             return -1;
 
+        PyRegion_NotifyTypeUse(Py_TYPE(it));
         while ((key = PyIter_Next(it)) != NULL) {
             if (set_discard_key(so, key) < 0) {
-                Py_DECREF(it);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(it);
+                PyRegion_CLEARLOCAL(key);
                 return -1;
             }
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
+            PyRegion_NotifyTypeUse(Py_TYPE(it));
         }
-        Py_DECREF(it);
+        PyRegion_CLEARLOCAL(it);
         if (PyErr_Occurred())
             return -1;
     }
@@ -1781,6 +2218,7 @@ set_copy_and_difference(PySetObject *so, PyObject *other)
         return NULL;
     if (set_difference_update_internal((PySetObject *) result, other) == 0)
         return result;
+    assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
     Py_DECREF(result);
     return NULL;
 }
@@ -1819,21 +2257,30 @@ set_difference(PySetObject *so, PyObject *other)
         while (set_next(so, &pos, &entry)) {
             key = entry->key;
             hash = entry->hash;
+            if (PyRegion_AddLocalRef(key)) {
+                assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
+                Py_DECREF(result);
+                return NULL;
+            }
             Py_INCREF(key);
+            PyRegion_NotifyTypeUse(Py_TYPE(key));
+            PyRegion_NotifyTypeUse(Py_TYPE(other));
             rv = _PyDict_Contains_KnownHash(other, key, hash);
             if (rv < 0) {
+                assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
                 Py_DECREF(result);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return NULL;
             }
             if (!rv) {
                 if (set_add_entry((PySetObject *)result, key, hash)) {
+                    assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
                     Py_DECREF(result);
-                    Py_DECREF(key);
+                    PyRegion_CLEARLOCAL(key);
                     return NULL;
                 }
             }
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
         }
         return result;
     }
@@ -1842,21 +2289,28 @@ set_difference(PySetObject *so, PyObject *other)
     while (set_next(so, &pos, &entry)) {
         key = entry->key;
         hash = entry->hash;
+        if (PyRegion_AddLocalRef(key)) {
+            assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
+            Py_DECREF(result);
+            return NULL;
+        }
         Py_INCREF(key);
         rv = set_contains_entry((PySetObject *)other, key, hash);
         if (rv < 0) {
+            assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
             Py_DECREF(result);
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
             return NULL;
         }
         if (!rv) {
             if (set_add_entry((PySetObject *)result, key, hash)) {
+                assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
                 Py_DECREF(result);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return NULL;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
     return result;
 }
@@ -1895,6 +2349,7 @@ set_difference_multi_impl(PySetObject *so, PyObject * const *others,
         rv = set_difference_update_internal((PySetObject *)result, other);
         Py_END_CRITICAL_SECTION();
         if (rv) {
+            assert(PyRegion_IsLocal(result));  // result was freshly allocated in this frame.
             Py_DECREF(result);
             return NULL;
         }
@@ -1930,7 +2385,7 @@ set_isub(PyObject *self, PyObject *other)
     if (rv < 0) {
         return NULL;
     }
-    return Py_NewRef(so);
+    return PyRegion_NewRef((PyObject *)so);
 }
 
 static int
@@ -1943,19 +2398,22 @@ set_symmetric_difference_update_dict(PySetObject *so, PyObject *other)
     PyObject *key, *value;
     Py_hash_t hash;
     while (_PyDict_Next(other, &pos, &key, &value, &hash)) {
+        if (PyRegion_AddLocalRef(key)) {
+            return -1;
+        }
         Py_INCREF(key);
         int rv = set_discard_entry(so, key, hash);
         if (rv < 0) {
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
             return -1;
         }
         if (rv == DISCARD_NOTFOUND) {
             if (set_add_entry(so, key, hash)) {
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return -1;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
     return 0;
 }
@@ -1969,20 +2427,23 @@ set_symmetric_difference_update_set(PySetObject *so, PySetObject *other)
     Py_ssize_t pos = 0;
     setentry *entry;
     while (set_next(other, &pos, &entry)) {
+        if (PyRegion_AddLocalRef(entry->key)) {
+            return -1;
+        }
         PyObject *key = Py_NewRef(entry->key);
         Py_hash_t hash = entry->hash;
         int rv = set_discard_entry(so, key, hash);
         if (rv < 0) {
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
             return -1;
         }
         if (rv == DISCARD_NOTFOUND) {
             if (set_add_entry(so, key, hash)) {
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return -1;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
     return 0;
 }
@@ -2026,6 +2487,7 @@ set_symmetric_difference_update_impl(PySetObject *so, PyObject *other)
         rv = set_symmetric_difference_update_set(so, otherset);
         Py_END_CRITICAL_SECTION();
 
+        assert(PyRegion_IsLocal((PyObject *)otherset));  // otherset was freshly allocated in this frame.
         Py_DECREF(otherset);
     }
     if (rv < 0) {
@@ -2053,10 +2515,12 @@ set_symmetric_difference_impl(PySetObject *so, PyObject *other)
         return NULL;
     }
     if (set_update_lock_held(result, other) < 0) {
+        assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
         Py_DECREF(result);
         return NULL;
     }
     if (set_symmetric_difference_update_set(result, so) < 0) {
+        assert(PyRegion_IsLocal((PyObject *)result));  // result was freshly allocated in this frame.
         Py_DECREF(result);
         return NULL;
     }
@@ -2084,8 +2548,9 @@ set_ixor(PyObject *self, PyObject *other)
     result = set_symmetric_difference_update((PyObject*)so, other);
     if (result == NULL)
         return NULL;
+    assert(!PyRegion_NeedsReadBarrier(result));  // set_symmetric_difference_update returns the immutable None singleton.
     Py_DECREF(result);
-    return Py_NewRef(so);
+    return PyRegion_NewRef((PyObject *)so);
 }
 
 /*[clinic input]
@@ -2112,6 +2577,7 @@ set_issubset_impl(PySetObject *so, PyObject *other)
             return NULL;
         }
         int result = (PySet_GET_SIZE(tmp) == PySet_GET_SIZE(so));
+        assert(PyRegion_IsLocal(tmp));  // tmp was freshly allocated in this frame.
         Py_DECREF(tmp);
         return PyBool_FromLong(result);
     }
@@ -2120,9 +2586,12 @@ set_issubset_impl(PySetObject *so, PyObject *other)
 
     while (set_next(so, &pos, &entry)) {
         PyObject *key = entry->key;
+        if (PyRegion_AddLocalRef(key)) {
+            return NULL;
+        }
         Py_INCREF(key);
         rv = set_contains_entry((PySetObject *)other, key, entry->hash);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         if (rv < 0) {
             return NULL;
         }
@@ -2151,23 +2620,26 @@ set_issuperset_impl(PySetObject *so, PyObject *other)
         return set_issubset(other, (PyObject *)so);
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(other));
     PyObject *key, *it = PyObject_GetIter(other);
     if (it == NULL) {
         return NULL;
     }
+    PyRegion_NotifyTypeUse(Py_TYPE(it));
     while ((key = PyIter_Next(it)) != NULL) {
         int rv = set_contains_key(so, key);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         if (rv < 0) {
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             return NULL;
         }
         if (!rv) {
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(it);
             Py_RETURN_FALSE;
         }
+        PyRegion_NotifyTypeUse(Py_TYPE(it));
     }
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     if (PyErr_Occurred()) {
         return NULL;
     }
@@ -2198,6 +2670,7 @@ set_richcompare(PyObject *self, PyObject *w, int op)
         if (r1 == NULL)
             return NULL;
         r2 = PyObject_IsTrue(r1);
+        assert(!PyRegion_NeedsReadBarrier(r1));  // recursive equality returns the immutable bool singleton.
         Py_DECREF(r1);
         if (r2 < 0)
             return NULL;
@@ -2425,21 +2898,46 @@ set___reduce___impl(PySetObject *so)
 /*[clinic end generated code: output=9af7d0e029df87ee input=59405a4249e82f71]*/
 {
     PyObject *keys=NULL, *args=NULL, *result=NULL, *state=NULL;
+    int state_has_local_ref = 0;
 
+    PyRegion_NotifyTypeUse(Py_TYPE(so));
     keys = PySequence_List((PyObject *)so);
     if (keys == NULL)
         goto done;
     args = PyTuple_Pack(1, keys);
     if (args == NULL)
         goto done;
+    PyRegion_NotifyTypeUse(Py_TYPE(so));
     state = _PyObject_GetState((PyObject *)so);
     if (state == NULL)
         goto done;
+    if (PyRegion_NeedsReadBarrier(state)) {
+        if (PyRegion_AddLocalRef(state)) {
+            Py_DECREF(state);
+            state = NULL;
+            goto done;
+        }
+        state_has_local_ref = 1;
+    }
     result = PyTuple_Pack(3, Py_TYPE(so), args, state);
 done:
-    Py_XDECREF(args);
-    Py_XDECREF(keys);
-    Py_XDECREF(state);
+    if (args != NULL) {
+        assert(PyRegion_IsLocal(args));  // args was freshly allocated in this frame.
+        Py_DECREF(args);
+    }
+    if (keys != NULL) {
+        assert(PyRegion_IsLocal(keys));  // keys was freshly allocated in this frame.
+        Py_DECREF(keys);
+    }
+    if (state != NULL) {
+        if (state_has_local_ref) {
+            PyRegion_CLEARLOCAL(state);
+        }
+        else {
+            assert(!PyRegion_NeedsReadBarrier(state));  // state is local or immutable when no borrow was established.
+            Py_DECREF(state);
+        }
+    }
     return result;
 }
 
@@ -2635,6 +3133,7 @@ PyTypeObject PySet_Type = {
     .tp_vectorcall = set_vectorcall,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_version_tag = _Py_TYPE_VERSION_SET,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /* frozenset object ********************************************************/
@@ -2727,6 +3226,7 @@ PyTypeObject PyFrozenSet_Type = {
     .tp_vectorcall = frozenset_vectorcall,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_version_tag = _Py_TYPE_VERSION_FROZEN_SET,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
@@ -2867,7 +3367,11 @@ _PySet_NextEntryRef(PyObject *set, Py_ssize_t *pos, PyObject **key, Py_hash_t *h
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(set);
     if (set_next((PySetObject *)set, pos, &entry) == 0)
         return 0;
-    *key = Py_NewRef(entry->key);
+    PyObject *item = PyRegion_NewRef(entry->key);
+    if (item == NULL) {
+        return -1;
+    }
+    *key = item;
     *hash = entry->hash;
     return 1;
 }
