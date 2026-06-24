@@ -109,6 +109,7 @@ _PyByteArray_FromBufferObject(PyObject *obj)
     PyObject *result;
     Py_buffer view;
 
+    PyRegion_NotifyTypeUse(Py_TYPE(obj));
     if (PyObject_GetBuffer(obj, &view, PyBUF_FULL_RO) < 0) {
         return NULL;
     }
@@ -117,6 +118,7 @@ _PyByteArray_FromBufferObject(PyObject *obj)
         PyBuffer_ToContiguous(PyByteArray_AS_STRING(result),
                               &view, view.len, 'C') < 0)
     {
+        assert(!PyRegion_NeedsReadBarrier(result));  // result is a bytearray created in this frame
         Py_CLEAR(result);
     }
     PyBuffer_Release(&view);
@@ -152,6 +154,7 @@ PyByteArray_FromStringAndSize(const char *bytes, Py_ssize_t size)
         alloc = size + 1;
         new->ob_bytes = PyMem_Malloc(alloc);
         if (new->ob_bytes == NULL) {
+            assert(!PyRegion_NeedsReadBarrier(new));  // new bytearray was created in this frame
             Py_DECREF(new);
             return PyErr_NoMemory();
         }
@@ -288,8 +291,14 @@ PyByteArray_Concat(PyObject *a, PyObject *b)
 
     va.len = -1;
     vb.len = -1;
-    if (PyObject_GetBuffer(a, &va, PyBUF_SIMPLE) != 0 ||
-        PyObject_GetBuffer(b, &vb, PyBUF_SIMPLE) != 0) {
+    PyRegion_NotifyTypeUse(Py_TYPE(a));
+    if (PyObject_GetBuffer(a, &va, PyBUF_SIMPLE) != 0) {
+            PyErr_Format(PyExc_TypeError, "can't concat %.100s to %.100s",
+                         Py_TYPE(b)->tp_name, Py_TYPE(a)->tp_name);
+            goto done;
+    }
+    PyRegion_NotifyTypeUse(Py_TYPE(b));
+    if (PyObject_GetBuffer(b, &vb, PyBUF_SIMPLE) != 0) {
             PyErr_Format(PyExc_TypeError, "can't concat %.100s to %.100s",
                          Py_TYPE(b)->tp_name, Py_TYPE(a)->tp_name);
             goto done;
@@ -332,6 +341,7 @@ bytearray_iconcat_lock_held(PyObject *op, PyObject *other)
     PyByteArrayObject *self = _PyByteArray_CAST(op);
 
     Py_buffer vo;
+    PyRegion_NotifyTypeUse(Py_TYPE(other));
     if (PyObject_GetBuffer(other, &vo, PyBUF_SIMPLE) != 0) {
         PyErr_Format(PyExc_TypeError, "can't concat %.100s to %.100s",
                      Py_TYPE(other)->tp_name, Py_TYPE(self)->tp_name);
@@ -351,7 +361,7 @@ bytearray_iconcat_lock_held(PyObject *op, PyObject *other)
 
     memcpy(PyByteArray_AS_STRING(self) + size, vo.buf, vo.len);
     PyBuffer_Release(&vo);
-    return Py_NewRef(self);
+    return PyRegion_NewRef(self);
 }
 
 static PyObject *
@@ -405,7 +415,7 @@ bytearray_irepeat_lock_held(PyObject *op, Py_ssize_t count)
         count = 0;
     }
     else if (count == 1) {
-        return Py_NewRef(self);
+        return PyRegion_NewRef(self);
     }
 
     const Py_ssize_t mysize = Py_SIZE(self);
@@ -420,7 +430,7 @@ bytearray_irepeat_lock_held(PyObject *op, Py_ssize_t count)
     char* buf = PyByteArray_AS_STRING(self);
     _PyBytes_Repeat(buf, size, buf, mysize);
 
-    return Py_NewRef(self);
+    return PyRegion_NewRef(self);
 }
 
 static PyObject *
@@ -630,6 +640,7 @@ bytearray_setslice(PyByteArrayObject *self, Py_ssize_t lo, Py_ssize_t hi,
         if (values == NULL)
             return -1;
         err = bytearray_setslice(self, lo, hi, values);
+        assert(!PyRegion_NeedsReadBarrier(values));  // values is a bytearray copy created in this frame
         Py_DECREF(values);
         return err;
     }
@@ -639,6 +650,7 @@ bytearray_setslice(PyByteArrayObject *self, Py_ssize_t lo, Py_ssize_t hi,
         needed = 0;
     }
     else {
+        PyRegion_NotifyTypeUse(Py_TYPE(values));
         if (PyObject_GetBuffer(values, &vbytes, PyBUF_SIMPLE) != 0) {
             PyErr_Format(PyExc_TypeError,
                          "can't set bytearray slice from %.100s",
@@ -783,6 +795,7 @@ bytearray_ass_subscript_lock_held(PyObject *op, PyObject *index, PyObject *value
         if (values == NULL)
             return -1;
         err = bytearray_ass_subscript_lock_held((PyObject*)self, index, values);
+        assert(!PyRegion_NeedsReadBarrier(values));  // values is a bytearray copy created in this frame
         Py_DECREF(values);
         return err;
     }
@@ -930,10 +943,11 @@ bytearray___init___impl(PyByteArrayObject *self, PyObject *arg,
             return -1;
         assert(PyBytes_Check(encoded));
         new = bytearray_iconcat((PyObject*)self, encoded);
+        assert(!PyRegion_NeedsReadBarrier(encoded));  // encoded is freshly created here with no path into a region
         Py_DECREF(encoded);
         if (new == NULL)
             return -1;
-        Py_DECREF(new);
+        PyRegion_CLEARLOCAL(new);
         return 0;
     }
 
@@ -972,6 +986,7 @@ bytearray___init___impl(PyByteArrayObject *self, PyObject *arg,
     if (PyObject_CheckBuffer(arg)) {
         Py_ssize_t size;
         Py_buffer view;
+        PyRegion_NotifyTypeUse(Py_TYPE(arg));
         if (PyObject_GetBuffer(arg, &view, PyBUF_FULL_RO) < 0)
             return -1;
         size = view.len;
@@ -1014,6 +1029,7 @@ bytearray___init___impl(PyByteArrayObject *self, PyObject *arg,
     }
 slowpath:
     /* Get the iterator */
+    PyRegion_NotifyTypeUse(Py_TYPE(arg));
     it = PyObject_GetIter(arg);
     if (it == NULL) {
         if (PyErr_ExceptionMatches(PyExc_TypeError)) {
@@ -1021,6 +1037,10 @@ slowpath:
                          "cannot convert '%.200s' object to bytearray",
                          Py_TYPE(arg)->tp_name);
         }
+        return -1;
+    }
+    if (PyRegion_AddLocalRef(it)) {
+        Py_DECREF(it);
         return -1;
     }
     iternext = *Py_TYPE(it)->tp_iternext;
@@ -1031,6 +1051,7 @@ slowpath:
         int rc, value;
 
         /* Get the next item */
+        PyRegion_NotifyTypeUse(Py_TYPE(it));
         item = iternext(it);
         if (item == NULL) {
             if (PyErr_Occurred()) {
@@ -1040,10 +1061,14 @@ slowpath:
             }
             break;
         }
+        if (PyRegion_AddLocalRef(item)) {
+            Py_DECREF(item);
+            goto error;
+        }
 
         /* Interpret it as an int (__index__) */
         rc = _getbytevalue(item, &value);
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
         if (!rc)
             goto error;
 
@@ -1058,12 +1083,12 @@ slowpath:
     }
 
     /* Clean up and return success */
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return 0;
 
  error:
     /* Error handling when it != NULL */
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     return -1;
 }
 
@@ -1079,6 +1104,7 @@ bytearray_repr_lock_held(PyObject *op)
         return NULL;
     }
     PyObject *res = PyUnicode_FromFormat("%s(%U)", className, bytes_repr);
+    assert(!PyRegion_NeedsReadBarrier(bytes_repr));  // bytes_repr is freshly created here with no path into a region
     Py_DECREF(bytes_repr);
     return res;
 }
@@ -1124,12 +1150,14 @@ bytearray_richcompare(PyObject *self, PyObject *other, int op)
     }
 
     /* Bytearrays can be compared to anything that supports the buffer API. */
+    PyRegion_NotifyTypeUse(Py_TYPE(self));
     if (PyObject_GetBuffer(self, &self_bytes, PyBUF_SIMPLE) != 0) {
         PyErr_Clear();
         Py_RETURN_NOTIMPLEMENTED;
     }
     self_size = self_bytes.len;
 
+    PyRegion_NotifyTypeUse(Py_TYPE(other));
     if (PyObject_GetBuffer(other, &other_bytes, PyBUF_SIMPLE) != 0) {
         PyErr_Clear();
         PyBuffer_Release(&self_bytes);
@@ -1524,7 +1552,8 @@ bytearray_translate_impl(PyByteArrayObject *self, PyObject *table,
     if (table == Py_None) {
         table_chars = NULL;
         table = NULL;
-    } else if (PyObject_GetBuffer(table, &vtable, PyBUF_SIMPLE) != 0) {
+    } else if (PyRegion_NotifyTypeUse(Py_TYPE(table)),
+               PyObject_GetBuffer(table, &vtable, PyBUF_SIMPLE) != 0) {
         return NULL;
     } else {
         if (vtable.len != 256) {
@@ -1537,6 +1566,7 @@ bytearray_translate_impl(PyByteArrayObject *self, PyObject *table,
     }
 
     if (deletechars != NULL) {
+        PyRegion_NotifyTypeUse(Py_TYPE(deletechars));
         if (PyObject_GetBuffer(deletechars, &vdel, PyBUF_SIMPLE) != 0) {
             if (table != NULL)
                 PyBuffer_Release(&vtable);
@@ -1583,6 +1613,7 @@ bytearray_translate_impl(PyByteArrayObject *self, PyObject *table,
     /* Fix the size of the resulting bytearray */
     if (inlen > 0)
         if (PyByteArray_Resize(result, output - output_start) < 0) {
+            assert(!PyRegion_NeedsReadBarrier(result));  // result is a bytearray created in this frame
             Py_CLEAR(result);
             goto done;
         }
@@ -1683,6 +1714,7 @@ bytearray_split_impl(PyByteArrayObject *self, PyObject *sep,
     if (sep == Py_None)
         return stringlib_split_whitespace((PyObject*) self, s, len, maxsplit);
 
+    PyRegion_NotifyTypeUse(Py_TYPE(sep));
     if (PyObject_GetBuffer(sep, &vsub, PyBUF_SIMPLE) != 0)
         return NULL;
     sub = vsub.buf;
@@ -1730,6 +1762,7 @@ bytearray_partition_impl(PyByteArrayObject *self, PyObject *sep)
             PyByteArray_AS_STRING(bytesep), PyByteArray_GET_SIZE(bytesep)
             );
 
+    assert(!PyRegion_NeedsReadBarrier(bytesep));  // bytesep is a bytearray created in this frame
     Py_DECREF(bytesep);
     return result;
 }
@@ -1770,6 +1803,7 @@ bytearray_rpartition_impl(PyByteArrayObject *self, PyObject *sep)
             PyByteArray_AS_STRING(bytesep), PyByteArray_GET_SIZE(bytesep)
             );
 
+    assert(!PyRegion_NeedsReadBarrier(bytesep));  // bytesep is a bytearray created in this frame
     Py_DECREF(bytesep);
     return result;
 }
@@ -1801,6 +1835,7 @@ bytearray_rsplit_impl(PyByteArrayObject *self, PyObject *sep,
     if (sep == Py_None)
         return stringlib_rsplit_whitespace((PyObject*) self, s, len, maxsplit);
 
+    PyRegion_NotifyTypeUse(Py_TYPE(sep));
     if (PyObject_GetBuffer(sep, &vsub, PyBUF_SIMPLE) != 0)
         return NULL;
     sub = vsub.buf;
@@ -2059,6 +2094,7 @@ bytearray_extend_impl(PyByteArrayObject *self, PyObject *iterable_of_ints)
         Py_RETURN_NONE;
     }
 
+    PyRegion_NotifyTypeUse(Py_TYPE(iterable_of_ints));
     it = PyObject_GetIter(iterable_of_ints);
     if (it == NULL) {
         if (PyErr_ExceptionMatches(PyExc_TypeError)) {
@@ -2068,39 +2104,52 @@ bytearray_extend_impl(PyByteArrayObject *self, PyObject *iterable_of_ints)
         }
         return NULL;
     }
+    if (PyRegion_AddLocalRef(it)) {
+        Py_DECREF(it);
+        return NULL;
+    }
 
     /* Try to determine the length of the argument. 32 is arbitrary. */
     buf_size = PyObject_LengthHint(iterable_of_ints, 32);
     if (buf_size == -1) {
-        Py_DECREF(it);
+        PyRegion_CLEARLOCAL(it);
         return NULL;
     }
 
     bytearray_obj = PyByteArray_FromStringAndSize(NULL, buf_size);
     if (bytearray_obj == NULL) {
-        Py_DECREF(it);
+        PyRegion_CLEARLOCAL(it);
         return NULL;
     }
     buf = PyByteArray_AS_STRING(bytearray_obj);
 
-    while ((item = PyIter_Next(it)) != NULL) {
+    while ((PyRegion_NotifyTypeUse(Py_TYPE(it)), item = PyIter_Next(it)) != NULL) {
+        if (PyRegion_AddLocalRef(item)) {
+            Py_DECREF(item);
+            PyRegion_CLEARLOCAL(it);
+            assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
+            Py_DECREF(bytearray_obj);
+            return NULL;
+        }
         if (! _getbytevalue(item, &value)) {
             if (PyErr_ExceptionMatches(PyExc_TypeError) && PyUnicode_Check(iterable_of_ints)) {
                 PyErr_Format(PyExc_TypeError,
                              "expected iterable of integers; got: 'str'");
             }
-            Py_DECREF(item);
-            Py_DECREF(it);
+            PyRegion_CLEARLOCAL(item);
+            PyRegion_CLEARLOCAL(it);
+            assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
             Py_DECREF(bytearray_obj);
             return NULL;
         }
         buf[len++] = value;
-        Py_DECREF(item);
+        PyRegion_CLEARLOCAL(item);
 
         if (len >= buf_size) {
             Py_ssize_t addition;
             if (len == PY_SSIZE_T_MAX) {
-                Py_DECREF(it);
+                PyRegion_CLEARLOCAL(it);
+                assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
                 Py_DECREF(bytearray_obj);
                 return PyErr_NoMemory();
             }
@@ -2110,7 +2159,8 @@ bytearray_extend_impl(PyByteArrayObject *self, PyObject *iterable_of_ints)
             else
                 buf_size = len + addition + 1;
             if (bytearray_resize_lock_held((PyObject *)bytearray_obj, buf_size) < 0) {
-                Py_DECREF(it);
+                PyRegion_CLEARLOCAL(it);
+                assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
                 Py_DECREF(bytearray_obj);
                 return NULL;
             }
@@ -2119,23 +2169,27 @@ bytearray_extend_impl(PyByteArrayObject *self, PyObject *iterable_of_ints)
             buf = PyByteArray_AS_STRING(bytearray_obj);
         }
     }
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
 
     if (PyErr_Occurred()) {
+        assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
         Py_DECREF(bytearray_obj);
         return NULL;
     }
 
     /* Resize down to exact size. */
     if (bytearray_resize_lock_held((PyObject *)bytearray_obj, len) < 0) {
+        assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
         Py_DECREF(bytearray_obj);
         return NULL;
     }
 
     if (bytearray_setslice(self, Py_SIZE(self), Py_SIZE(self), bytearray_obj) == -1) {
+        assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
         Py_DECREF(bytearray_obj);
         return NULL;
     }
+    assert(!PyRegion_NeedsReadBarrier(bytearray_obj));  // bytearray_obj is created in this frame
     Py_DECREF(bytearray_obj);
 
     assert(!PyErr_Occurred());
@@ -2237,6 +2291,7 @@ bytearray_strip_impl_helper(PyByteArrayObject* self, PyObject* bytes, int stript
         byteslen = 6;
     }
     else {
+        PyRegion_NotifyTypeUse(Py_TYPE(bytes));
         if (PyObject_GetBuffer(bytes, &vbytes, PyBUF_SIMPLE) != 0)
             return NULL;
         bytesptr = (const char*)vbytes.buf;
@@ -2496,7 +2551,18 @@ bytearray_fromhex_impl(PyTypeObject *type, PyObject *string)
 {
     PyObject *result = _PyBytes_FromHex(string, type == &PyByteArray_Type);
     if (type != &PyByteArray_Type && result != NULL) {
-        Py_SETREF(result, PyObject_CallOneArg((PyObject *)type, result));
+        PyRegion_NotifyTypeUse(type);
+        PyObject *new_result = PyObject_CallOneArg((PyObject *)type, result);
+        assert(!PyRegion_NeedsReadBarrier(result));  // result is an immutable bytes object
+        Py_DECREF(result);
+        if (new_result == NULL) {
+            return NULL;
+        }
+        if (PyRegion_AddLocalRef(new_result)) {
+            Py_DECREF(new_result);
+            return NULL;
+        }
+        result = new_result;
     }
     return result;
 }
@@ -2699,6 +2765,7 @@ bytearray_mod_lock_held(PyObject *v, PyObject *w)
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(v);
     if (!PyByteArray_Check(v))
         Py_RETURN_NOTIMPLEMENTED;
+    PyRegion_NotifyTypeUse(Py_TYPE(w));
     return _PyBytes_FormatEx(PyByteArray_AS_STRING(v), PyByteArray_GET_SIZE(v), w, 1);
 }
 
@@ -2786,6 +2853,7 @@ PyTypeObject PyByteArray_Type = {
     PyObject_Free,                      /* tp_free */
     .tp_reachable = _PyObject_ReachableVisitType,
     .tp_version_tag = _Py_TYPE_VERSION_BYTEARRAY,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /*********************** Bytearray Iterator ****************************/
@@ -2803,7 +2871,7 @@ bytearrayiter_dealloc(PyObject *self)
 {
     bytesiterobject *it = _bytesiterobject_CAST(self);
     _PyObject_GC_UNTRACK(it);
-    Py_XDECREF(it->it_seq);
+    PyRegion_CLEAR(it, it->it_seq);
     PyObject_GC_Del(it);
 }
 
@@ -2841,7 +2909,7 @@ bytearrayiter_next(PyObject *self)
     if (val == -1) {
         FT_ATOMIC_STORE_SSIZE_RELAXED(it->it_index, -1);
 #ifndef Py_GIL_DISABLED
-        Py_CLEAR(it->it_seq);
+        PyRegion_CLEAR(it, it->it_seq);
 #endif
         return NULL;
     }
@@ -2951,6 +3019,7 @@ PyTypeObject PyByteArrayIter_Type = {
     bytearrayiter_methods,             /* tp_methods */
     0,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyObject *
@@ -2966,6 +3035,10 @@ bytearray_iter(PyObject *seq)
     if (it == NULL)
         return NULL;
     it->it_index = 0;  // -1 indicates exhausted
+    if (PyRegion_AddRef(it, seq)) {
+        PyObject_GC_Del(it);
+        return NULL;
+    }
     it->it_seq = (PyByteArrayObject *)Py_NewRef(seq);
     _PyObject_GC_TRACK(it);
     return (PyObject *)it;
