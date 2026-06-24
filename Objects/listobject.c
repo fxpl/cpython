@@ -505,8 +505,10 @@ ins1(PyListObject *self, Py_ssize_t where, PyObject *v)
     assert((size_t)n + 1 < PY_SSIZE_T_MAX);
     if (list_resize(self, n+1) < 0)
         return -1;
-    if (PyRegion_AddRef(self, v))
+    if (PyRegion_AddRef(self, v)) {
+        Py_SET_SIZE(self, n);
         return -1;
+    }
 
     if (where < 0) {
         where += n;
@@ -557,6 +559,7 @@ _PyList_AppendTakeRefListResize(PyListObject *self, PyObject *newitem)
     if (PyRegion_TakeRef(self, newitem)) {
         PyRegion_RemoveLocalRef(newitem);
         Py_DECREF(newitem);
+        Py_SET_SIZE(self, len);
         return -1;
     }
     FT_ATOMIC_STORE_PTR_RELEASE(self->ob_item[len], newitem);
@@ -892,16 +895,31 @@ list_repeat_lock_held(PyListObject *a, Py_ssize_t n)
         PyObject *elem = a->ob_item[0];
         _Py_RefcntAdd(elem, n);
         PyObject **dest_end = dest + output_size;
+        assert(PyRegion_IsLocal(np));
         while (dest < dest_end) {
+            // Regions: It is safe to do this operation after RC update since
+            // this just bumps the LRC
+            PyRegion_AddLocalRef(elem);
             *dest++ = elem;
         }
     }
     else {
+        int nonlocal = 0;
         PyObject **src = a->ob_item;
         PyObject **src_end = src + input_size;
         while (src < src_end) {
+            nonlocal |= !PyRegion_IsLocal(*src);
             _Py_RefcntAdd(*src, n);
             *dest++ = *src++;
+        }
+        // Regions: We only do this step it an owned value is in the list
+        if (nonlocal) {
+            for (int i = 0; i < n; i++) {
+                // Regions: This will always succeed, since np is local
+                int res = PyRegion_AddRefsArray(np, input_size, a->ob_item);
+                assert(res == 0);
+                (void)res;
+            }
         }
         // TODO: _Py_memory_repeat calls are not safe for shared lists in
         // GIL_DISABLED builds. (See issue #129069)
@@ -1018,8 +1036,7 @@ list_ass_slice_lock_held(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh, PyO
     assert(norig >= 0);
     d = n - norig;
     if (Py_SIZE(a) + d == 0) {
-        PyRegion_RemoveLocalRef(v_as_SF);
-        Py_XDECREF(v_as_SF);
+        PyRegion_CLEARLOCAL(v_as_SF);
         list_clear(a);
         return 0;
     }
@@ -1061,23 +1078,31 @@ list_ass_slice_lock_held(PyListObject *a, Py_ssize_t ilow, Py_ssize_t ihigh, PyO
         memmove(&item[ihigh+d], &item[ihigh],
             (k - ihigh)*sizeof(PyObject *));
     }
-    for (k = 0; k < n; k++, ilow++) {
-        PyObject *w = vitem[k];
-        // FIXME(regions): This doesn't undo the previous loops
-        if (PyRegion_AddRef(a, w))
+    if (n > 0) {
+        if (PyRegion_AddRefsArray(a, (int)n, vitem)) {
+            // TODO(regions): Error handling, this is wrong, since it doesn't undo
+            // the `d < 0` case. This may needs to be moved earlier
+            if (d > 0) {
+                /* Undo the memmove and size growth from the d > 0 branch. */
+                memmove(&item[ihigh], &item[ihigh+d],
+                        (k - ihigh)*sizeof(PyObject *));
+                Py_SET_SIZE(a, k);
+            }
             goto Error;
-        FT_ATOMIC_STORE_PTR_RELEASE(item[ilow], Py_XNewRef(w));
+        }
+    }
+    for (k = 0; k < n; k++, ilow++) {
+        FT_ATOMIC_STORE_PTR_RELEASE(item[ilow], Py_XNewRef(vitem[k]));
     }
     for (k = norig - 1; k >= 0; --k) {
-        PyRegion_RemoveLocalRef(recycle[k]);
+        PyRegion_RemoveRef(a, recycle[k]);
         Py_XDECREF(recycle[k]);
     }
     result = 0;
  Error:
     if (recycle != recycle_on_stack)
         PyMem_Free(recycle);
-    PyRegion_RemoveLocalRef(v_as_SF);
-    Py_XDECREF(v_as_SF);
+    PyRegion_CLEARLOCAL(v_as_SF);
     return result;
 #undef b
 }
@@ -1147,6 +1172,7 @@ list_inplace_repeat_lock_held(PyListObject *self, Py_ssize_t n)
         return -1;
     }
 
+    // FIXME(immutability): This needs to be moved before list_clear on `immutable-main`
     if(!Py_CHECKWRITE(self))
     {
         PyErr_WriteToImmutable(self);
@@ -1160,13 +1186,21 @@ list_inplace_repeat_lock_held(PyListObject *self, Py_ssize_t n)
     }
 
     PyObject **items = self->ob_item;
-    for (Py_ssize_t j = 0; j < input_size; j++) {
-        for (Py_ssize_t r = 0; r < n-1; r++) {
-            // FIXME(regions): This doesn't undo the previous loops
-            PyRegion_AddRef(self, items[j]);
+    // FIXME(regions): We could add a specialized `AddRefsArray` that directly
+    // adds n refs to each
+    for (Py_ssize_t j = 0; j < n - 1; j++) {
+        // Regions: This can only fail on the first iteration, as that may
+        // attempt adding a second owning reference to an external bridge
+        // object. All following calls should succeed and just adjust LRCs
+        if (PyRegion_AddRefsArray(self, input_size, items)) {
+            Py_SET_SIZE(self, input_size);
+            return -1;
         }
-        _Py_RefcntAdd(items[j], n-1);
     }
+    for (Py_ssize_t j = 0; j < input_size; j++) {
+        _Py_RefcntAdd(items[j], n - 1);
+    }
+
     // TODO: _Py_memory_repeat calls are not safe for shared lists in
     // GIL_DISABLED builds. (See issue #129069)
     _Py_memory_repeat((char *)items, sizeof(PyObject *)*output_size,
@@ -1347,13 +1381,12 @@ list_extend_fast(PyListObject *self, PyObject *iterable)
     // populate the end of self with iterable's items.
     PyObject **src = PySequence_Fast_ITEMS(iterable);
     PyObject **dest = self->ob_item + m;
+    if (PyRegion_AddRefsArray(self, n, src)) {
+        Py_SET_SIZE(self, m);
+        return -1;
+    }
     for (Py_ssize_t i = 0; i < n; i++) {
-        PyObject *o = src[i];
-        if (PyRegion_AddRef(self, o)) {
-            // FIXME(regions): This doesn't undo the previous loops
-            return -1;
-        }
-        FT_ATOMIC_STORE_PTR_RELEASE(dest[i], Py_NewRef(o));
+        FT_ATOMIC_STORE_PTR_RELEASE(dest[i], Py_NewRef(src[i]));
     }
     return 0;
 }
@@ -1497,8 +1530,12 @@ list_extend_dict(PyListObject *self, PyDictObject *dict, int which_item)
     PyObject *keyvalue[2];
     while (_PyDict_Next((PyObject *)dict, &pos, &keyvalue[0], &keyvalue[1], NULL)) {
         PyObject *obj = keyvalue[which_item];
+        // Regions: This function is only called from `list.extend` meaning
+        // the dict was given as an iterator. Extending a collection takes
+        // items until the iterator is empty or an exception was thrown. Added
+        // items remain, therefore, we don't need to undo previous iterations.
         if (PyRegion_AddRef(self, obj)) {
-            // FIXME(regions): This doesn't undo the previous loops
+            Py_SET_SIZE(self, m + pos);
             return -1;
         }
         Py_INCREF(obj);
@@ -3102,7 +3139,6 @@ list_sort_impl(PyListObject *self, PyObject *keyfunc, int reverse)
             keys[i] = PyObject_CallOneArg(keyfunc, saved_ob_item[i]);
             if (keys[i] == NULL) {
                 for (i=i-1 ; i>=0 ; i--) {
-                    // FIXME(regions): Is this correct?
                     PyRegion_RemoveLocalRef(keys[i]);
                     Py_DECREF(keys[i]);
                 }
@@ -3276,7 +3312,6 @@ succeed:
 fail:
     if (keys != NULL) {
         for (i = 0; i < saved_ob_size; i++) {
-            // FIXME(regions): Is this correct?
             PyRegion_RemoveLocalRef(keys[i]);
             Py_DECREF(keys[i]);
         }
@@ -4027,15 +4062,17 @@ list_ass_subscript_lock_held(PyObject *_self, PyObject *item, PyObject *value)
             int res = 0;
             selfitems = self->ob_item;
             seqitems = PySequence_Fast_ITEMS(seq);
+
+            if (PyRegion_AddRefsArray(self, slicelength, seqitems)) {
+                PyRegion_RemoveLocalRef(seq);
+                Py_DECREF(seq);
+                PyErr_NoMemory();
+                return -1;
+            }
             for (cur = start, i = 0; i < slicelength;
                  cur += (size_t)step, i++) {
                 garbage[i] = selfitems[cur];
                 ins = Py_NewRef(seqitems[i]);
-                // FIXME(regions): This doesn't undo the previous loops
-                if (PyRegion_TakeRef(self, ins)) {
-                    res = -1;
-                    break;
-                }
                 selfitems[cur] = ins;
             }
 
