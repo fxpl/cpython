@@ -155,7 +155,14 @@ Each agent has a different lens:
 > changes (record before/after), not absolute values; returned references are
 > kept alive to observe the borrow and cleared to prove symmetry; failure paths
 > are tested, not just the happy path; and no test is marked `@expectedFailure`
-> to hide an unimplemented barrier. Report every gap specifically.
+> to hide an unimplemented barrier. For failure paths specifically: every
+> mutating operation that accepts a caller-supplied element has an isolation
+> enforcement test — a sibling-region element is rejected with `RuntimeError`,
+> the container is unchanged (length/membership matches pre-call state), the
+> element's ownership is unchanged, and the region's LRC is neutral; batch
+> operations (`extend`, `update`, `__ior__`, etc.) have an atomicity test using
+> a `[local, sibling-owned, local]` layout to confirm all-or-nothing rollback.
+> Report every gap specifically.
 
 **Agent 3 — Edge cases and corner shapes.** Give it this instruction:
 
@@ -1204,6 +1211,115 @@ temporary local refs were created should still return LRC to baseline after the
 exception; a failure inside a critical section or repr/iterator helper should
 leave the public operation retryable and not leave dirty/open state behind
 (unless dirtying is the expected behavior).
+
+### Isolation enforcement tests (cross-region rejection)
+
+Every mutating operation that accepts an element from the caller — `append`,
+`insert`, `setitem`, `extend`, `__iadd__`, and their equivalents on other
+container types — must be tested for the case where the element is **already
+owned by a sibling region**. A sibling region is one that is neither a parent
+nor a child of the container's region; passing one of its elements to the
+container's mutating method must raise `RuntimeError` and leave the container
+completely unchanged.
+
+There are three properties to assert after a cross-region rejection:
+
+1. **Container state is unchanged** — length, membership, and internal structure
+   are identical to before the call. For sequence types, `len()` must equal its
+   pre-call value. For set/dict types, the element must not appear in the
+   collection.
+2. **Ownership is unchanged** — the rejected element is still owned by its
+   original region; the container's region did not acquire it.
+3. **LRC is neutral** — the container's region LRC is the same before and after
+   the failed call, proving the barrier rolled back any temporary borrow it
+   created.
+
+```python
+def _make_sibling_elem(self):
+    """Return (r2, elem) where elem is owned by r2."""
+    r2 = Region()
+    elem = A()
+    r2.elem = elem
+    return r2, elem
+
+def test_append_rejects_sibling_region_element(self):
+    r1 = Region()
+    r1.lst = []
+    r2, elem = self._make_sibling_elem()
+    base = r1._lrc
+
+    with self.assertRaises(RuntimeError):
+        r1.lst.append(elem)
+
+    self.assertEqual(len(r1.lst), 0)    # container unchanged
+    self.assertTrue(r2.owns(elem))      # ownership unchanged
+    self.assertEqual(r1._lrc, base)     # LRC neutral
+```
+
+Write one such test per mutating operation slot. The helper `_make_sibling_elem`
+(or equivalent) keeps the setup concise and consistent across tests.
+
+### Atomicity tests (batch operations with partial failure)
+
+When a single call adds multiple elements — `extend([a, b, c])`, `update(...)`,
+`__ior__(...)`, `AddRefsArray` — the operation is all-or-nothing. If the
+barrier fails for *any* element, **none** of the elements must end up in the
+container and all must remain in their original location. Test this explicitly
+with a mixed list where a valid element appears on both sides of an invalid one:
+
+```python
+def test_extend_rollback_on_partial_failure(self):
+    """[local, sibling-owned, local] — full rollback required."""
+    r1 = Region()
+    r1.lst = []
+    before = A()
+    r2, bad = self._make_sibling_elem()
+    after = A()
+    base = r1._lrc
+
+    with self.assertRaises(RuntimeError):
+        r1.lst.extend([before, bad, after])
+
+    self.assertEqual(len(r1.lst), 0)
+    self.assertTrue(is_local(before))   # not transferred — transfer rolled back
+    self.assertTrue(r2.owns(bad))
+    self.assertTrue(is_local(after))    # not transferred either
+    self.assertEqual(r1._lrc, base)
+```
+
+The `[local, sibling, local]` layout is important: it distinguishes a true
+all-or-nothing rollback from one that simply stopped at the first error and
+left earlier elements transferred. Both `before` and `after` must still be
+local after the failure.
+
+### The resize-before-check bug (what tests expose and implementations must avoid)
+
+Container operations often grow their internal storage *before* calling the
+region barrier that validates the new elements. If the barrier fails, the
+implementation must **undo the size change before returning**, otherwise the
+container's `ob_size` (or equivalent length field) is left larger than the
+number of initialized slots — deallocation will then call `Py_DECREF` on
+garbage pointers and crash.
+
+The canonical fix is to restore the pre-grow size in the barrier's error path:
+
+```c
+Py_ssize_t old_size = Py_SIZE(self);
+if (list_resize(self, old_size + n) < 0)
+    return -1;
+// ... populate src array ...
+if (PyRegion_AddRefsArray(self, n, src)) {
+    Py_SET_SIZE(self, old_size);   // ← restore before returning
+    return -1;
+}
+```
+
+The isolation enforcement tests (container state unchanged, LRC neutral) will
+catch this class of bug: if `len(container)` is wrong after a failed operation,
+the implementation did not roll back the size. If the test crashes the
+interpreter during teardown instead of producing a clean assertion failure, the
+uninitialized slots are being DECREF'd — the same root cause, made visible at
+dealloc time rather than at the assertion.
 
 ### Cover object shapes, not just one value
 For container-like types, the barrier behavior differs by element kind. Cover

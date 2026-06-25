@@ -2642,7 +2642,10 @@ void PyRegion_RecycleObject(PyObject *obj) {
 // FIXME(regions): xFrednet: Write barriers in bytecode seems to be working verify this
 // FIXME(regions): xFrednet: Region opt-in/out is currently on a per type basis, for modules we
 //                           might want to use slots to allow opt-in/out on a module level.
-
+// FIXME(regions): xFrednet: Copilot came up with an interesting optimization, it added a flag to
+//                           a struct to track if the references are all in the same region. This
+//                           flag can be used to avoid WB. It's not safe to local -> local due to
+//                           slurps, but this could be interesting to try and investigate
 
 // TODO(regions): xFrednet: Write Barrier in: Dictionary (Partially done)
 // TODO(regions): xFrednet: Dirty on C code (Currently this always triggers)
