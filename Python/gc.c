@@ -1188,12 +1188,16 @@ finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
             (finalize = Py_TYPE(op)->tp_finalize) != NULL)
         {
             _PyGC_SET_FINALIZED(op);
-            // Regions: No barrier needed.
+            // Regions: This barrier should always succeed:
             // If called from the local GC, op is local.
             // If called from the region GC, the region is already open.
+            int res = PyRegion_AddLocalRef(op);
+            assert(res == 0);
+            (void)res;
             Py_INCREF(op);
             finalize(op);
             assert(!_PyErr_Occurred(tstate));
+            PyRegion_RemoveLocalRef(op);
             Py_DECREF(op);
         }
     }
@@ -2083,6 +2087,7 @@ gc_collect_region_tree(PyThreadState *tstate,
     if (release_gil) {
         int res = _PyCown_SwitchFromIpToGc(cown);
         assert(res == 0);
+        (void)res;
         Py_UNBLOCK_THREADS
     }
     region_list_build_dfs(root);
@@ -2094,6 +2099,7 @@ gc_collect_region_tree(PyThreadState *tstate,
         Py_BLOCK_THREADS
         int res = _PyCown_SwitchFromGcToIp(cown);
         assert(res == 0);
+        (void)res;
     }
 
     /* Create artificial local references to the bridges to:
@@ -2461,6 +2467,10 @@ _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason
 
     GCState *gcstate = &tstate->interp->gc;
     // TODO(regions): GC callback
+    // The current callback API is made for the local GC
+    // (for example, it reports on the generation being collected).
+    // Invoking the callbacks from the region GC would break existing code.
+    // We could skip callbacks or add gc.region_callbacks.
     if (gcstate->debug & _PyGC_DEBUG_STATS) {
         debug_region_collection("collecting region tree with root", _PyRegionObject_CAST(region));
     }

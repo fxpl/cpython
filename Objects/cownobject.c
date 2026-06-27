@@ -475,6 +475,7 @@ static void cown_gc_release(_PyCownObject *self, _PyCown_ipid_t this_ip) {
     // Should be able to release now.
     int res = cown_release(self, this_ip);
     assert(res == 0);
+    (void)res;
 }
 
 /* Collect the region tree inside the cown,
@@ -493,6 +494,9 @@ static void cown_try_collect(_PyCownObject *self, _PyCown_ipid_t this_ip) {
     // Lock without blocking, we only want the cown if it is released.
     int res = cown_lock(self, NO_BLOCKING_TIMEOUT, this_ip, true);
     if (res != COWN_ACQUIRE_SUCCESS) {
+        // Could not acquire the cown, perhaps another interpreter has it.
+        // Ignore the error, the region will be collected later.
+        PyErr_Clear();
         return;
     }
     _PyGC_CollectRegion(tstate, _PyObject_CAST(self), _Py_GC_REASON_HEAP);

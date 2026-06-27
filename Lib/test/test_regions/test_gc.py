@@ -48,6 +48,8 @@ class TestRegionGC(unittest.TestCase):
             pass
 
     def tearDown(self):
+        # All tests run with the GC disabled, but some tests can enable it.
+        # Once all tests are done, tearDownModule restores the GC state.
         gc.disable()
 
 
