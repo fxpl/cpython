@@ -43,8 +43,8 @@ PyCell_SetTakeRef(PyCellObject *cell, PyObject *value)
 {
     int result = 0;
     PyObject *old_value = PyCell_SwapTakeRef(cell, value, &result);
-    PyRegion_AddLocalRef(old_value);
     PyRegion_RemoveRef(cell, old_value);
+    Py_XDECREF(old_value);
     return result;
 }
 

@@ -15,6 +15,10 @@ PyCell_New(PyObject *obj)
     op = (PyCellObject *)PyObject_GC_New(PyCellObject, &PyCell_Type);
     if (op == NULL)
         return NULL;
+    if (PyRegion_AddRef(op, obj)) {
+        Py_DECREF(op);
+        return NULL;
+    }
     op->ob_ref = Py_XNewRef(obj);
 
     _PyObject_GC_TRACK(op);
@@ -70,6 +74,9 @@ PyCell_Set(PyObject *op, PyObject *value)
         return -1;
     }
 
+    if (PyRegion_AddLocalRef(value)) {
+        return -1;
+    }
     return PyCell_SetTakeRef((PyCellObject *)op, Py_XNewRef(value));
 }
 
@@ -78,7 +85,7 @@ cell_dealloc(PyObject *self)
 {
     PyCellObject *op = _PyCell_CAST(self);
     _PyObject_GC_UNTRACK(op);
-    Py_XDECREF(op->ob_ref);
+    PyRegion_CLEAR(op, op->ob_ref);
     PyObject_GC_Del(op);
 }
 
@@ -109,8 +116,8 @@ cell_richcompare(PyObject *a, PyObject *b, int op)
     /* compare cells by contents; empty cells come before anything else */
     PyObject *res = cell_compare_impl(a_ref, b_ref, op);
 
-    Py_XDECREF(a_ref);
-    Py_XDECREF(b_ref);
+    PyRegion_CLEARLOCAL(a_ref);
+    PyRegion_CLEARLOCAL(b_ref);
     return res;
 }
 
@@ -123,7 +130,7 @@ cell_repr(PyObject *self)
     }
     PyObject *res = PyUnicode_FromFormat("<cell at %p: %.80s object at %p>",
                                          self, Py_TYPE(ref)->tp_name, ref);
-    Py_DECREF(ref);
+    PyRegion_CLEARLOCAL(ref);
     return res;
 }
 
@@ -149,7 +156,7 @@ cell_clear(PyObject *self)
         return -1;
     }
 
-    Py_CLEAR(op->ob_ref);
+    PyRegion_CLEAR(op, op->ob_ref);
     return 0;
 }
 
@@ -169,6 +176,9 @@ static int
 cell_set_contents(PyObject *self, PyObject *obj, void *Py_UNUSED(ignored))
 {
     PyCellObject *cell = _PyCell_CAST(self);
+    if (PyRegion_AddLocalRef(obj)) {
+        return -1;
+    }
     Py_XINCREF(obj);
     return PyCell_SetTakeRef((PyCellObject *)cell, obj);
 }
@@ -219,4 +229,5 @@ PyTypeObject PyCell_Type = {
     cell_new,                                   /* tp_new */
     0,                                          /* tp_free */
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
