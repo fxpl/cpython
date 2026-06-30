@@ -148,6 +148,7 @@ unionbuilder_init(unionbuilder *ub, bool is_checked)
     }
     ub->hashable_args = PySet_New(NULL);
     if (ub->hashable_args == NULL) {
+        assert(!PyRegion_NeedsReadBarrier(ub->args));
         Py_DECREF(ub->args);
         return false;
     }
@@ -159,14 +160,18 @@ unionbuilder_init(unionbuilder *ub, bool is_checked)
 static void
 unionbuilder_finalize(unionbuilder *ub)
 {
+    assert(!PyRegion_NeedsReadBarrier(ub->args));
     Py_DECREF(ub->args);
+    assert(!PyRegion_NeedsReadBarrier(ub->hashable_args));
     Py_DECREF(ub->hashable_args);
+    assert(!PyRegion_NeedsReadBarrier(ub->unhashable_args));
     Py_XDECREF(ub->unhashable_args);
 }
 
 static bool
 unionbuilder_add_single_unchecked(unionbuilder *ub, PyObject *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_hash_t hash = PyObject_Hash(arg);
     if (hash == -1) {
         PyErr_Clear();
@@ -207,6 +212,7 @@ unionbuilder_add_single_unchecked(unionbuilder *ub, PyObject *arg)
 static bool
 unionbuilder_add_single(unionbuilder *ub, PyObject *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (Py_IsNone(arg)) {
         arg = (PyObject *)&_PyNone_Type;  // immortal, so no refcounting needed
     }
@@ -220,6 +226,7 @@ unionbuilder_add_single(unionbuilder *ub, PyObject *arg)
             return false;
         }
         bool result = unionbuilder_add_single_unchecked(ub, type);
+        assert(!PyRegion_NeedsReadBarrier(type));
         Py_DECREF(type);
         return result;
     }
@@ -231,6 +238,7 @@ unionbuilder_add_single(unionbuilder *ub, PyObject *arg)
 static bool
 unionbuilder_add_tuple(unionbuilder *ub, PyObject *tuple)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t n = PyTuple_GET_SIZE(tuple);
     for (Py_ssize_t i = 0; i < n; i++) {
         if (!unionbuilder_add_single(ub, PyTuple_GET_ITEM(tuple, i))) {
@@ -243,6 +251,7 @@ unionbuilder_add_tuple(unionbuilder *ub, PyObject *tuple)
 static int
 is_unionable(PyObject *obj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (obj == Py_None ||
         PyType_Check(obj) ||
         _PyGenericAlias_Check(obj) ||
@@ -256,6 +265,7 @@ is_unionable(PyObject *obj)
 PyObject *
 _Py_union_type_or(PyObject* self, PyObject* other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!is_unionable(self) || !is_unionable(other)) {
         Py_RETURN_NOTIMPLEMENTED;
     }
@@ -447,12 +457,14 @@ call_typing_func_object(const char *name, PyObject **args, size_t nargs)
 static PyObject *
 type_check(PyObject *arg, const char *msg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (Py_IsNone(arg)) {
         // NoneType is immortal, so don't need an INCREF
         return (PyObject *)Py_TYPE(arg);
     }
     // Fast path to avoid calling into typing.py
     if (is_unionable(arg)) {
+        assert(!PyRegion_NeedsReadBarrier(arg));
         return Py_NewRef(arg);
     }
     PyObject *message_str = PyUnicode_FromString(msg);
@@ -461,6 +473,7 @@ type_check(PyObject *arg, const char *msg)
     }
     PyObject *args[2] = {arg, message_str};
     PyObject *result = call_typing_func_object("_type_check", args, 2);
+    assert(!PyRegion_NeedsReadBarrier(message_str));
     Py_DECREF(message_str);
     return result;
 }
@@ -542,6 +555,7 @@ make_union(unionbuilder *ub)
     }
     if (n == 1) {
         PyObject *result = PyList_GET_ITEM(ub->args, 0);
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_INCREF(result);
         unionbuilder_finalize(ub);
         return result;
@@ -569,6 +583,9 @@ make_union(unionbuilder *ub)
     }
     unionbuilder_finalize(ub);
 
+    // Regions: These references are being moved from the local unionbuilder to
+    // the newly allocated local `result` object
+
     result->parameters = NULL;
     result->args = args;
     result->hashable_args = hashable_args;
@@ -577,8 +594,11 @@ make_union(unionbuilder *ub)
     _PyObject_GC_TRACK(result);
     return (PyObject*)result;
 error:
+    assert(!PyRegion_NeedsReadBarrier(args));
     Py_XDECREF(args);
+    assert(!PyRegion_NeedsReadBarrier(hashable_args));
     Py_XDECREF(hashable_args);
+    assert(!PyRegion_NeedsReadBarrier(unhashable_args));
     Py_XDECREF(unhashable_args);
     unionbuilder_finalize(ub);
     return NULL;

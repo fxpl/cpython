@@ -2174,6 +2174,12 @@ int _PyRegion_AddRef(PyObject *src, PyObject *tgt) {
         return regiondata_inc_lrc(tgt_region trace_arg(tgt));
     }
 
+    // Several builtin types are immutable but are being mutated on
+    // startup. We just have to guard us against these caases.
+    if (IS_IMMUTABLE_REGION(src_region)) {
+        return 0;
+    }
+
     // Attempt to slurp the target object into the source region
     return regiondata_add_object(src_region, src, tgt);
 }
@@ -2562,6 +2568,7 @@ int _PyRegion_RemoveCown(_PyRegionObject* bridge, _PyCownObject *cown) {
 * on demand to help with debugging.
 */
 void PyRegion_NotifyTypeUse(PyTypeObject* tp) {
+    assert(PyType_Check(tp));
     // Pyrona: This functions was checked and no further migration is needed
     if ((tp->tp_flags2 & Py_TPFLAGS2_REGION_AWARE) != 0) {
         return;
@@ -2620,7 +2627,7 @@ void PyRegion_RecycleObject(PyObject *obj) {
 // TODO(regions): xFrednet: Handle weak reference into regions and `_TryIncRef`
 // TODO(regions): xFrednet: Add new `MergedRegion` so that the Region type
 //                          correlates with it being the bridge.
-// TODO(regions): xFrednet: Add notion of movability.
+// TODO(regions): xFrednet: Add a per-object notion of movability.
 //          - Cowns (Should be in cown region)
 //          - Immutable (Should be in immutable region)
 //          - Not (can't be owned)

@@ -25,6 +25,7 @@ PyObject*
 _Py_CheckFunctionResult(PyThreadState *tstate, PyObject *callable,
                         PyObject *result, const char *where)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert((callable != NULL) ^ (where != NULL));
 
     if (result == NULL) {

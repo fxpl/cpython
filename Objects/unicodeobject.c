@@ -2474,6 +2474,7 @@ unicode_adjust_maxchar(PyObject **p_unicode)
 PyObject*
 _PyUnicode_Copy(PyObject *unicode)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t length;
     PyObject *copy;
 

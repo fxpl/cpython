@@ -61,7 +61,6 @@ class TestCleanRegion(unittest.TestCase):
         sub = None
         self.assertEqual(region._osc, 0)
 
-    @expectedFailure
     def test_cleaning_finds_dirty_subregion(self):
         region = Region()
         region.sub = Region()

@@ -4376,6 +4376,7 @@ copy_values(PyDictValues *values)
 static PyObject *
 copy_lock_held(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *copy;
     PyDictObject *mp;
     PyInterpreterState *interp = _PyInterpreterState_GET();
@@ -4471,6 +4472,7 @@ copy_lock_held(PyObject *o)
 PyObject *
 PyDict_Copy(PyObject *o)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (o == NULL || !PyDict_Check(o)) {
         PyErr_BadInternalCall();
         return NULL;

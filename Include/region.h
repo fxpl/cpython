@@ -23,7 +23,7 @@ PyAPI_FUNC(int) _PyRegion_IsLocal(PyObject *obj);
  * would needs a write barrier to be called.
  */
 static inline int _PyRegion_NeedsReadBarrier(PyObject *obj) {
-    return !(PyRegion_IsLocal(obj) || _Py_IsImmutable(obj));
+    return !(obj == NULL || PyRegion_IsLocal(obj) || _Py_IsImmutable(obj));
 }
 #define PyRegion_NeedsReadBarrier(obj) _PyRegion_NeedsReadBarrier(_PyObject_CAST(obj))
 

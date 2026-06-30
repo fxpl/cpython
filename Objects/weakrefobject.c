@@ -1123,6 +1123,7 @@ handle_callback(PyWeakReference *ref, PyObject *callback)
 void
 PyObject_ClearWeakRefs(PyObject *object)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyWeakReference **list;
 
     if (object == NULL

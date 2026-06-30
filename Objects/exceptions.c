@@ -70,12 +70,13 @@ BaseException_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     self->suppress_context = 0;
 
     if (args) {
-        self->args = Py_NewRef(args);
+        self->args = PyRegion_NewRef(args);
         return (PyObject *)self;
     }
 
     self->args = PyTuple_New(0);
     if (!self->args) {
+        assert(!PyRegion_NeedsReadBarrier(self));
         Py_DECREF(self);
         return NULL;
     }

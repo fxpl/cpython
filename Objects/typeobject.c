@@ -217,9 +217,22 @@ slot_tp_call(PyObject *self, PyObject *args, PyObject *kwds);
 static int
 type_reachable(PyObject *self, visitproc visit, void *arg);
 
+static PyObject *
+type_new(PyTypeObject *metatype, PyObject *args, PyObject *kwds);
+
+static int
+type_init(PyObject *cls, PyObject *args, PyObject *kwds);
+
+static PyObject *
+object_new(PyTypeObject *type, PyObject *args, PyObject *kwds);
+
+static int
+object_init(PyObject *self, PyObject *args, PyObject *kwds);
+
 static inline PyTypeObject *
 type_from_ref(PyObject *ref)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *obj = _PyWeakref_GET_REF(ref);
     if (obj == NULL) {
         return NULL;
@@ -260,6 +273,7 @@ managed_static_type_index_set(PyTypeObject *self, size_t index)
 static inline void
 managed_static_type_index_clear(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     self->tp_subclasses = NULL;
 }
 
@@ -267,6 +281,7 @@ static PyTypeObject *
 static_ext_type_lookup(PyInterpreterState *interp, size_t index,
                        int64_t *p_interp_count)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(interp->runtime == &_PyRuntime);
     assert(index < _Py_MAX_MANAGED_STATIC_EXT_TYPES);
 
@@ -309,6 +324,7 @@ managed_static_type_state_get(PyInterpreterState *interp, PyTypeObject *self)
 managed_static_type_state *
 _PyStaticType_GetState(PyInterpreterState *interp, PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN);
     return managed_static_type_state_get(interp, self);
 }
@@ -391,6 +407,7 @@ static void
 managed_static_type_state_clear(PyInterpreterState *interp, PyTypeObject *self,
                                 int isbuiltin, int final)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     size_t index = managed_static_type_index_get(self);
     size_t full_index = isbuiltin
         ? index
@@ -437,6 +454,7 @@ managed_static_type_state_clear(PyInterpreterState *interp, PyTypeObject *self,
 PyObject *
 _PyStaticType_GetBuiltins(void)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyInterpreterState *interp = _PyInterpreterState_GET();
     Py_ssize_t count = (Py_ssize_t)interp->types.builtins.num_initialized;
     assert(count <= _Py_MAX_MANAGED_STATIC_BUILTIN_TYPES);
@@ -449,6 +467,7 @@ _PyStaticType_GetBuiltins(void)
         PyTypeObject *cls = interp->types.builtins.initialized[i].type;
         assert(cls != NULL);
         assert(interp->types.builtins.initialized[i].isbuiltin);
+        assert(!PyRegion_NeedsReadBarrier(cls));
         PyList_SET_ITEM(results, i, Py_NewRef((PyObject *)cls));
     }
 
@@ -471,6 +490,7 @@ type_set_flags(PyTypeObject *tp, unsigned long flags)
 static void
 type_set_flags_with_mask(PyTypeObject *tp, unsigned long mask, unsigned long flags)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     ASSERT_WORLD_STOPPED_OR_NEW_TYPE(tp);
     unsigned long new_flags = (tp->tp_flags & ~mask) | flags;
     type_set_flags(tp, new_flags);
@@ -486,7 +506,7 @@ type_add_flags(PyTypeObject *tp, unsigned long flag)
 static void
 type_clear_flags(PyTypeObject *tp, unsigned long flag)
 {
-    // // Pyrona: This functions was checked and no further migration is needed
+    // Pyrona: This functions was checked and no further migration is needed
     type_set_flags(tp, tp->tp_flags & ~flag);
 }
 
@@ -557,6 +577,8 @@ lookup_tp_dict(PyTypeObject *self)
 PyObject *
 _PyType_GetDict(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     /* It returns a borrowed reference. */
     return lookup_tp_dict(self);
 }
@@ -564,20 +586,30 @@ _PyType_GetDict(PyTypeObject *self)
 PyObject *
 PyType_GetDict(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *dict = lookup_tp_dict(self);
-    return _Py_XNewRef(dict);
+    return PyRegion_XNewRef(dict);
 }
 
 static inline void
 set_tp_dict(PyTypeObject *self, PyObject *dict)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = _PyStaticType_GetState(interp, self);
         assert(state != NULL);
+        // FIXME(regions): This dict should be marked as unmovable, given that
+        // is local per-interpreter state.
         state->tp_dict = dict;
         return;
     }
+
+    // Immutability: This function is only called on new types all self
+    // objects should always be mutable.
+    assert(!_Py_IsImmutable(self));
+    assert(PyRegion_IsLocal(self));
     self->tp_dict = dict;
 }
 
@@ -591,6 +623,9 @@ clear_tp_dict(PyTypeObject *self)
         Py_CLEAR(state->tp_dict);
         return;
     }
+    // Immutability: This function is only called during finalization of self
+    // objects should always be mutable.
+    assert(!_Py_IsImmutable(self));
     Py_CLEAR(self->tp_dict);
 }
 
@@ -598,25 +633,32 @@ clear_tp_dict(PyTypeObject *self)
 static inline PyObject *
 lookup_tp_bases(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed 
     return self->tp_bases;
 }
 
 PyObject *
 _PyType_GetBases(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *res;
 
     BEGIN_TYPE_LOCK();
     res = lookup_tp_bases(self);
-    Py_INCREF(res);
+    if (PyRegion_AddLocalRef(res)) {
+        res = NULL;
+    } else {
+        Py_INCREF(res);
+    }
     END_TYPE_LOCK();
 
     return res;
 }
 
-static inline void
+static inline int
 set_tp_bases(PyTypeObject *self, PyObject *bases, int initial)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyTuple_Check(bases));
     ASSERT_NEW_TYPE_OR_LOCKED(self);
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
@@ -636,12 +678,17 @@ set_tp_bases(PyTypeObject *self, PyObject *bases, int initial)
         }
         _Py_SetImmortal(bases);
     }
+    if (PyRegion_TakeRef(self, bases)) {
+        return -1;
+    }
     self->tp_bases = bases;
+    return 0;
 }
 
 static inline void
 clear_tp_bases(PyTypeObject *self, int final)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         if (final) {
             if (self->tp_bases != NULL) {
@@ -656,7 +703,7 @@ clear_tp_bases(PyTypeObject *self, int final)
         }
         return;
     }
-    Py_CLEAR(self->tp_bases);
+    PyRegion_CLEAR(self, self->tp_bases);
 }
 
 
@@ -671,6 +718,7 @@ lookup_tp_mro(PyTypeObject *self)
 PyObject *
 _PyType_GetMRO(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
 #ifdef Py_GIL_DISABLED
     PyObject *mro = _Py_atomic_load_ptr_relaxed(&self->tp_mro);
     if (mro == NULL) {
@@ -686,13 +734,14 @@ _PyType_GetMRO(PyTypeObject *self)
     END_TYPE_LOCK();
     return mro;
 #else
-    return Py_XNewRef(lookup_tp_mro(self));
+    return PyRegion_XNewRef(lookup_tp_mro(self));
 #endif
 }
 
-static inline void
+static inline int
 set_tp_mro(PyTypeObject *self, PyObject *mro, int initial)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (mro != NULL) {
         assert(PyTuple_CheckExact(mro));
         if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
@@ -704,17 +753,22 @@ set_tp_mro(PyTypeObject *self, PyObject *mro, int initial)
             _Py_SetImmortal(mro);
         }
     }
+    if (PyRegion_TakeRef(self, mro)) {
+        return -1;
+    }
     self->tp_mro = mro;
+    return 0;
 }
 
 static inline void
 clear_tp_mro(PyTypeObject *self, int final)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         if (final) {
             if (self->tp_mro != NULL) {
                 if (PyTuple_GET_SIZE(self->tp_mro) == 0) {
-                    Py_CLEAR(self->tp_mro);
+                    PyRegion_CLEAR(self, self->tp_mro);
                 }
                 else {
                     assert(_Py_IsImmortal(self->tp_mro));
@@ -724,15 +778,20 @@ clear_tp_mro(PyTypeObject *self, int final)
         }
         return;
     }
-    Py_CLEAR(self->tp_mro);
+    PyRegion_CLEAR(self, self->tp_mro);
 }
 
 
 static PyObject *
 init_tp_subclasses(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *subclasses = PyDict_New();
     if (subclasses == NULL) {
+        return NULL;
+    }
+    if (PyRegion_TakeRef(self, subclasses)) {
+        Py_DECREF(subclasses);
         return NULL;
     }
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
@@ -748,6 +807,8 @@ init_tp_subclasses(PyTypeObject *self)
 static void
 clear_tp_subclasses(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     /* Delete the dictionary to save memory. _PyStaticType_Dealloc()
        callers also test if tp_subclasses is NULL to check if a static type
        has no subclass. */
@@ -757,12 +818,14 @@ clear_tp_subclasses(PyTypeObject *self)
         Py_CLEAR(state->tp_subclasses);
         return;
     }
-    Py_CLEAR(self->tp_subclasses);
+    PyRegion_CLEAR(self, self->tp_subclasses);
 }
 
 static inline PyObject *
 lookup_tp_subclasses(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN) {
         PyInterpreterState *interp = _PyInterpreterState_GET();
         managed_static_type_state *state = _PyStaticType_GetState(interp, self);
@@ -775,12 +838,14 @@ lookup_tp_subclasses(PyTypeObject *self)
 PyObject *
 _PyType_LookupSubclasses(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed 
     return lookup_tp_subclasses(self);
 }
 
 PyObject *
 _PyType_InitSubclasses(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *existing = lookup_tp_subclasses(self);
     if (existing != NULL) {
         return existing;
@@ -791,6 +856,7 @@ _PyType_InitSubclasses(PyTypeObject *self)
 int
 _PyType_HasSubclasses(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyInterpreterState *interp = _PyInterpreterState_GET();
     if (self->tp_flags & _Py_TPFLAGS_STATIC_BUILTIN
         // XXX _PyStaticType_GetState() should never return NULL.
@@ -807,6 +873,7 @@ _PyType_HasSubclasses(PyTypeObject *self)
 PyObject*
 _PyType_GetSubclasses(PyTypeObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *list = PyList_New(0);
     if (list == NULL) {
         return NULL;
@@ -829,10 +896,13 @@ _PyType_GetSubclasses(PyTypeObject *self)
         }
 
         if (PyList_Append(list, _PyObject_CAST(subclass)) < 0) {
+            assert(!PyRegion_NeedsReadBarrier(list)); 
             Py_DECREF(list);
+            PyRegion_RemoveLocalRef(subclass);
             Py_DECREF(subclass);
             return NULL;
         }
+        PyRegion_RemoveLocalRef(subclass);
         Py_DECREF(subclass);
     }
     return list;
@@ -852,6 +922,7 @@ _PyType_GetSubclasses(PyTypeObject *self)
 static const char *
 find_signature(const char *name, const char *doc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     const char *dot;
     size_t length;
 
@@ -883,6 +954,7 @@ find_signature(const char *name, const char *doc)
 static const char *
 skip_signature(const char *doc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     while (*doc) {
         if ((*doc == *SIGNATURE_END_MARKER) &&
             !strncmp(doc, SIGNATURE_END_MARKER, SIGNATURE_END_MARKER_LENGTH))
@@ -897,6 +969,7 @@ skip_signature(const char *doc)
 int
 _PyType_CheckConsistency(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
 #define CHECK(expr) \
     do { if (!(expr)) { _PyObject_ASSERT_FAILED_MSG((PyObject *)type, Py_STRINGIFY(expr)); } } while (0)
 
@@ -931,6 +1004,7 @@ _PyType_CheckConsistency(PyTypeObject *type)
 static const char *
 _PyType_DocWithoutSignature(const char *name, const char *internal_doc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     const char *doc = find_signature(name, internal_doc);
 
     if (doc) {
@@ -944,6 +1018,7 @@ _PyType_DocWithoutSignature(const char *name, const char *internal_doc)
 PyObject *
 _PyType_GetDocFromInternalDoc(const char *name, const char *internal_doc)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     const char *doc = _PyType_DocWithoutSignature(name, internal_doc);
 
     if (!doc || *doc == '\0') {
@@ -956,6 +1031,7 @@ _PyType_GetDocFromInternalDoc(const char *name, const char *internal_doc)
 static const char *
 signature_from_flags(int flags)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     switch (flags & ~METH_COEXIST) {
         case METH_NOARGS:
             return "($self, /)";
@@ -977,6 +1053,7 @@ signature_from_flags(int flags)
 PyObject *
 _PyType_GetTextSignatureFromInternalDoc(const char *name, const char *internal_doc, int flags)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     const char *start = find_signature(name, internal_doc);
     const char *end;
 
@@ -1004,6 +1081,7 @@ _PyType_GetTextSignatureFromInternalDoc(const char *name, const char *internal_d
 static struct type_cache*
 get_type_cache(void)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyInterpreterState *interp = _PyInterpreterState_GET();
     return &interp->types.type_cache;
 }
@@ -1523,9 +1601,11 @@ _PyType_Name(PyTypeObject *type)
 static PyObject *
 type_name(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
         PyHeapTypeObject* et = (PyHeapTypeObject*)type;
+        assert(!PyRegion_NeedsReadBarrier(et->ht_name));
         return Py_NewRef(et->ht_name);
     }
     else {
@@ -1536,10 +1616,11 @@ type_name(PyObject *tp, void *Py_UNUSED(closure))
 static PyObject *
 type_qualname(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
         PyHeapTypeObject* et = (PyHeapTypeObject*)type;
-        return Py_NewRef(et->ht_qualname);
+        return PyRegion_NewRef(et->ht_qualname);
     }
     else {
         return PyUnicode_FromString(_PyType_Name(type));
@@ -1549,6 +1630,7 @@ type_qualname(PyObject *tp, void *Py_UNUSED(closure))
 static int
 type_set_name(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     const char *tp_name;
     Py_ssize_t name_size;
@@ -1580,8 +1662,10 @@ type_set_name(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
     _PyEval_StopTheWorld(interp);
     type->tp_name = tp_name;
     PyObject *old_name = ((PyHeapTypeObject*)type)->ht_name;
+    assert(!PyRegion_NeedsReadBarrier(value));
     ((PyHeapTypeObject*)type)->ht_name = Py_NewRef(value);
     _PyEval_StartTheWorld(interp);
+    assert(!PyRegion_NeedsReadBarrier(old_name));
     Py_DECREF(old_name);
     return 0;
 }
@@ -1589,6 +1673,7 @@ type_set_name(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 static int
 type_set_qualname(PyObject *tp, PyObject *value, void *context)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     PyHeapTypeObject* et;
 
@@ -1607,13 +1692,16 @@ type_set_qualname(PyObject *tp, PyObject *value, void *context)
     }
 
     et = (PyHeapTypeObject*)type;
-    Py_SETREF(et->ht_qualname, Py_NewRef(value));
+    if (PyRegion_XSETNEWREF(tp, et->ht_qualname, value)) {
+        return -1;
+    }
     return 0;
 }
 
 static PyObject *
 type_module(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *mod;
     if (type->tp_flags & Py_TPFLAGS_HEAPTYPE) {
         PyObject *dict = lookup_tp_dict(type);
@@ -1641,6 +1729,7 @@ type_module(PyTypeObject *type)
 static inline PyObject *
 type_get_module(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     return type_module(type);
 }
@@ -1648,6 +1737,7 @@ type_get_module(PyObject *tp, void *Py_UNUSED(closure))
 static int
 type_set_module(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
 
     if(!Py_CHECKWRITE(type)){
@@ -1710,6 +1800,7 @@ PyType_GetFullyQualifiedName(PyTypeObject *type)
 static PyObject *
 type_abstractmethods(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     PyObject *res = NULL;
     /* type itself has an __abstractmethods__ descriptor (this). Don't return
@@ -1729,6 +1820,7 @@ type_abstractmethods(PyObject *tp, void *Py_UNUSED(closure))
 static int
 type_set_abstractmethods(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
 
     if(!Py_CHECKWRITE(type)){
@@ -1776,6 +1868,7 @@ type_set_abstractmethods(PyObject *tp, PyObject *value, void *Py_UNUSED(closure)
 static PyObject *
 type_get_bases(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     PyObject *bases = _PyType_GetBases(type);
     if (bases == NULL) {
@@ -1787,6 +1880,7 @@ type_get_bases(PyObject *tp, void *Py_UNUSED(closure))
 static PyObject *
 type_get_mro(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     PyObject *mro;
 
@@ -1795,7 +1889,7 @@ type_get_mro(PyObject *tp, void *Py_UNUSED(closure))
     if (mro == NULL) {
         mro = Py_None;
     } else {
-        Py_INCREF(mro);
+        mro = PyRegion_NewRef(mro);
     }
 
     END_TYPE_LOCK();
@@ -1850,7 +1944,9 @@ mro_hierarchy(PyTypeObject *type, PyObject *temp)
     Py_XDECREF(tuple);
 
     if (res < 0) {
-        set_tp_mro(type, old_mro, 0);
+        int res = set_tp_mro(type, old_mro, 0);
+        assert(res == 0);
+        (void)res;
         Py_DECREF(new_mro);
         return -1;
     }
@@ -1958,6 +2054,7 @@ type_check_new_bases(PyTypeObject *type, PyObject *new_bases, PyTypeObject **bes
 static int
 type_set_bases_unlocked(PyTypeObject *type, PyObject *new_bases, PyTypeObject *best_base)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     ASSERT_TYPE_LOCK_HELD();
 
     Py_ssize_t n;
@@ -1965,7 +2062,9 @@ type_set_bases_unlocked(PyTypeObject *type, PyObject *new_bases, PyTypeObject *b
     assert(old_bases != NULL);
     PyTypeObject *old_base = type->tp_base;
 
-    set_tp_bases(type, Py_NewRef(new_bases), 0);
+    if (set_tp_bases(type, Py_NewRef(new_bases), 0)) {
+        return -1;
+    }
     type->tp_base = (PyTypeObject *)Py_NewRef(best_base);
 
     PyObject *temp = PyList_New(0);
@@ -1975,6 +2074,7 @@ type_set_bases_unlocked(PyTypeObject *type, PyObject *new_bases, PyTypeObject *b
     if (mro_hierarchy(type, temp) < 0) {
         goto undo;
     }
+    assert(!PyRegion_NeedsReadBarrier(temp));
     Py_DECREF(temp);
 
     /* Take no action in case if type->tp_bases has been replaced
@@ -2001,8 +2101,8 @@ type_set_bases_unlocked(PyTypeObject *type, PyObject *new_bases, PyTypeObject *b
     }
 
     RARE_EVENT_INC(set_bases);
-    Py_DECREF(old_bases);
-    Py_DECREF(old_base);
+    PyRegion_CLEARLOCAL(old_bases);
+    PyRegion_CLEARLOCAL(old_base);
 
     assert(_PyType_CheckConsistency(type));
     return res;
@@ -2017,25 +2117,29 @@ type_set_bases_unlocked(PyTypeObject *type, PyObject *new_bases, PyTypeObject *b
                           "", 2, 3, &cls, &new_mro, &old_mro);
         /* Do not rollback if cls has a newer version of MRO.  */
         if (lookup_tp_mro(cls) == new_mro) {
-            set_tp_mro(cls, Py_XNewRef(old_mro), 0);
-            Py_DECREF(new_mro);
+            int res = set_tp_mro(cls, Py_XNewRef(old_mro), 0);
+            assert(res == 0);
+            (void)res;
+            PyRegion_CLEARLOCAL(new_mro);
         }
     }
-    Py_DECREF(temp);
+    PyRegion_CLEARLOCAL(temp);
 
   bail:
     if (lookup_tp_bases(type) == new_bases) {
         assert(type->tp_base == best_base);
 
-        set_tp_bases(type, old_bases, 0);
+        int res = set_tp_bases(type, old_bases, 0);
+        assert(res == 0);
+        (void)res;
         type->tp_base = old_base;
 
-        Py_DECREF(new_bases);
-        Py_DECREF(best_base);
+        PyRegion_CLEARLOCAL(new_bases);
+        PyRegion_CLEARLOCAL(best_base);
     }
     else {
-        Py_DECREF(old_bases);
-        Py_DECREF(old_base);
+        PyRegion_CLEARLOCAL(old_bases);
+        PyRegion_CLEARLOCAL(old_base);
     }
 
     assert(_PyType_CheckConsistency(type));
@@ -2045,6 +2149,7 @@ type_set_bases_unlocked(PyTypeObject *type, PyObject *new_bases, PyTypeObject *b
 static int
 type_set_bases(PyObject *tp, PyObject *new_bases, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     PyTypeObject *best_base;
     int res;
@@ -2060,6 +2165,7 @@ type_set_bases(PyObject *tp, PyObject *new_bases, void *Py_UNUSED(closure))
 static PyObject *
 type_dict(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     PyObject *dict = lookup_tp_dict(type);
     if (dict == NULL) {
@@ -2071,6 +2177,7 @@ type_dict(PyObject *tp, void *Py_UNUSED(closure))
 static PyObject *
 type_get_doc(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     PyObject *result;
     if (!(type->tp_flags & Py_TPFLAGS_HEAPTYPE) && type->tp_doc != NULL) {
@@ -2083,7 +2190,10 @@ type_get_doc(PyObject *tp, void *Py_UNUSED(closure))
     else if (result) {
         descrgetfunc descr_get = Py_TYPE(result)->tp_descr_get;
         if (descr_get) {
-            Py_SETREF(result, descr_get(result, NULL, (PyObject *)type));
+            PyRegion_NotifyTypeUse(Py_TYPE(result));
+            if (PyRegion_XSETLOCALREF(result, descr_get(result, NULL, (PyObject *)type))) {
+                result = NULL;
+            }
         }
     }
     return result;
@@ -2092,6 +2202,7 @@ type_get_doc(PyObject *tp, void *Py_UNUSED(closure))
 static PyObject *
 type_get_text_signature(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     return _PyType_GetTextSignatureFromInternalDoc(type->tp_name, type->tp_doc, 0);
 }
@@ -2099,6 +2210,7 @@ type_get_text_signature(PyObject *tp, void *Py_UNUSED(closure))
 static int
 type_set_doc(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
 
     if(!Py_CHECKWRITE(type)){
@@ -2116,6 +2228,7 @@ type_set_doc(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 static PyObject *
 type_get_annotate(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (!(type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
         PyErr_Format(PyExc_AttributeError, "type object '%s' has no attribute '__annotate__'", type->tp_name);
@@ -2126,36 +2239,41 @@ type_get_annotate(PyObject *tp, void *Py_UNUSED(closure))
     PyObject *dict = PyType_GetDict(type);
     // First try __annotate__, in case that's been set explicitly
     if (PyDict_GetItemRef(dict, &_Py_ID(__annotate__), &annotate) < 0) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return NULL;
     }
     if (!annotate) {
         if (PyDict_GetItemRef(dict, &_Py_ID(__annotate_func__), &annotate) < 0) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return NULL;
         }
     }
     if (annotate) {
         descrgetfunc get = Py_TYPE(annotate)->tp_descr_get;
         if (get) {
-            Py_SETREF(annotate, get(annotate, NULL, (PyObject *)type));
+            PyRegion_NotifyTypeUse(Py_TYPE(annotate));
+            if (PyRegion_XSETLOCALREF(annotate, get(annotate, NULL, (PyObject *)type))) {
+                PyRegion_CLEARLOCAL(dict);
+                return NULL;
+            }
         }
     }
     else {
         annotate = Py_None;
         int result = PyDict_SetItem(dict, &_Py_ID(__annotate_func__), annotate);
         if (result < 0) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return NULL;
         }
     }
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return annotate;
 }
 
 static int
 type_set_annotate(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete __annotate__ attribute");
@@ -2177,17 +2295,17 @@ type_set_annotate(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
     assert(PyDict_Check(dict));
     int result = PyDict_SetItem(dict, &_Py_ID(__annotate_func__), value);
     if (result < 0) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return -1;
     }
     if (!Py_IsNone(value)) {
         if (PyDict_Pop(dict, &_Py_ID(__annotations_cache__), NULL) == -1) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             PyType_Modified(type);
             return -1;
         }
     }
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     PyType_Modified(type);
     return 0;
 }
@@ -2195,6 +2313,7 @@ type_set_annotate(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 static PyObject *
 type_get_annotations(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (!(type->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
         PyErr_Format(PyExc_AttributeError, "type object '%s' has no attribute '__annotations__'", type->tp_name);
@@ -2205,12 +2324,12 @@ type_get_annotations(PyObject *tp, void *Py_UNUSED(closure))
     PyObject *dict = PyType_GetDict(type);
     // First try __annotations__ (e.g. for "from __future__ import annotations")
     if (PyDict_GetItemRef(dict, &_Py_ID(__annotations__), &annotations) < 0) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return NULL;
     }
     if (!annotations) {
         if (PyDict_GetItemRef(dict, &_Py_ID(__annotations_cache__), &annotations) < 0) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return NULL;
         }
     }
@@ -2218,54 +2337,59 @@ type_get_annotations(PyObject *tp, void *Py_UNUSED(closure))
     if (annotations) {
         descrgetfunc get = Py_TYPE(annotations)->tp_descr_get;
         if (get) {
-            Py_SETREF(annotations, get(annotations, NULL, tp));
+            PyRegion_NotifyTypeUse(Py_TYPE(annotations));
+            if (PyRegion_XSETLOCALREF(annotations, get(annotations, NULL, tp))) {
+                PyRegion_CLEARLOCAL(dict);
+                return NULL;
+            }
         }
     }
     else {
         PyObject *annotate = PyObject_GetAttrString((PyObject *)type, "__annotate__");
         if (annotate == NULL) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return NULL;
         }
         if (PyCallable_Check(annotate)) {
             PyObject *one = _PyLong_GetOne();
             annotations = _PyObject_CallOneArg(annotate, one);
             if (annotations == NULL) {
-                Py_DECREF(dict);
-                Py_DECREF(annotate);
+                PyRegion_CLEARLOCAL(dict);
+                PyRegion_CLEARLOCAL(annotate);
                 return NULL;
             }
             if (!PyDict_Check(annotations)) {
                 PyErr_Format(PyExc_TypeError,
                              "__annotate__() must return a dict, not %T",
                              annotations);
-                Py_DECREF(annotations);
-                Py_DECREF(annotate);
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(annotations);
+                PyRegion_CLEARLOCAL(annotate);
+                PyRegion_CLEARLOCAL(dict);
                 return NULL;
             }
         }
         else {
             annotations = PyDict_New();
         }
-        Py_DECREF(annotate);
+        PyRegion_CLEARLOCAL(annotate);
         if (annotations) {
             int result = PyDict_SetItem(
                     dict, &_Py_ID(__annotations_cache__), annotations);
             if (result) {
-                Py_CLEAR(annotations);
+                PyRegion_CLEARLOCAL(annotations);
             } else {
                 PyType_Modified(type);
             }
         }
     }
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return annotations;
 }
 
 static int
 type_set_annotations(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
 
     if(!Py_CHECKWRITE(type)){
@@ -2283,7 +2407,7 @@ type_set_annotations(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
     PyObject *dict = PyType_GetDict(type);
     int result = PyDict_ContainsString(dict, "__annotations__");
     if (result < 0) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return -1;
     }
     if (result) {
@@ -2295,12 +2419,12 @@ type_set_annotations(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
             if (result == 0) {
                 // Somebody else just deleted it?
                 PyErr_SetString(PyExc_AttributeError, "__annotations__");
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(dict);
                 return -1;
             }
         }
         if (result < 0) {
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return -1;
         }
         // Also clear __annotations_cache__ just in case.
@@ -2316,34 +2440,35 @@ type_set_annotations(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
             result = PyDict_Pop(dict, &_Py_ID(__annotations_cache__), NULL);
             if (result == 0) {
                 PyErr_SetString(PyExc_AttributeError, "__annotations__");
-                Py_DECREF(dict);
+                PyRegion_CLEARLOCAL(dict);
                 return -1;
             }
         }
     }
     if (result < 0) {
-        Py_DECREF(dict);
+        PyRegion_CLEARLOCAL(dict);
         return -1;
     } else {  // result can be 0 or 1
         if (PyDict_Pop(dict, &_Py_ID(__annotate_func__), NULL) < 0) {
             PyType_Modified(type);
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return -1;
         }
         if (PyDict_Pop(dict, &_Py_ID(__annotate__), NULL) < 0) {
             PyType_Modified(type);
-            Py_DECREF(dict);
+            PyRegion_CLEARLOCAL(dict);
             return -1;
         }
     }
     PyType_Modified(type);
-    Py_DECREF(dict);
+    PyRegion_CLEARLOCAL(dict);
     return 0;
 }
 
 static PyObject *
 type_get_type_params(PyObject *tp, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     if (type == &PyType_Type) {
         return PyTuple_New(0);
@@ -2359,6 +2484,7 @@ type_get_type_params(PyObject *tp, void *Py_UNUSED(closure))
 static int
 type_set_type_params(PyObject *tp, PyObject *value, void *Py_UNUSED(closure))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
 
     if(!Py_CHECKWRITE(type)){
@@ -2393,6 +2519,7 @@ static int
 type___instancecheck___impl(PyTypeObject *self, PyObject *instance)
 /*[clinic end generated code: output=08b6bf5f591c3618 input=cdbfeaee82c01a0f]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyObject_RealIsInstance(instance, (PyObject *)self);
 }
 
@@ -2409,6 +2536,7 @@ static int
 type___subclasscheck___impl(PyTypeObject *self, PyObject *subclass)
 /*[clinic end generated code: output=97a4e51694500941 input=071b2ca9e03355f4]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyObject_RealIsSubclass(subclass, (PyObject *)self);
 }
 
@@ -2445,12 +2573,12 @@ type_repr(PyObject *self)
         PyErr_Clear();
     }
     else if (!PyUnicode_Check(mod)) {
-        Py_CLEAR(mod);
+        PyRegion_CLEARLOCAL(mod);
     }
 
     PyObject *name = type_qualname(self, NULL);
     if (name == NULL) {
-        Py_XDECREF(mod);
+        PyRegion_CLEARLOCAL(mod);
         return NULL;
     }
 
@@ -2461,8 +2589,8 @@ type_repr(PyObject *self)
     else {
         result = PyUnicode_FromFormat("<class '%s'>", type->tp_name);
     }
-    Py_XDECREF(mod);
-    Py_DECREF(name);
+    PyRegion_CLEARLOCAL(mod);
+    PyRegion_CLEARLOCAL(name);
 
     return result;
 }
@@ -2470,6 +2598,8 @@ type_repr(PyObject *self)
 static PyObject *
 type_call(PyObject *self, PyObject *args, PyObject *kwds)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     PyTypeObject *type = PyTypeObject_CAST(self);
     PyObject *obj;
     PyThreadState *tstate = _PyThreadState_GET();
@@ -2490,7 +2620,8 @@ type_call(PyObject *self, PyObject *args, PyObject *kwds)
 
         if (nargs == 1 && (kwds == NULL || !PyDict_GET_SIZE(kwds))) {
             obj = (PyObject *) Py_TYPE(PyTuple_GET_ITEM(args, 0));
-            return PyRegion_NewRef(obj);
+            assert(!PyRegion_NeedsReadBarrier(obj));
+            return Py_NewRef(obj);
         }
 
         /* SF bug 475327 -- if that didn't trigger, we need 3
@@ -2509,6 +2640,9 @@ type_call(PyObject *self, PyObject *args, PyObject *kwds)
         return NULL;
     }
 
+    if (type->tp_new != type_new && type->tp_new != object_new) {
+        PyRegion_NotifyTypeUse(type);
+    }
     obj = type->tp_new(type, args, kwds);
     obj = _Py_CheckFunctionResult(tstate, (PyObject*)type, obj, NULL);
     if (obj == NULL)
@@ -2521,6 +2655,9 @@ type_call(PyObject *self, PyObject *args, PyObject *kwds)
 
     type = Py_TYPE(obj);
     if (type->tp_init != NULL) {
+        if (type->tp_init != type_init && type->tp_init != object_init) {
+            PyRegion_NotifyTypeUse(type);
+        }
         int res = type->tp_init(obj, args, kwds);
         if (res < 0) {
             assert(_PyErr_Occurred(tstate));
@@ -3511,6 +3648,7 @@ mro_implementation_unlocked(PyTypeObject *type)
         PyTuple_SET_ITEM(result, 0, Py_NewRef(type));
         for (Py_ssize_t i = 0; i < k; i++) {
             PyObject *cls = PyTuple_GET_ITEM(base_mro, i);
+            assert(!PyRegion_NeedsReadBarrier(cls));
             PyTuple_SET_ITEM(result, i + 1, Py_NewRef(cls));
         }
         return result;
@@ -3549,6 +3687,7 @@ mro_implementation_unlocked(PyTypeObject *type)
 
     PyList_SET_ITEM(result, 0, Py_NewRef(type));
     if (pmerge(result, to_merge, n + 1) < 0) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_CLEAR(result);
     }
     PyMem_Free(to_merge);
@@ -3579,7 +3718,9 @@ type_mro_impl(PyTypeObject *self)
     PyObject *seq;
     seq = mro_implementation(self);
     if (seq != NULL && !PyList_Check(seq)) {
-        Py_SETREF(seq, PySequence_List(seq));
+        if (PyRegion_XSETLOCALREF(seq, PySequence_List(seq))) {
+            seq = NULL;
+        }
     }
     return seq;
 }
@@ -3716,7 +3857,9 @@ mro_internal(PyTypeObject *type, int initial, PyObject **p_old_mro)
         return 0;
     }
 
-    set_tp_mro(type, new_mro, initial);
+    int res = set_tp_mro(type, new_mro, initial);
+    assert(res == 0);
+    (void)res;
 
     type_mro_modified(type, new_mro);
     /* corner case: the super class might have been hidden
@@ -4160,6 +4303,7 @@ valid_identifier(PyObject *s)
 static int
 type_init(PyObject *cls, PyObject *args, PyObject *kwds)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(args != NULL && PyTuple_Check(args));
     assert(kwds == NULL || PyDict_Check(kwds));
 
@@ -4256,6 +4400,7 @@ typedef struct {
 static int
 type_new_visit_slots(type_new_ctx *ctx)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *slots = ctx->slots;
     Py_ssize_t nslot = ctx->nslot;
     for (Py_ssize_t i = 0; i < nslot; i++) {
@@ -4294,8 +4439,14 @@ type_new_visit_slots(type_new_ctx *ctx)
 static PyObject*
 type_new_copy_slots(type_new_ctx *ctx, PyObject *dict)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *slots = ctx->slots;
     Py_ssize_t nslot = ctx->nslot;
+
+    // Regions: The ctx->slots should always be local which means that
+    // the following operations stealing from slots into another local
+    // should always be safe without a barrier
+    assert(PyRegion_IsLocal(slots) || _Py_IsImmutable(slots));
 
     Py_ssize_t new_nslot = nslot - ctx->add_dict - ctx->add_weak;
     PyObject *new_slots = PyList_New(new_nslot);
@@ -4311,7 +4462,6 @@ type_new_copy_slots(type_new_ctx *ctx, PyObject *dict)
         {
             continue;
         }
-
         slot =_Py_Mangle(ctx->name, slot);
         if (!slot) {
             goto error;
@@ -4346,6 +4496,7 @@ type_new_copy_slots(type_new_ctx *ctx, PyObject *dict)
     }
 
     PyObject *tuple = PyList_AsTuple(new_slots);
+    assert(!PyRegion_NeedsReadBarrier(new_slots));
     Py_DECREF(new_slots);
     if (tuple == NULL) {
         return NULL;
@@ -4355,6 +4506,7 @@ type_new_copy_slots(type_new_ctx *ctx, PyObject *dict)
     return tuple;
 
 error:
+    assert(!PyRegion_NeedsReadBarrier(new_slots));
     Py_DECREF(new_slots);
     return NULL;
 }
@@ -4363,6 +4515,7 @@ error:
 static void
 type_new_slots_bases(type_new_ctx *ctx)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t nbases = PyTuple_GET_SIZE(ctx->bases);
     if (nbases > 1 &&
         ((ctx->may_add_dict && ctx->add_dict == 0) ||
@@ -4402,6 +4555,8 @@ type_new_slots_bases(type_new_ctx *ctx)
 static int
 type_new_slots_impl(type_new_ctx *ctx, PyObject *dict)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     /* Are slots allowed? */
     if (ctx->nslot > 0 && ctx->base->tp_itemsize != 0) {
         PyErr_Format(PyExc_TypeError,
@@ -4420,6 +4575,8 @@ type_new_slots_impl(type_new_ctx *ctx, PyObject *dict)
     }
     assert(PyTuple_CheckExact(new_slots));
 
+    assert(!PyRegion_NeedsReadBarrier(ctx->slots));
+    assert(!PyRegion_NeedsReadBarrier(new_slots));
     Py_XSETREF(ctx->slots, new_slots);
     ctx->nslot = PyTuple_GET_SIZE(new_slots);
 
@@ -4432,6 +4589,8 @@ type_new_slots_impl(type_new_ctx *ctx, PyObject *dict)
 static Py_ssize_t
 type_new_slots(type_new_ctx *ctx, PyObject *dict)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
     // Check for a __slots__ sequence variable in dict, and count it
     ctx->add_dict = 0;
     ctx->add_weak = 0;
@@ -4460,10 +4619,12 @@ type_new_slots(type_new_ctx *ctx, PyObject *dict)
 static PyTypeObject*
 type_new_alloc(type_new_ctx *ctx)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *metatype = ctx->metatype;
     PyTypeObject *type;
 
     // Allocate the type object
+    PyRegion_NotifyTypeUse(metatype);
     type = (PyTypeObject *)metatype->tp_alloc(metatype, ctx->nslot);
     if (type == NULL) {
         return NULL;
@@ -4483,7 +4644,12 @@ type_new_alloc(type_new_ctx *ctx)
     type->tp_as_mapping = &et->as_mapping;
     type->tp_as_buffer = &et->as_buffer;
 
-    set_tp_bases(type, Py_NewRef(ctx->bases), 1);
+    assert(!PyRegion_NeedsReadBarrier(ctx->bases));
+    assert(!PyRegion_NeedsReadBarrier(ctx->base));
+    assert(!PyRegion_NeedsReadBarrier(ctx->name));
+    int res = set_tp_bases(type, Py_NewRef(ctx->bases), 1);
+    assert(res == 0);
+    (void)res;
     type->tp_base = (PyTypeObject *)Py_NewRef(ctx->base);
 
     type->tp_dealloc = subtype_dealloc;
@@ -4896,6 +5062,7 @@ type_new_set_attrs(const type_new_ctx *ctx, PyTypeObject *type)
 static int
 type_new_get_slots(type_new_ctx *ctx, PyObject *dict)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *slots = PyDict_GetItemWithError(dict, &_Py_ID(__slots__));
     if (slots == NULL) {
         if (PyErr_Occurred()) {
@@ -4927,6 +5094,7 @@ type_new_get_slots(type_new_ctx *ctx, PyObject *dict)
 static PyTypeObject*
 type_new_init(type_new_ctx *ctx)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *dict = PyDict_Copy(ctx->orig_dict);
     if (dict == NULL) {
         goto error;
@@ -4955,6 +5123,8 @@ type_new_init(type_new_ctx *ctx)
     return type;
 
 error:
+    assert(!PyRegion_NeedsReadBarrier(ctx->slots));
+    assert(!PyRegion_NeedsReadBarrier(dict));
     Py_CLEAR(ctx->slots);
     Py_XDECREF(dict);
     return NULL;
@@ -4964,6 +5134,7 @@ error:
 static PyObject*
 type_new_impl(type_new_ctx *ctx)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = type_new_init(ctx);
     if (type == NULL) {
         return NULL;
@@ -5017,6 +5188,7 @@ error:
 static int
 type_new_get_bases(type_new_ctx *ctx, PyObject **type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t nbases = PyTuple_GET_SIZE(ctx->bases);
     if (nbases == 0) {
         // Adjust for empty tuple bases
@@ -5056,6 +5228,7 @@ type_new_get_bases(type_new_ctx *ctx, PyObject **type)
     if (winner != ctx->metatype) {
         if (winner->tp_new != type_new) {
             /* Pass it to the winner */
+            PyRegion_NotifyTypeUse(winner);
             *type = winner->tp_new(winner, ctx->args, ctx->kwds);
             if (*type == NULL) {
                 return -1;
@@ -5073,7 +5246,7 @@ type_new_get_bases(type_new_ctx *ctx, PyObject **type)
     }
 
     ctx->base = base;
-    ctx->bases = Py_NewRef(ctx->bases);
+    ctx->bases = PyRegion_NewRef(ctx->bases);
     return 0;
 }
 
@@ -5081,6 +5254,7 @@ type_new_get_bases(type_new_ctx *ctx, PyObject **type)
 static PyObject *
 type_new(PyTypeObject *metatype, PyObject *args, PyObject *kwds)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(args != NULL && PyTuple_Check(args));
     assert(kwds == NULL || PyDict_Check(kwds));
 
@@ -5122,7 +5296,7 @@ type_new(PyTypeObject *metatype, PyObject *args, PyObject *kwds)
     assert(ctx.bases != NULL);
 
     type = type_new_impl(&ctx);
-    Py_DECREF(ctx.bases);
+    PyRegion_CLEARLOCAL(ctx.bases);
     return type;
 }
 
@@ -5566,7 +5740,9 @@ PyType_FromMetaclass(
     /* Set slots we have prepared */
 
     type->tp_base = (PyTypeObject *)Py_NewRef(base);
-    set_tp_bases(type, bases, 1);
+    int set_res = set_tp_bases(type, bases, 1);
+    assert(set_res == 0);
+    (void)(set_res);
     bases = NULL;  // We give our reference to bases to the type
 
     type->tp_doc = tp_doc;
@@ -6509,6 +6685,7 @@ _Py_type_getattro_impl(PyTypeObject *type, PyObject *name, int * suppress_missin
 PyObject *
 _Py_type_getattro(PyObject *tp, PyObject *name)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(tp);
     return _Py_type_getattro_impl(type, name, NULL);
 }
@@ -6574,6 +6751,7 @@ update_slot_after_setattr(PyTypeObject *type, PyObject *name)
 static int
 type_setattro(PyObject *self, PyObject *name, PyObject *value)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(self);
     int res;
     if (type->tp_flags & Py_TPFLAGS_IMMUTABLETYPE) {
@@ -6597,6 +6775,7 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
     }
 
     if (PyUnicode_CheckExact(name)) {
+        assert(!PyRegion_NeedsReadBarrier(name));
         Py_INCREF(name);
     }
     else {
@@ -6610,6 +6789,7 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
         if (!PyUnicode_CHECK_INTERNED(name)) {
             PyErr_SetString(PyExc_MemoryError,
                             "Out of memory interning an attribute name");
+            assert(!PyRegion_NeedsReadBarrier(name));
             Py_DECREF(name);
             return -1;
         }
@@ -6637,6 +6817,7 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
         BEGIN_TYPE_LOCK();
         dict = type->tp_dict;
         if (dict == NULL) {
+            assert(PyRegion_IsLocal(type) || _Py_IsImmutable(type));
             // TODO(Immutable): Should we freeze this here, if the same type is frozen?
             dict = type->tp_dict = PyDict_New();
         }
@@ -6659,8 +6840,11 @@ type_setattro(PyObject *self, PyObject *name, PyObject *value)
     END_TYPE_DICT_LOCK();
 
 done:
+    assert(!PyRegion_NeedsReadBarrier(name));
     Py_DECREF(name);
+    assert(!PyRegion_NeedsReadBarrier(descr));
     Py_XDECREF(descr);
+    assert(!PyRegion_NeedsReadBarrier(old_value));
     Py_XDECREF(old_value);
     return res;
 }
@@ -6669,6 +6853,7 @@ done:
 static void
 type_dealloc_common(PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *bases = lookup_tp_bases(type);
     if (bases != NULL) {
         PyObject *exc = PyErr_GetRaisedException();
@@ -6811,11 +6996,11 @@ type_dealloc(PyObject *self)
     assert(Py_REFCNT(type) == 0);
     PyObject_ClearWeakRefs((PyObject *)type);
 
-    Py_XDECREF(type->tp_base);
-    Py_XDECREF(type->tp_dict);
-    Py_XDECREF(type->tp_bases);
-    Py_XDECREF(type->tp_mro);
-    Py_XDECREF(type->tp_cache);
+    PyRegion_CLEAR(type, type->tp_base);
+    PyRegion_CLEAR(type, type->tp_dict);
+    PyRegion_CLEAR(type, type->tp_bases);
+    PyRegion_CLEAR(type, type->tp_mro);
+    PyRegion_CLEAR(type, type->tp_cache);
     clear_tp_subclasses(type);
 
     /* A type's tp_doc is heap allocated, unlike the tp_doc slots
@@ -6824,13 +7009,13 @@ type_dealloc(PyObject *self)
     PyMem_Free((char *)type->tp_doc);
 
     PyHeapTypeObject *et = (PyHeapTypeObject *)type;
-    Py_XDECREF(et->ht_name);
-    Py_XDECREF(et->ht_qualname);
-    Py_XDECREF(et->ht_slots);
+    PyRegion_CLEAR(et, et->ht_name);
+    PyRegion_CLEAR(et, et->ht_qualname);
+    PyRegion_CLEAR(et, et->ht_slots);
     if (et->ht_cached_keys) {
         _PyDictKeys_DecRef(et->ht_cached_keys);
     }
-    Py_XDECREF(et->ht_module);
+    PyRegion_CLEAR(et, et->ht_module);
     PyMem_Free(et->_ht_tpname);
 #ifdef Py_GIL_DISABLED
     assert(et->unique_id == _Py_INVALID_UNIQUE_ID);
@@ -6850,6 +7035,7 @@ static PyObject *
 type___subclasses___impl(PyTypeObject *self)
 /*[clinic end generated code: output=eb5eb54485942819 input=5af66132436f9a7b]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return _PyType_GetSubclasses(self);
 }
 
@@ -6857,6 +7043,7 @@ static PyObject *
 type_prepare(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
              PyObject *kwnames)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyDict_New();
 }
 
@@ -6872,6 +7059,7 @@ type_prepare(PyObject *self, PyObject *const *args, Py_ssize_t nargs,
 static int
 merge_class_dict(PyObject *dict, PyObject *aclass)
 {
+
     PyObject *classdict;
     PyObject *bases;
 
@@ -6884,7 +7072,7 @@ merge_class_dict(PyObject *dict, PyObject *aclass)
     }
     if (classdict != NULL) {
         int status = PyDict_Update(dict, classdict);
-        Py_DECREF(classdict);
+        PyRegion_CLEARLOCAL(classdict);
         if (status < 0)
             return -1;
     }
@@ -6898,7 +7086,7 @@ merge_class_dict(PyObject *dict, PyObject *aclass)
         Py_ssize_t i, n;
         n = PySequence_Size(bases); /* This better be right */
         if (n < 0) {
-            Py_DECREF(bases);
+            PyRegion_CLEARLOCAL(bases);
             return -1;
         }
         else {
@@ -6906,18 +7094,18 @@ merge_class_dict(PyObject *dict, PyObject *aclass)
                 int status;
                 PyObject *base = PySequence_GetItem(bases, i);
                 if (base == NULL) {
-                    Py_DECREF(bases);
+                    PyRegion_CLEARLOCAL(bases);
                     return -1;
                 }
                 status = merge_class_dict(dict, base);
-                Py_DECREF(base);
+                PyRegion_CLEARLOCAL(base);
                 if (status < 0) {
-                    Py_DECREF(bases);
+                    PyRegion_CLEARLOCAL(bases);
                     return -1;
                 }
             }
         }
-        Py_DECREF(bases);
+        PyRegion_CLEARLOCAL(bases);
     }
     return 0;
 }
@@ -6936,12 +7124,14 @@ static PyObject *
 type___dir___impl(PyTypeObject *self)
 /*[clinic end generated code: output=69d02fe92c0f15fa input=7733befbec645968]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result = NULL;
     PyObject *dict = PyDict_New();
 
     if (dict != NULL && merge_class_dict(dict, (PyObject *)self) == 0)
         result = PyDict_Keys(dict);
 
+    assert(!PyRegion_NeedsReadBarrier(dict));
     Py_XDECREF(dict);
     return result;
 }
@@ -7064,6 +7254,7 @@ type_reachable(PyObject *self, visitproc visit, void *arg)
 static int
 type_clear(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyTypeObject *type = PyTypeObject_CAST(self);
 
     /* Because of type_is_gc(), the collector only calls this
@@ -7101,9 +7292,9 @@ type_clear(PyObject *self)
 
     PyType_Modified(type);
     clear_tp_dict(type);
-    Py_CLEAR(((PyHeapTypeObject *)type)->ht_module);
+    PyRegion_CLEAR(type, ((PyHeapTypeObject *)type)->ht_module);
 
-    Py_CLEAR(type->tp_mro);
+    PyRegion_CLEAR(type, type->tp_mro);
 
     return 0;
 }
@@ -7166,6 +7357,7 @@ PyTypeObject PyType_Type = {
     type_is_gc,                                 /* tp_is_gc */
     .tp_vectorcall = type_vectorcall,
     .tp_reachable = type_reachable,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
@@ -7210,10 +7402,6 @@ PyTypeObject PyType_Type = {
    rules.
 
 */
-
-/* Forward */
-static PyObject *
-object_new(PyTypeObject *type, PyObject *args, PyObject *kwds);
 
 static int
 excess_args(PyObject *args, PyObject *kwds)
@@ -8945,7 +9133,9 @@ type_ready_set_bases(PyTypeObject *type, int initial)
         if (bases == NULL) {
             return -1;
         }
-        set_tp_bases(type, bases, 1);
+        int res = set_tp_bases(type, bases, 1);
+        assert(res == 0);
+        (void)res;
     }
     return 0;
 }
@@ -9555,6 +9745,7 @@ add_all_subclasses(PyTypeObject *type, PyObject *bases)
 static PyObject *
 get_subclasses_key(PyTypeObject *type, PyTypeObject *base)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *key = PyLong_FromVoidPtr((void *) type);
     if (key != NULL) {
         return key;
@@ -9573,9 +9764,11 @@ get_subclasses_key(PyTypeObject *type, PyTypeObject *base)
                 continue;
             }
             if (subclass == type) {
+                PyRegion_RemoveLocalRef(subclass);
                 Py_DECREF(subclass);
-                return Py_NewRef(key);
+                return PyRegion_NewRef(key);
             }
+            PyRegion_RemoveLocalRef(subclass);
             Py_DECREF(subclass);
         }
     }
@@ -9586,6 +9779,7 @@ get_subclasses_key(PyTypeObject *type, PyTypeObject *base)
 static void
 remove_subclass(PyTypeObject *base, PyTypeObject *type)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *subclasses = lookup_tp_subclasses(base);  // borrowed ref
     if (subclasses == NULL) {
         return;
@@ -9599,7 +9793,7 @@ remove_subclass(PyTypeObject *base, PyTypeObject *type)
            was passed in the type dict). */
         PyErr_Clear();
     }
-    Py_XDECREF(key);
+    PyRegion_CLEARLOCAL(key);
 
     if (PyDict_Size(subclasses) == 0) {
         clear_tp_subclasses(base);
@@ -9609,6 +9803,7 @@ remove_subclass(PyTypeObject *base, PyTypeObject *type)
 static void
 remove_all_subclasses(PyTypeObject *type, PyObject *bases)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(bases != NULL);
     // remove_subclass() can clear the current exception
     assert(!PyErr_Occurred());
