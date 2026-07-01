@@ -4636,6 +4636,10 @@ type_new_alloc(type_new_ctx *ctx)
     // an instance on one of its parents.
     type_set_flags(type, Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HEAPTYPE |
                    Py_TPFLAGS_BASETYPE | Py_TPFLAGS_HAVE_GC);
+    // Pyrona: classes defined in Python have no un-migrated C methods, so they
+    // are inherently region-safe. Mark them region-aware. (C heap types created
+    // via PyType_FromSpec/PyType_FromMetaclass must NOT get this flag.)
+    type->tp_flags2 |= Py_TPFLAGS2_REGION_AWARE;
 
     // Initialize essential fields
     type->tp_as_async = &et->as_async;
@@ -5726,6 +5730,10 @@ PyType_FromMetaclass(
     type = &res->ht_type;
     /* The flags must be initialized early, before the GC traverses us */
     type_set_flags(type, spec->flags | Py_TPFLAGS_HEAPTYPE);
+    /* Pyrona: let the spec opt this C heap type into tp_flags2 bits
+     * (e.g. Py_TPFLAGS2_REGION_AWARE). Defaults to 0 when unset, so
+     * un-migrated C types stay untrusted. Mirrors spec->flags above. */
+    type->tp_flags2 |= spec->flags2;
 
     res->ht_module = Py_XNewRef(module);
 

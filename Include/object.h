@@ -411,6 +411,10 @@ typedef struct{
     int itemsize;
     unsigned int flags;
     PyType_Slot *slots; /* terminated by slot==0. */
+    /* Pyrona: extra 32-bit type flags (tp_flags2), e.g. Py_TPFLAGS2_REGION_AWARE.
+     * Appended at the end so existing positional initializers keep working
+     * (defaults to 0). See the tp_flags2 FIXME in cpython/object.h. */
+    unsigned int flags2;
 } PyType_Spec;
 
 PyAPI_FUNC(PyObject*) PyType_FromSpec(PyType_Spec*);
