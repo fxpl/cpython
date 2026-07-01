@@ -563,7 +563,9 @@ static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruc
 static inline void
 _PyObject_Init(PyObject *op, PyTypeObject *typeobj)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(op != NULL);
+    assert(!PyRegion_NeedsReadBarrier(typeobj));
     Py_SET_TYPE(op, typeobj);
     assert(_PyType_HasFeature(typeobj, Py_TPFLAGS_HEAPTYPE) || _Py_IsImmortal(typeobj));
     _Py_INCREF_TYPE(typeobj);

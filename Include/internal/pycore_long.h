@@ -234,6 +234,7 @@ _PyLong_IsPositive(const PyLongObject *op)
 static inline Py_ssize_t
 _PyLong_DigitCount(const PyLongObject *op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyLong_Check(op));
     return (Py_ssize_t)(op->long_value.lv_tag >> NON_SIZE_BITS);
 }
@@ -278,6 +279,7 @@ _PyLong_SameSign(const PyLongObject *a, const PyLongObject *b)
 static inline void
 _PyLong_SetSignAndDigitCount(PyLongObject *op, int sign, Py_ssize_t size)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(size >= 0);
     assert(-1 <= sign && sign <= 1);
     assert(sign != 0 || size == 0);
