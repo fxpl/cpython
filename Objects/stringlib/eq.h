@@ -6,6 +6,7 @@
 Py_LOCAL_INLINE(int)
 unicode_eq(PyObject *str1, PyObject *str2)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t len = PyUnicode_GET_LENGTH(str1);
     if (PyUnicode_GET_LENGTH(str2) != len) {
         return 0;

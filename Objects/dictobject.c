@@ -5207,6 +5207,7 @@ PyDict_ContainsString(PyObject *op, const char *key)
 int
 _PyDict_Contains_KnownHash(PyObject *op, PyObject *key, Py_hash_t hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyDictObject *mp = (PyDictObject *)op;
     PyObject *value;
     Py_ssize_t ix;

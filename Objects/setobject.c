@@ -78,6 +78,7 @@ static PyObject _dummy_struct;
 static setentry *
 set_lookkey(PySetObject *so, PyObject *key, Py_hash_t hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *table;
     setentry *entry;
     size_t perturb = hash;
@@ -110,8 +111,12 @@ set_lookkey(PySetObject *so, PyObject *key, Py_hash_t hash)
                         return NULL;
                 } else {
                     // incref startkey because it can be removed from the set by the compare
+                    if (PyRegion_AddLocalRef(startkey)) {
+                        return NULL;
+                    }
                     Py_INCREF(startkey);
                     cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+                    PyRegion_RemoveLocalRef(startkey);
                     Py_DECREF(startkey);
                     if (cmp < 0)
                         return NULL;
@@ -134,6 +139,7 @@ static int set_table_resize(PySetObject *, Py_ssize_t);
 static int
 set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *table;
     setentry *freeslot;
     setentry *entry;
@@ -166,13 +172,17 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
                     && unicode_eq(startkey, key))
                     goto found_active;
                 table = so->table;
+                if (PyRegion_AddLocalRef(startkey)) {
+                    goto error;
+                }
                 Py_INCREF(startkey);
                 cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+                PyRegion_RemoveLocalRef(startkey);
                 Py_DECREF(startkey);
                 if (cmp > 0)
                     goto found_active;
                 if (cmp < 0)
-                    goto comparison_error;
+                    goto error;
                 if (table != so->table || entry->key != startkey)
                     goto restart;
                 mask = so->mask;
@@ -190,6 +200,9 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
   found_unused_or_dummy:
     if (freeslot == NULL)
         goto found_unused;
+    if (PyRegion_TakeRef(so, key)) {
+        goto error;
+    }
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
     freeslot->key = key;
     freeslot->hash = hash;
@@ -197,6 +210,9 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
 
   found_unused:
     so->fill++;
+    if (PyRegion_TakeRef(so, key)) {
+        goto error;
+    }
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used + 1);
     entry->key = key;
     entry->hash = hash;
@@ -205,25 +221,30 @@ set_add_entry_takeref(PySetObject *so, PyObject *key, Py_hash_t hash)
     return set_table_resize(so, so->used>50000 ? so->used*2 : so->used*4);
 
   found_active:
-    Py_DECREF(key);
+    PyRegion_CLEARLOCAL(key);
     return 0;
 
-  comparison_error:
-    Py_DECREF(key);
+  error:
+    PyRegion_CLEARLOCAL(key);
     return -1;
 }
 
 static int
 set_add_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
 
+    if (PyRegion_AddLocalRef(key)) {
+        return -1;
+    }
     return set_add_entry_takeref(so, Py_NewRef(key), hash);
 }
 
 static void
 set_unhashable_type(PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *exc = PyErr_GetRaisedException();
     assert(exc != NULL);
     if (!Py_IS_TYPE(exc, (PyTypeObject*)PyExc_TypeError)) {
@@ -234,16 +255,17 @@ set_unhashable_type(PyObject *key)
     PyErr_Format(PyExc_TypeError,
                  "cannot use '%T' as a set element (%S)",
                  key, exc);
-    Py_DECREF(exc);
+    PyRegion_CLEARLOCAL(exc);
 }
 
 int
 _PySet_AddTakeRef(PySetObject *so, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         return -1;
     }
     // We don't pre-increment here, the caller holds a strong
@@ -257,11 +279,14 @@ known to be absent from the set.  Besides the performance benefit,
 there is also safety benefit since using set_add_entry() risks making
 a callback in the middle of a set_table_resize(), see issue 1456209.
 The caller is responsible for updating the key's reference count and
-the setobject's fill and used fields.
+the setobject's fill and used fields. The caller is also responsible
+to call the region write barrier.
 */
 static void
 set_insert_clean(setentry *table, size_t mask, PyObject *key, Py_hash_t hash)
 {
+    // Pyrona: This function is unfailable and the barrier usage depends on the
+    // caller. The docs therefore require the caller to do the barrier
     setentry *entry;
     size_t perturb = hash;
     size_t i = (size_t)hash & mask;
@@ -297,6 +322,7 @@ actually be smaller than the old one.
 static int
 set_table_resize(PySetObject *so, Py_ssize_t minused)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *oldtable, *newtable, *entry;
     Py_ssize_t oldmask = so->mask;
     size_t newmask;
@@ -352,6 +378,8 @@ set_table_resize(PySetObject *so, Py_ssize_t minused)
 
     /* Copy the data over; this is refcount-neutral for active entries;
        dummy entries aren't copied over, of course */
+    // Regions: This operation is also barrier neutral since no RCs change and
+    // all objects will still be referenced from `so` like before
     newmask = (size_t)so->mask;
     if (so->fill == so->used) {
         for (entry = oldtable; entry <= oldtable + oldmask; entry++) {
@@ -376,6 +404,7 @@ set_table_resize(PySetObject *so, Py_ssize_t minused)
 static int
 set_contains_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *entry;
 
     entry = set_lookkey(so, key, hash);
@@ -390,6 +419,7 @@ set_contains_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 static int
 set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *entry;
     PyObject *old_key;
 
@@ -402,6 +432,7 @@ set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
     entry->key = dummy;
     entry->hash = -1;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
+    PyRegion_RemoveRef(so, old_key);
     Py_DECREF(old_key);
     return DISCARD_FOUND;
 }
@@ -409,6 +440,7 @@ set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 static int
 set_add_key(PySetObject *so, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if(!Py_CHECKWRITE(so)){
         // TODO(Immutable): Should this be inside the critical section?
         PyErr_WriteToImmutable(so);
@@ -426,6 +458,7 @@ set_add_key(PySetObject *so, PyObject *key)
 static int
 set_contains_key(PySetObject *so, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
@@ -437,6 +470,7 @@ set_contains_key(PySetObject *so, PyObject *key)
 static int
 set_discard_key(PySetObject *so, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
@@ -448,6 +482,7 @@ set_discard_key(PySetObject *so, PyObject *key)
 static void
 set_empty_to_minsize(PySetObject *so)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     memset(so->smalltable, 0, sizeof(so->smalltable));
     so->fill = 0;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, 0);
@@ -459,6 +494,7 @@ set_empty_to_minsize(PySetObject *so)
 static int
 set_clear_internal(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     setentry *entry;
     setentry *table = so->table;
@@ -497,6 +533,7 @@ set_clear_internal(PyObject *self)
     for (entry = table; used > 0; entry++) {
         if (entry->key && entry->key != dummy) {
             used--;
+            PyRegion_RemoveRef(self, entry->key);
             Py_DECREF(entry->key);
         }
     }
@@ -522,6 +559,7 @@ set_clear_internal(PyObject *self)
 static int
 set_next(PySetObject *so, Py_ssize_t *pos_ptr, setentry **entry_ptr)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t i;
     Py_ssize_t mask;
     setentry *entry;
@@ -546,6 +584,7 @@ set_next(PySetObject *so, Py_ssize_t *pos_ptr, setentry **entry_ptr)
 static void
 set_dealloc(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     setentry *entry;
     Py_ssize_t used = so->used;
@@ -557,6 +596,7 @@ set_dealloc(PyObject *self)
     for (entry = so->table; used > 0; entry++) {
         if (entry->key && entry->key != dummy) {
                 used--;
+                PyRegion_RemoveRef(self, entry->key);
                 Py_DECREF(entry->key);
         }
     }
@@ -568,6 +608,7 @@ set_dealloc(PyObject *self)
 static PyObject *
 set_repr_lock_held(PySetObject *so)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result=NULL, *keys, *listrepr, *tmp;
     int status = Py_ReprEnter((PyObject*)so);
 
@@ -593,15 +634,21 @@ set_repr_lock_held(PySetObject *so)
     Py_ssize_t pos = 0, idx = 0;
     setentry *entry;
     while (set_next(so, &pos, &entry)) {
+        // Regions: keys are always local and all references should be allowed
+        int res = PyRegion_AddLocalRef(entry->key);
+        assert(res == 0);
+        (void)res;
         PyList_SET_ITEM(keys, idx++, Py_NewRef(entry->key));
     }
 
     /* repr(keys)[1:-1] */
     listrepr = PyObject_Repr(keys);
+    assert(!PyRegion_NeedsReadBarrier(keys));
     Py_DECREF(keys);
     if (listrepr == NULL)
-        goto done;
+    goto done;
     tmp = PyUnicode_Substring(listrepr, 1, PyUnicode_GET_LENGTH(listrepr)-1);
+    assert(!PyRegion_NeedsReadBarrier(listrepr));
     Py_DECREF(listrepr);
     if (tmp == NULL)
         goto done;
@@ -613,6 +660,7 @@ set_repr_lock_held(PySetObject *so)
                                       listrepr);
     else
         result = PyUnicode_FromFormat("{%U}", listrepr);
+    assert(!PyRegion_NeedsReadBarrier(listrepr));
     Py_DECREF(listrepr);
 done:
     Py_ReprLeave((PyObject*)so);
@@ -622,6 +670,7 @@ done:
 static PyObject *
 set_repr(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     PyObject *result;
     Py_BEGIN_CRITICAL_SECTION(so);
@@ -633,6 +682,7 @@ set_repr(PyObject *self)
 static Py_ssize_t
 set_len(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     return FT_ATOMIC_LOAD_SSIZE_RELAXED(so->used);
 }
@@ -640,6 +690,7 @@ set_len(PyObject *self)
 static int
 set_merge_lock_held(PySetObject *so, PyObject *otherset)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *other;
     PyObject *key;
     Py_ssize_t i;
@@ -667,11 +718,19 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
 
     /* If our table is empty, and both tables have the same size, and
        there are no dummies to eliminate, then just copy the pointers. */
-    if (so->fill == 0 && so->mask == other->mask && other->fill == other->used) {
+    if (so->fill == 0
+        && so->mask == other->mask
+        && other->fill == other->used
+        // Only allow this, if so is local, to ensure all refs can be added
+        && PyRegion_IsLocal(so)
+    ) {
         for (i = 0; i <= other->mask; i++, so_entry++, other_entry++) {
             key = other_entry->key;
             if (key != NULL) {
                 assert(so_entry->key == NULL);
+                int res = PyRegion_AddLocalRef(key);
+                assert(res == 0);
+                (void)res;
                 so_entry->key = Py_NewRef(key);
                 so_entry->hash = other_entry->hash;
             }
@@ -681,8 +740,8 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
         return 0;
     }
 
-    /* If our table is empty, we can use set_insert_clean() */
-    if (so->fill == 0) {
+    /* If our table is empty and local, we can use set_insert_clean() */
+    if (so->fill == 0 && PyRegion_IsLocal(so)) {
         setentry *newtable = so->table;
         size_t newmask = (size_t)so->mask;
         so->fill = other->used;
@@ -690,6 +749,9 @@ set_merge_lock_held(PySetObject *so, PyObject *otherset)
         for (i = other->mask + 1; i > 0 ; i--, other_entry++) {
             key = other_entry->key;
             if (key != NULL && key != dummy) {
+                int res = PyRegion_AddLocalRef(key);
+                assert(res == 0);
+                (void)res;
                 set_insert_clean(newtable, newmask, Py_NewRef(key),
                                  other_entry->hash);
             }
@@ -723,6 +785,7 @@ static PyObject *
 set_pop_impl(PySetObject *so)
 /*[clinic end generated code: output=4d65180f1271871b input=9296c84921125060]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     /* Make sure the search finger is in bounds */
     setentry *entry = so->table + (so->finger & so->mask);
     setentry *limit = so->table + so->mask;
@@ -742,6 +805,10 @@ set_pop_impl(PySetObject *so)
             entry = so->table;
     }
     key = entry->key;
+    if (PyRegion_AddLocalRef(key)) {
+        return NULL;
+    }
+    PyRegion_RemoveRef(so, key);
     entry->key = dummy;
     entry->hash = -1;
     FT_ATOMIC_STORE_SSIZE_RELAXED(so->used, so->used - 1);
@@ -752,6 +819,7 @@ set_pop_impl(PySetObject *so)
 static int
 set_traverse(PyObject *self, visitproc visit, void *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     Py_ssize_t pos = 0;
     setentry *entry;
@@ -769,6 +837,7 @@ set_traverse(PyObject *self, visitproc visit, void *arg)
 static Py_uhash_t
 _shuffle_bits(Py_uhash_t h)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return ((h ^ 89869747UL) ^ (h << 16)) * 3644798167UL;
 }
 
@@ -785,6 +854,7 @@ _shuffle_bits(Py_uhash_t h)
 static Py_hash_t
 frozenset_hash_impl(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     Py_uhash_t hash = 0;
     setentry *entry;
@@ -827,6 +897,7 @@ frozenset_hash_impl(PyObject *self)
 static Py_hash_t
 frozenset_hash(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     Py_uhash_t hash;
 
@@ -852,16 +923,18 @@ typedef struct {
 static void
 setiter_dealloc(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setiterobject *si = (setiterobject*)self;
     /* bpo-31095: UnTrack is needed before calling any callbacks */
     _PyObject_GC_UNTRACK(si);
-    Py_XDECREF(si->si_set);
+    PyRegion_CLEAR(si, si->si_set);
     PyObject_GC_Del(si);
 }
 
 static int
 setiter_traverse(PyObject *self, visitproc visit, void *arg)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setiterobject *si = (setiterobject*)self;
     Py_VISIT(si->si_set);
     return 0;
@@ -870,6 +943,7 @@ setiter_traverse(PyObject *self, visitproc visit, void *arg)
 static PyObject *
 setiter_len(PyObject *op, PyObject *Py_UNUSED(ignored))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setiterobject *si = (setiterobject*)op;
     Py_ssize_t len = 0;
     if (si->si_set != NULL && si->si_used == si->si_set->used)
@@ -882,14 +956,19 @@ PyDoc_STRVAR(length_hint_doc, "Private method returning an estimate of len(list(
 static PyObject *
 setiter_reduce(PyObject *op, PyObject *Py_UNUSED(ignored))
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setiterobject *si = (setiterobject*)op;
 
     /* copy the iterator state */
     setiterobject tmp = *si;
+    if (PyRegion_AddLocalRef(tmp.si_set)) {
+        return NULL;
+    }
     Py_XINCREF(tmp.si_set);
 
     /* iterate the temporary into a list */
     PyObject *list = PySequence_List((PyObject*)&tmp);
+    PyRegion_RemoveLocalRef(tmp.si_set);
     Py_XDECREF(tmp.si_set);
     if (list == NULL) {
         return NULL;
@@ -907,6 +986,7 @@ static PyMethodDef setiter_methods[] = {
 
 static PyObject *setiter_iternext(PyObject *self)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setiterobject *si = (setiterobject*)self;
     PyObject *key = NULL;
     Py_ssize_t i, mask;
@@ -935,11 +1015,12 @@ static PyObject *setiter_iternext(PyObject *self)
         i++;
     }
     if (i <= mask) {
-        key = Py_NewRef(entry[i].key);
+        key = PyRegion_NewRef(entry[i].key);
     }
     Py_END_CRITICAL_SECTION();
     si->si_pos = i+1;
     if (key == NULL) {
+        PyRegion_RemoveRef(si, so);
         si->si_set = NULL;
         Py_DECREF(so);
         return NULL;
@@ -979,15 +1060,21 @@ PyTypeObject PySetIter_Type = {
     setiter_iternext,                           /* tp_iternext */
     setiter_methods,                            /* tp_methods */
     0,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyObject *
 set_iter(PyObject *so)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t size = set_len(so);
     setiterobject *si = PyObject_GC_New(setiterobject, &PySetIter_Type);
     if (si == NULL)
         return NULL;
+    if (PyRegion_AddLocalRef(so)) {
+        Py_DECREF(si);
+        return NULL;
+    }
     si->si_set = (PySetObject*)Py_NewRef(so);
     si->si_used = size;
     si->si_pos = 0;
@@ -999,6 +1086,7 @@ set_iter(PyObject *so)
 static int
 set_update_dict_lock_held(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyDict_CheckExact(other));
 
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
@@ -1030,6 +1118,7 @@ set_update_dict_lock_held(PySetObject *so, PyObject *other)
 static int
 set_update_iterable_lock_held(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
 
     PyObject *it = PyObject_GetIter(other);
@@ -1040,13 +1129,13 @@ set_update_iterable_lock_held(PySetObject *so, PyObject *other)
     PyObject *key;
     while ((key = PyIter_Next(it)) != NULL) {
         if (set_add_key(so, key)) {
-            Py_DECREF(it);
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(it);
+            PyRegion_CLEARLOCAL(key);
             return -1;
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
-    Py_DECREF(it);
+    PyRegion_CLEARLOCAL(it);
     if (PyErr_Occurred())
         return -1;
     return 0;
@@ -1055,6 +1144,7 @@ set_update_iterable_lock_held(PySetObject *so, PyObject *other)
 static int
 set_update_lock_held(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyAnySet_Check(other)) {
         return set_merge_lock_held(so, other);
     }
@@ -1068,6 +1158,7 @@ set_update_lock_held(PySetObject *so, PyObject *other)
 static int
 set_update_local(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(Py_REFCNT(so) == 1);
     if (PyAnySet_Check(other)) {
         int rv;
@@ -1089,6 +1180,7 @@ set_update_local(PySetObject *so, PyObject *other)
 static int
 set_update_internal(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyAnySet_Check(other)) {
         if (Py_Is((PyObject *)so, other)) {
             return 0;
@@ -1128,6 +1220,7 @@ set_update_impl(PySetObject *so, PyObject * const *others,
                 Py_ssize_t others_length)
 /*[clinic end generated code: output=017c781c992d5c23 input=ed5d78885b076636]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t i;
 
     if(!Py_CHECKWRITE(so)){
@@ -1150,6 +1243,7 @@ set_update_impl(PySetObject *so, PyObject * const *others,
 static PyObject *
 make_new_set(PyTypeObject *type, PyObject *iterable)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyType_Check(type));
     PySetObject *so;
 
@@ -1167,6 +1261,7 @@ make_new_set(PyTypeObject *type, PyObject *iterable)
 
     if (iterable != NULL) {
         if (set_update_local(so, iterable)) {
+            assert(!PyRegion_NeedsReadBarrier(so));
             Py_DECREF(so);
             return NULL;
         }
@@ -1178,6 +1273,7 @@ make_new_set(PyTypeObject *type, PyObject *iterable)
 static PyObject *
 make_new_set_basetype(PyTypeObject *type, PyObject *iterable)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (type != &PySet_Type && type != &PyFrozenSet_Type) {
         if (PyType_IsSubtype(type, &PySet_Type))
             type = &PySet_Type;
@@ -1190,13 +1286,14 @@ make_new_set_basetype(PyTypeObject *type, PyObject *iterable)
 static PyObject *
 make_new_frozenset(PyTypeObject *type, PyObject *iterable)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (type != &PyFrozenSet_Type) {
         return make_new_set(type, iterable);
     }
 
     if (iterable != NULL && PyFrozenSet_CheckExact(iterable)) {
         /* frozenset(f) is idempotent */
-        return Py_NewRef(iterable);
+        return PyRegion_NewRef(iterable);
     }
     return make_new_set(type, iterable);
 }
@@ -1204,6 +1301,7 @@ make_new_frozenset(PyTypeObject *type, PyObject *iterable)
 static PyObject *
 frozenset_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *iterable = NULL;
 
     if ((type == &PyFrozenSet_Type ||
@@ -1223,6 +1321,7 @@ static PyObject *
 frozenset_vectorcall(PyObject *type, PyObject * const*args,
                      size_t nargsf, PyObject *kwnames)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!_PyArg_NoKwnames("frozenset", kwnames)) {
         return NULL;
     }
@@ -1242,8 +1341,11 @@ set_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
     return make_new_set(type, NULL);
 }
 
+static PyObject *
+set_difference(PySetObject *so, PyObject *other);
+
 /* set_swap_bodies() switches the contents of any two sets by moving their
-   internal data pointers and, if needed, copying the internal smalltables.
+internal data pointers and, if needed, copying the internal smalltables.
    Semantically equivalent to:
 
      t=set(a); a.clear(); a.update(b); b.clear(); b.update(t); del t
@@ -1251,15 +1353,43 @@ set_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
    The function always succeeds and it leaves both objects in a stable state.
    Useful for operations that update in-place (by allowing an intermediate
    result to be swapped into one of the original inputs).
-*/
 
+   Regions: Currently this function assumes that b is always local and that
+   b is always a subset of a.
+*/
 static void
 set_swap_bodies(PySetObject *a, PySetObject *b)
 {
+    // Pyrona: This functions was checked and no further migration is needed
+
+    // Regions: This function would be hard to migrate on its own,
+    // however, this is only an internal function and all call sides
+    // use a temporary local set for `b`. Also, `b` is always a subset
+    // of `a`. This allows us to be smart about migrating this function.
+    assert(PyRegion_IsLocal(b));
+
     Py_ssize_t t;
     setentry *u;
     setentry tab[PySet_MINSIZE];
     Py_hash_t h;
+
+    // Regions: If a is local, this swap is safe and doesn't require
+    // any barriers.
+    if (!PyRegion_IsLocal(a)) {
+        // Since b is a subset, we can iterate over the difference of b and a
+        // and only update the refs that need it.
+        PySetObject *c = (PySetObject*)set_difference(a, _PyObject_CAST(b));
+        Py_ssize_t pos = 0;
+        setentry *entry;
+        while (set_next(c, &pos, &entry)) {
+            int res = PyRegion_AddLocalRef(entry->key);
+            assert(res==0);
+            (void)res;
+            PyRegion_RemoveRef(a, entry->key);
+        }
+        assert(PyRegion_IsLocal(c));
+        Py_DECREF(c);
+    }
 
     t = a->fill;     a->fill   = b->fill;        b->fill  = t;
     t = a->used;
@@ -1310,6 +1440,7 @@ set_copy_impl(PySetObject *so)
         return NULL;
     }
     if (set_merge_lock_held((PySetObject *)copy, (PyObject *)so) < 0) {
+        assert(!PyRegion_NeedsReadBarrier(copy));
         Py_DECREF(copy);
         return NULL;
     }
@@ -1329,7 +1460,7 @@ frozenset_copy_impl(PySetObject *so)
 /*[clinic end generated code: output=b356263526af9e70 input=fbf5bef131268dd7]*/
 {
     if (PyFrozenSet_CheckExact(so)) {
-        return Py_NewRef(so);
+        return PyRegion_NewRef(so);
     }
     return set_copy_impl(so);
 }
@@ -1367,6 +1498,7 @@ set_union_impl(PySetObject *so, PyObject * const *others,
                Py_ssize_t others_length)
 /*[clinic end generated code: output=b1bfa3d74065f27e input=55a2e81db6347a4f]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *result;
     PyObject *other;
     Py_ssize_t i;
@@ -1380,6 +1512,7 @@ set_union_impl(PySetObject *so, PyObject * const *others,
         if ((PyObject *)so == other)
             continue;
         if (set_update_local(result, other)) {
+            assert(!PyRegion_NeedsReadBarrier(result));
             Py_DECREF(result);
             return NULL;
         }
@@ -1390,6 +1523,7 @@ set_union_impl(PySetObject *so, PyObject * const *others,
 static PyObject *
 set_or(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *result;
 
     if (!PyAnySet_Check(self) || !PyAnySet_Check(other))
@@ -1403,6 +1537,7 @@ set_or(PyObject *self, PyObject *other)
         return (PyObject *)result;
     }
     if (set_update_local(result, other)) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return NULL;
     }
@@ -1412,6 +1547,7 @@ set_or(PyObject *self, PyObject *other)
 static PyObject *
 set_ior(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
@@ -1419,12 +1555,13 @@ set_ior(PyObject *self, PyObject *other)
     if (set_update_internal(so, other)) {
         return NULL;
     }
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 static PyObject *
 set_intersection(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *result;
     PyObject *key, *it, *tmp;
     Py_hash_t hash;
@@ -1450,27 +1587,35 @@ set_intersection(PySetObject *so, PyObject *other)
         while (set_next((PySetObject *)other, &pos, &entry)) {
             key = entry->key;
             hash = entry->hash;
+            if (PyRegion_AddLocalRef(key)) {
+                assert(!PyRegion_NeedsReadBarrier(result));
+                Py_DECREF(result);
+                return NULL;
+            }
             Py_INCREF(key);
             rv = set_contains_entry(so, key, hash);
             if (rv < 0) {
+                assert(!PyRegion_NeedsReadBarrier(result));
                 Py_DECREF(result);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return NULL;
             }
             if (rv) {
                 if (set_add_entry(result, key, hash)) {
+                    assert(!PyRegion_NeedsReadBarrier(result));
                     Py_DECREF(result);
-                    Py_DECREF(key);
+                    PyRegion_CLEARLOCAL(key);
                     return NULL;
                 }
             }
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
         }
         return (PyObject *)result;
     }
 
     it = PyObject_GetIter(other);
     if (it == NULL) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return NULL;
     }
@@ -1486,22 +1631,26 @@ set_intersection(PySetObject *so, PyObject *other)
             if (set_add_entry(result, key, hash))
                 goto error;
             if (PySet_GET_SIZE(result) >= PySet_GET_SIZE(so)) {
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 break;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
+    assert(!PyRegion_NeedsReadBarrier(it));
     Py_DECREF(it);
     if (PyErr_Occurred()) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return NULL;
     }
     return (PyObject *)result;
   error:
+    assert(!PyRegion_NeedsReadBarrier(it));
     Py_DECREF(it);
+    assert(!PyRegion_NeedsReadBarrier(result));
     Py_DECREF(result);
-    Py_DECREF(key);
+    PyRegion_CLEARLOCAL(key);
     return NULL;
 }
 
@@ -1518,12 +1667,16 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
                             Py_ssize_t others_length)
 /*[clinic end generated code: output=db9ff9f875132b6b input=36c7b615694cadae]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t i;
 
     if (others_length == 0) {
         return set_copy((PyObject *)so, NULL);
     }
 
+    if (PyRegion_AddLocalRef(so)) {
+        return NULL;
+    }
     PyObject *result = Py_NewRef(so);
     for (i = 0; i < others_length; i++) {
         PyObject *other = others[i];
@@ -1532,10 +1685,10 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
         newresult = set_intersection((PySetObject *)result, other);
         Py_END_CRITICAL_SECTION2();
         if (newresult == NULL) {
-            Py_DECREF(result);
+            PyRegion_CLEARLOCAL(result);
             return NULL;
         }
-        Py_SETREF(result, newresult);
+        PyRegion_XSETLOCALREF(result, newresult);
     }
     return result;
 }
@@ -1543,12 +1696,14 @@ set_intersection_multi_impl(PySetObject *so, PyObject * const *others,
 static PyObject *
 set_intersection_update(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *tmp;
 
     tmp = set_intersection(so, other);
     if (tmp == NULL)
         return NULL;
     set_swap_bodies(so, (PySetObject *)tmp);
+    assert(!PyRegion_NeedsReadBarrier(tmp));
     Py_DECREF(tmp);
     Py_RETURN_NONE;
 }
@@ -1566,6 +1721,7 @@ set_intersection_update_multi_impl(PySetObject *so, PyObject * const *others,
                                    Py_ssize_t others_length)
 /*[clinic end generated code: output=d768b5584675b48d input=782e422fc370e4fc]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *tmp;
 
     tmp = set_intersection_multi_impl(so, others, others_length);
@@ -1574,6 +1730,7 @@ set_intersection_update_multi_impl(PySetObject *so, PyObject * const *others,
     Py_BEGIN_CRITICAL_SECTION(so);
     set_swap_bodies(so, (PySetObject *)tmp);
     Py_END_CRITICAL_SECTION();
+    assert(!PyRegion_NeedsReadBarrier(tmp));
     Py_DECREF(tmp);
     Py_RETURN_NONE;
 }
@@ -1581,6 +1738,7 @@ set_intersection_update_multi_impl(PySetObject *so, PyObject * const *others,
 static PyObject *
 set_and(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyAnySet_Check(self) || !PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
@@ -1596,6 +1754,7 @@ set_and(PyObject *self, PyObject *other)
 static PyObject *
 set_iand(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result;
 
     if (!PyAnySet_Check(other))
@@ -1608,8 +1767,9 @@ set_iand(PyObject *self, PyObject *other)
 
     if (result == NULL)
         return NULL;
+    assert(!PyRegion_NeedsReadBarrier(result));
     Py_DECREF(result);
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 /*[clinic input]
@@ -1626,6 +1786,7 @@ static PyObject *
 set_isdisjoint_impl(PySetObject *so, PyObject *other)
 /*[clinic end generated code: output=273493f2d57c565e input=32f8dcab5e0fc7d6]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *key, *it, *tmp;
     int rv;
 
@@ -1647,8 +1808,12 @@ set_isdisjoint_impl(PySetObject *so, PyObject *other)
         }
         while (set_next((PySetObject *)other, &pos, &entry)) {
             PyObject *key = entry->key;
+            if (PyRegion_AddLocalRef(key)) {
+                return NULL;
+            }
             Py_INCREF(key);
             rv = set_contains_entry(so, key, entry->hash);
+            PyRegion_RemoveLocalRef(key);
             Py_DECREF(key);
             if (rv < 0) {
                 return NULL;
@@ -1666,16 +1831,19 @@ set_isdisjoint_impl(PySetObject *so, PyObject *other)
 
     while ((key = PyIter_Next(it)) != NULL) {
         rv = set_contains_key(so, key);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         if (rv < 0) {
+            assert(!PyRegion_NeedsReadBarrier(it));
             Py_DECREF(it);
             return NULL;
         }
         if (rv) {
+            assert(!PyRegion_NeedsReadBarrier(it));
             Py_DECREF(it);
             Py_RETURN_FALSE;
         }
     }
+    assert(!PyRegion_NeedsReadBarrier(it));
     Py_DECREF(it);
     if (PyErr_Occurred())
         return NULL;
@@ -1685,6 +1853,7 @@ set_isdisjoint_impl(PySetObject *so, PyObject *other)
 static int
 set_difference_update_internal(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(other);
 
@@ -1704,21 +1873,28 @@ set_difference_update_internal(PySetObject *so, PyObject *other)
             if (other == NULL)
                 return -1;
         } else {
+            if (PyRegion_AddLocalRef(other)) {
+                return -1;
+            }
             Py_INCREF(other);
         }
 
         while (set_next((PySetObject *)other, &pos, &entry)) {
             PyObject *key = entry->key;
-            Py_INCREF(key);
-            if (set_discard_entry(so, key, entry->hash) < 0) {
-                Py_DECREF(other);
-                Py_DECREF(key);
+            if (PyRegion_AddLocalRef(key)) {
+                PyRegion_CLEARLOCAL(other);
                 return -1;
             }
-            Py_DECREF(key);
+            Py_INCREF(key);
+            if (set_discard_entry(so, key, entry->hash) < 0) {
+                PyRegion_CLEARLOCAL(other);
+                PyRegion_CLEARLOCAL(key);
+                return -1;
+            }
+            PyRegion_CLEARLOCAL(key);
         }
 
-        Py_DECREF(other);
+        PyRegion_CLEARLOCAL(other);
     } else {
         PyObject *key, *it;
         it = PyObject_GetIter(other);
@@ -1727,13 +1903,13 @@ set_difference_update_internal(PySetObject *so, PyObject *other)
 
         while ((key = PyIter_Next(it)) != NULL) {
             if (set_discard_key(so, key) < 0) {
-                Py_DECREF(it);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(it);
+                PyRegion_CLEARLOCAL(key);
                 return -1;
             }
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
         }
-        Py_DECREF(it);
+        PyRegion_CLEARLOCAL(it);
         if (PyErr_Occurred())
             return -1;
     }
@@ -1756,6 +1932,7 @@ set_difference_update_impl(PySetObject *so, PyObject * const *others,
                            Py_ssize_t others_length)
 /*[clinic end generated code: output=04a22179b322cfe6 input=93ac28ba5b233696]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t i;
 
     for (i = 0; i < others_length; i++) {
@@ -1774,6 +1951,7 @@ set_difference_update_impl(PySetObject *so, PyObject * const *others,
 static PyObject *
 set_copy_and_difference(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result;
 
     result = set_copy_impl(so);
@@ -1781,6 +1959,7 @@ set_copy_and_difference(PySetObject *so, PyObject *other)
         return NULL;
     if (set_difference_update_internal((PySetObject *) result, other) == 0)
         return result;
+    assert(!PyRegion_NeedsReadBarrier(result));
     Py_DECREF(result);
     return NULL;
 }
@@ -1788,6 +1967,7 @@ set_copy_and_difference(PySetObject *so, PyObject *other)
 static PyObject *
 set_difference(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result;
     PyObject *key;
     Py_hash_t hash;
@@ -1819,21 +1999,28 @@ set_difference(PySetObject *so, PyObject *other)
         while (set_next(so, &pos, &entry)) {
             key = entry->key;
             hash = entry->hash;
+            if (PyRegion_AddLocalRef(key)) {
+                assert(!PyRegion_NeedsReadBarrier(result));
+                Py_DECREF(result);
+                return NULL;
+            }
             Py_INCREF(key);
             rv = _PyDict_Contains_KnownHash(other, key, hash);
             if (rv < 0) {
+                assert(!PyRegion_NeedsReadBarrier(result));
                 Py_DECREF(result);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return NULL;
             }
             if (!rv) {
                 if (set_add_entry((PySetObject *)result, key, hash)) {
+                    assert(!PyRegion_NeedsReadBarrier(result));
                     Py_DECREF(result);
-                    Py_DECREF(key);
+                    PyRegion_CLEARLOCAL(key);
                     return NULL;
                 }
             }
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
         }
         return result;
     }
@@ -1842,21 +2029,28 @@ set_difference(PySetObject *so, PyObject *other)
     while (set_next(so, &pos, &entry)) {
         key = entry->key;
         hash = entry->hash;
+        if (PyRegion_AddLocalRef(key)) {
+            assert(!PyRegion_NeedsReadBarrier(result));
+            Py_DECREF(result);
+            return NULL;
+        }
         Py_INCREF(key);
         rv = set_contains_entry((PySetObject *)other, key, hash);
         if (rv < 0) {
+            assert(!PyRegion_NeedsReadBarrier(result));
             Py_DECREF(result);
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
             return NULL;
         }
         if (!rv) {
             if (set_add_entry((PySetObject *)result, key, hash)) {
+                assert(!PyRegion_NeedsReadBarrier(result));
                 Py_DECREF(result);
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return NULL;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
     return result;
 }
@@ -1874,6 +2068,7 @@ set_difference_multi_impl(PySetObject *so, PyObject * const *others,
                           Py_ssize_t others_length)
 /*[clinic end generated code: output=b0d33fb05d5477a7 input=c1eb448d483416ad]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_ssize_t i;
     PyObject *result, *other;
 
@@ -1895,6 +2090,7 @@ set_difference_multi_impl(PySetObject *so, PyObject * const *others,
         rv = set_difference_update_internal((PySetObject *)result, other);
         Py_END_CRITICAL_SECTION();
         if (rv) {
+            assert(!PyRegion_NeedsReadBarrier(result));
             Py_DECREF(result);
             return NULL;
         }
@@ -1905,6 +2101,7 @@ set_difference_multi_impl(PySetObject *so, PyObject * const *others,
 static PyObject *
 set_sub(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyAnySet_Check(self) || !PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
@@ -1919,6 +2116,7 @@ set_sub(PyObject *self, PyObject *other)
 static PyObject *
 set_isub(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
@@ -1930,12 +2128,13 @@ set_isub(PyObject *self, PyObject *other)
     if (rv < 0) {
         return NULL;
     }
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 static int
 set_symmetric_difference_update_dict(PySetObject *so, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(other);
 
@@ -1943,19 +2142,22 @@ set_symmetric_difference_update_dict(PySetObject *so, PyObject *other)
     PyObject *key, *value;
     Py_hash_t hash;
     while (_PyDict_Next(other, &pos, &key, &value, &hash)) {
+        if (PyRegion_AddLocalRef(key)) {
+            return -1;
+        }
         Py_INCREF(key);
         int rv = set_discard_entry(so, key, hash);
         if (rv < 0) {
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
             return -1;
         }
         if (rv == DISCARD_NOTFOUND) {
             if (set_add_entry(so, key, hash)) {
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return -1;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
     return 0;
 }
@@ -1963,26 +2165,30 @@ set_symmetric_difference_update_dict(PySetObject *so, PyObject *other)
 static int
 set_symmetric_difference_update_set(PySetObject *so, PySetObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(so);
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(other);
 
     Py_ssize_t pos = 0;
     setentry *entry;
     while (set_next(other, &pos, &entry)) {
+        if (PyRegion_AddLocalRef(entry->key)) {
+            return -1;
+        }
         PyObject *key = Py_NewRef(entry->key);
         Py_hash_t hash = entry->hash;
         int rv = set_discard_entry(so, key, hash);
         if (rv < 0) {
-            Py_DECREF(key);
+            PyRegion_CLEARLOCAL(key);
             return -1;
         }
         if (rv == DISCARD_NOTFOUND) {
             if (set_add_entry(so, key, hash)) {
-                Py_DECREF(key);
+                PyRegion_CLEARLOCAL(key);
                 return -1;
             }
         }
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
     }
     return 0;
 }
@@ -2001,6 +2207,7 @@ static PyObject *
 set_symmetric_difference_update_impl(PySetObject *so, PyObject *other)
 /*[clinic end generated code: output=79f80b4ee5da66c1 input=86a3dddac9bfb15e]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (Py_Is((PyObject *)so, other)) {
         return set_clear((PyObject *)so, NULL);
     }
@@ -2026,6 +2233,7 @@ set_symmetric_difference_update_impl(PySetObject *so, PyObject *other)
         rv = set_symmetric_difference_update_set(so, otherset);
         Py_END_CRITICAL_SECTION();
 
+        assert(!PyRegion_NeedsReadBarrier(otherset));
         Py_DECREF(otherset);
     }
     if (rv < 0) {
@@ -2048,15 +2256,18 @@ static PyObject *
 set_symmetric_difference_impl(PySetObject *so, PyObject *other)
 /*[clinic end generated code: output=270ee0b5d42b0797 input=624f6e7bbdf70db1]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *result = (PySetObject *)make_new_set_basetype(Py_TYPE(so), NULL);
     if (result == NULL) {
         return NULL;
     }
     if (set_update_lock_held(result, other) < 0) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return NULL;
     }
     if (set_symmetric_difference_update_set(result, so) < 0) {
+        assert(!PyRegion_NeedsReadBarrier(result));
         Py_DECREF(result);
         return NULL;
     }
@@ -2066,6 +2277,7 @@ set_symmetric_difference_impl(PySetObject *so, PyObject *other)
 static PyObject *
 set_xor(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyAnySet_Check(self) || !PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
@@ -2075,6 +2287,7 @@ set_xor(PyObject *self, PyObject *other)
 static PyObject *
 set_ixor(PyObject *self, PyObject *other)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *result;
 
     if (!PyAnySet_Check(other))
@@ -2084,8 +2297,9 @@ set_ixor(PyObject *self, PyObject *other)
     result = set_symmetric_difference_update((PyObject*)so, other);
     if (result == NULL)
         return NULL;
+    assert(!PyRegion_NeedsReadBarrier(result));
     Py_DECREF(result);
-    return Py_NewRef(so);
+    return PyRegion_NewRef(so);
 }
 
 /*[clinic input]
@@ -2102,6 +2316,7 @@ static PyObject *
 set_issubset_impl(PySetObject *so, PyObject *other)
 /*[clinic end generated code: output=b2b59d5f314555ce input=f2a4fd0f2537758b]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *entry;
     Py_ssize_t pos = 0;
     int rv;
@@ -2112,6 +2327,7 @@ set_issubset_impl(PySetObject *so, PyObject *other)
             return NULL;
         }
         int result = (PySet_GET_SIZE(tmp) == PySet_GET_SIZE(so));
+        assert(!PyRegion_NeedsReadBarrier(tmp));
         Py_DECREF(tmp);
         return PyBool_FromLong(result);
     }
@@ -2120,9 +2336,12 @@ set_issubset_impl(PySetObject *so, PyObject *other)
 
     while (set_next(so, &pos, &entry)) {
         PyObject *key = entry->key;
+        if (PyRegion_AddLocalRef(key)) {
+            return NULL;
+        }
         Py_INCREF(key);
         rv = set_contains_entry((PySetObject *)other, key, entry->hash);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         if (rv < 0) {
             return NULL;
         }
@@ -2147,6 +2366,7 @@ static PyObject *
 set_issuperset_impl(PySetObject *so, PyObject *other)
 /*[clinic end generated code: output=ecf00ce552c09461 input=5f2e1f262e6e4ccc]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (PyAnySet_Check(other)) {
         return set_issubset(other, (PyObject *)so);
     }
@@ -2157,16 +2377,19 @@ set_issuperset_impl(PySetObject *so, PyObject *other)
     }
     while ((key = PyIter_Next(it)) != NULL) {
         int rv = set_contains_key(so, key);
-        Py_DECREF(key);
+        PyRegion_CLEARLOCAL(key);
         if (rv < 0) {
+            assert(!PyRegion_NeedsReadBarrier(it));
             Py_DECREF(it);
             return NULL;
         }
         if (!rv) {
+            assert(!PyRegion_NeedsReadBarrier(it));
             Py_DECREF(it);
             Py_RETURN_FALSE;
         }
     }
+    assert(!PyRegion_NeedsReadBarrier(it));
     Py_DECREF(it);
     if (PyErr_Occurred()) {
         return NULL;
@@ -2177,6 +2400,7 @@ set_issuperset_impl(PySetObject *so, PyObject *other)
 static PyObject *
 set_richcompare(PyObject *self, PyObject *w, int op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *v = _PySet_CAST(self);
     PyObject *r1;
     int r2;
@@ -2198,7 +2422,7 @@ set_richcompare(PyObject *self, PyObject *w, int op)
         if (r1 == NULL)
             return NULL;
         r2 = PyObject_IsTrue(r1);
-        Py_DECREF(r1);
+        PyRegion_CLEARLOCAL(r1);
         if (r2 < 0)
             return NULL;
         return PyBool_FromLong(!r2);
@@ -2234,6 +2458,7 @@ static PyObject *
 set_add_impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=4cc4a937f1425c96 input=03baf62cb0e66514]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if(!Py_CHECKWRITE(so)){
         return PyErr_WriteToImmutable(so);
     }
@@ -2246,6 +2471,7 @@ set_add_impl(PySetObject *so, PyObject *key)
 static int
 set_contains_lock_held(PySetObject *so, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int rv;
 
     rv = set_contains_key(so, key);
@@ -2265,6 +2491,7 @@ set_contains_lock_held(PySetObject *so, PyObject *key)
 int
 _PySet_Contains(PySetObject *so, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(so);
 
     int rv;
@@ -2281,6 +2508,7 @@ _PySet_Contains(PySetObject *so, PyObject *key)
 static int
 set_contains(PyObject *self, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *so = _PySet_CAST(self);
     return _PySet_Contains(so, key);
 }
@@ -2300,6 +2528,7 @@ static PyObject *
 set___contains___impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=b44863d034b3c70e input=4a7d568459617f24]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     long result;
 
     result = set_contains_lock_held(so, key);
@@ -2322,6 +2551,7 @@ static PyObject *
 frozenset___contains___impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=2301ed91bc3a6dd5 input=2f04922a98d8bab7]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     long result;
 
     result = set_contains_lock_held(so, key);
@@ -2346,6 +2576,7 @@ static PyObject *
 set_remove_impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=0b9134a2a2200363 input=893e1cb1df98227a]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int rv;
 
     if(!Py_CHECKWRITE(so)){
@@ -2390,6 +2621,7 @@ static PyObject *
 set_discard_impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=eec3b687bf32759e input=861cb7fb69b4def0]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     int rv;
 
     if(!Py_CHECKWRITE(so)){
@@ -2424,6 +2656,7 @@ static PyObject *
 set___reduce___impl(PySetObject *so)
 /*[clinic end generated code: output=9af7d0e029df87ee input=59405a4249e82f71]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PyObject *keys=NULL, *args=NULL, *result=NULL, *state=NULL;
 
     keys = PySequence_List((PyObject *)so);
@@ -2437,9 +2670,9 @@ set___reduce___impl(PySetObject *so)
         goto done;
     result = PyTuple_Pack(3, Py_TYPE(so), args, state);
 done:
-    Py_XDECREF(args);
-    Py_XDECREF(keys);
-    Py_XDECREF(state);
+    PyRegion_CLEARLOCAL(args);
+    PyRegion_CLEARLOCAL(keys);
+    PyRegion_CLEARLOCAL(state);
     return result;
 }
 
@@ -2455,6 +2688,7 @@ static PyObject *
 set___sizeof___impl(PySetObject *so)
 /*[clinic end generated code: output=4bfa3df7bd38ed88 input=09e1a09f168eaa23]*/
 {
+    // Pyrona: This functions was checked and no further migration is needed
     size_t res = _PyObject_SIZE(Py_TYPE(so));
     if (so->table != so->smalltable) {
         res += ((size_t)so->mask + 1) * sizeof(setentry);
@@ -2465,6 +2699,7 @@ set___sizeof___impl(PySetObject *so)
 static int
 set_init(PyObject *so, PyObject *args, PyObject *kwds)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     PySetObject *self = _PySet_CAST(so);
     PyObject *iterable = NULL;
 
@@ -2473,7 +2708,7 @@ set_init(PyObject *so, PyObject *args, PyObject *kwds)
     if (!PyArg_UnpackTuple(args, Py_TYPE(self)->tp_name, 0, 1, &iterable))
         return -1;
 
-    if (Py_REFCNT(self) == 1 && self->fill == 0) {
+    if (Py_REFCNT(self) == 1 && self->fill == 0 && PyRegion_IsLocal(self)) {
         self->hash = -1;
         if (iterable == NULL) {
             return 0;
@@ -2495,6 +2730,7 @@ static PyObject*
 set_vectorcall(PyObject *type, PyObject * const*args,
                size_t nargsf, PyObject *kwnames)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     assert(PyType_Check(type));
 
     if (!_PyArg_NoKwnames("set", kwnames)) {
@@ -2635,6 +2871,7 @@ PyTypeObject PySet_Type = {
     .tp_vectorcall = set_vectorcall,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_version_tag = _Py_TYPE_VERSION_SET,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 /* frozenset object ********************************************************/
@@ -2727,6 +2964,7 @@ PyTypeObject PyFrozenSet_Type = {
     .tp_vectorcall = frozenset_vectorcall,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_version_tag = _Py_TYPE_VERSION_FROZEN_SET,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 
@@ -2735,18 +2973,21 @@ PyTypeObject PyFrozenSet_Type = {
 PyObject *
 PySet_New(PyObject *iterable)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return make_new_set(&PySet_Type, iterable);
 }
 
 PyObject *
 PyFrozenSet_New(PyObject *iterable)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return make_new_set(&PyFrozenSet_Type, iterable);
 }
 
 Py_ssize_t
 PySet_Size(PyObject *anyset)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyAnySet_Check(anyset)) {
         PyErr_BadInternalCall();
         return -1;
@@ -2757,6 +2998,7 @@ PySet_Size(PyObject *anyset)
 int
 PySet_Clear(PyObject *set)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PySet_Check(set)) {
         PyErr_BadInternalCall();
         return -1;
@@ -2773,6 +3015,7 @@ PySet_Clear(PyObject *set)
 void
 _PySet_ClearInternal(PySetObject *so)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     // TODO(Immutable): Should this be inside the critical section?
     if(!Py_CHECKWRITE(so)){
         PyErr_WriteToImmutable(so);
@@ -2786,6 +3029,7 @@ _PySet_ClearInternal(PySetObject *so)
 int
 PySet_Contains(PyObject *anyset, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PyAnySet_Check(anyset)) {
         PyErr_BadInternalCall();
         return -1;
@@ -2801,6 +3045,7 @@ PySet_Contains(PyObject *anyset, PyObject *key)
 int
 PySet_Discard(PyObject *set, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PySet_Check(set)) {
         PyErr_BadInternalCall();
         return -1;
@@ -2826,6 +3071,7 @@ end:;
 int
 PySet_Add(PyObject *anyset, PyObject *key)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PySet_Check(anyset) &&
         (!PyFrozenSet_Check(anyset) || Py_REFCNT(anyset) != 1)) {
         PyErr_BadInternalCall();
@@ -2842,6 +3088,7 @@ PySet_Add(PyObject *anyset, PyObject *key)
 int
 _PySet_NextEntry(PyObject *set, Py_ssize_t *pos, PyObject **key, Py_hash_t *hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *entry;
 
     if (!PyAnySet_Check(set)) {
@@ -2858,6 +3105,7 @@ _PySet_NextEntry(PyObject *set, Py_ssize_t *pos, PyObject **key, Py_hash_t *hash
 int
 _PySet_NextEntryRef(PyObject *set, Py_ssize_t *pos, PyObject **key, Py_hash_t *hash)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     setentry *entry;
 
     if (!PyAnySet_Check(set)) {
@@ -2867,6 +3115,9 @@ _PySet_NextEntryRef(PyObject *set, Py_ssize_t *pos, PyObject **key, Py_hash_t *h
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(set);
     if (set_next((PySetObject *)set, pos, &entry) == 0)
         return 0;
+    if (PyRegion_AddLocalRef(entry->key)) {
+        return -1;
+    }
     *key = Py_NewRef(entry->key);
     *hash = entry->hash;
     return 1;
@@ -2875,6 +3126,7 @@ _PySet_NextEntryRef(PyObject *set, Py_ssize_t *pos, PyObject **key, Py_hash_t *h
 PyObject *
 PySet_Pop(PyObject *set)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PySet_Check(set)) {
         PyErr_BadInternalCall();
         return NULL;
@@ -2885,6 +3137,7 @@ PySet_Pop(PyObject *set)
 int
 _PySet_Update(PyObject *set, PyObject *iterable)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     if (!PySet_Check(set)) {
         PyErr_BadInternalCall();
         return -1;
@@ -2900,12 +3153,14 @@ PyObject *_PySet_Dummy = dummy;
 static PyObject *
 dummy_repr(PyObject *op)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     return PyUnicode_FromString("<dummy key>");
 }
 
 static void _Py_NO_RETURN
 dummy_dealloc(PyObject* ignore)
 {
+    // Pyrona: This functions was checked and no further migration is needed
     Py_FatalError("deallocating <dummy key>");
 }
 
@@ -2931,6 +3186,7 @@ static PyTypeObject _PySetDummy_Type = {
     0,                  /*tp_as_buffer */
     Py_TPFLAGS_DEFAULT, /*tp_flags */
     .tp_reachable = _PyObject_ReachableVisitType,
+    .tp_flags2 = Py_TPFLAGS2_REGION_AWARE,
 };
 
 static PyObject _dummy_struct = _PyObject_HEAD_INIT(&_PySetDummy_Type);
