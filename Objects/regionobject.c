@@ -40,6 +40,7 @@ static int Region_init(_PyRegionObject *self, PyObject *args, PyObject *kwds) {
 
     self->region = NULL_REGION;
     self->name = NULL;
+    self->next = NULL;
 
     // Allocate the new region object
     if (_PyRegion_New(_PyRegionObject_CAST(self))) {

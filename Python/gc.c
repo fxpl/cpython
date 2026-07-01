@@ -4,12 +4,15 @@
 
 #include "Python.h"
 #include "pycore_ceval.h"         // _Py_set_eval_breaker_bit()
+#include "pycore_cown.h"          // _PyCown_Type
 #include "pycore_dict.h"          // _PyInlineValuesSize()
 #include "pycore_initconfig.h"    // _PyStatus_OK()
 #include "pycore_interp.h"        // PyInterpreterState.gc
 #include "pycore_interpframe.h"   // _PyFrame_GetLocalsArray()
 #include "pycore_object_alloc.h"  // _PyObject_MallocWithType()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
+#include "pycore_region.h"        // _Py_region_data
+#include "pycore_regionobject.h"  // _PyRegion_Type
 #include "pycore_tuple.h"         // _PyTuple_MaybeUntrack()
 #include "pycore_weakref.h"       // _PyWeakref_ClearRef()
 
@@ -28,35 +31,97 @@ typedef struct _gc_runtime_state GCState;
 // #define GC_EXTRA_DEBUG
 
 
+/*
+_gc_prev values
+---------------
+
+Between collections, _gc_prev is used for doubly linked list.
+
+Lowest two bits of _gc_prev are used for flags.
+_PyGC_PREV_MASK_COLLECTING is used only while collecting
+and cleared before GC ends or _PyObject_GC_UNTRACK() is called.
+
+During a collection, _gc_prev is temporary used for gc_refs, and the gc list
+is singly linked until _gc_prev is restored.
+
+gc_refs
+    At the start of a collection, update_refs() copies the true refcount
+    to gc_refs, for each object in the generation being collected.
+    subtract_refs() then adjusts gc_refs so that it equals the number of
+    times an object is referenced directly from outside the generation
+    being collected.
+
+_PyGC_PREV_MASK_FINALIZED
+    This bit is set when the object's finalizer (tp_finalize) has been called.
+    The flag ensures that the finalizer is only called once.
+
+_PyGC_PREV_MASK_COLLECTING
+    This bit is set when the object is in generation which is GCed currently.
+
+    update_refs() set this bit for all objects in current generation.
+    subtract_refs() and move_unreachable() uses this to distinguish
+    visited object is in GCing or not.
+
+    move_unreachable() removes this flag from reachable objects.
+    Only unreachable objects have this flag.
+
+    No objects in interpreter have this flag after GC ends.
+
+
+_gc_next values
+---------------
+
+_gc_next takes these values:
+
+0
+    The object is not tracked
+
+!= 0
+    Pointer to the next object in the GC list.
+    Additionally, lowest two bits are used for flags as described below.
+
+_PyGC_NEXT_MASK_OLD_SPACE_1
+    This bit is the old space bit.
+    It describes the generation space the object is in.
+    It is set as follows:
+    * Young: gcstate->visited_space
+    * old[0]: 0
+    * old[1]: 1
+    * permanent: 0
+
+    old[gcstate->visited_space] is the visited space,
+    old[1-gcstate->visited_space] is the pending space.
+    The objects in the pending space are yet to be processed
+    during future incremental collections.
+
+    During a collection all objects handled should have the bit set to
+    gcstate->visited_space, as the objects are moved into the visited space.
+
+_PyGC_NEXT_MASK_UNREACHABLE
+    This flag represents the object is in the unreachable list
+    in move_unreachable().
+    When the object is moved back to the reachable set, the bit is cleared.
+
+    Although this flag is used only in move_unreachable(), move_unreachable()
+    doesn't clear this flag to skip unnecessary iteration.
+    move_legacy_finalizers() removes this flag instead.
+    Between them, unreachable list is not normal list and we can not use
+    most gc_list_* functions for it.
+*/
+
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
 
-// update_refs() set this bit for all objects in current generation.
-// subtract_refs() and move_unreachable() uses this to distinguish
-// visited object is in GCing or not.
-//
-// move_unreachable() removes this flag from reachable objects.
-// Only unreachable objects have this flag.
-//
-// No objects in interpreter have this flag after GC ends.
 #define PREV_MASK_COLLECTING   _PyGC_PREV_MASK_COLLECTING
-
-// Lowest bit of _gc_next is used for UNREACHABLE flag.
-//
-// This flag represents the object is in unreachable list in move_unreachable()
-//
-// Although this flag is used only in move_unreachable(), move_unreachable()
-// doesn't clear this flag to skip unnecessary iteration.
-// move_legacy_finalizers() removes this flag instead.
-// Between them, unreachable list is not normal list and we can not use
-// most gc_list_* functions for it.
-#define NEXT_MASK_UNREACHABLE  2
+#define NEXT_MASK_UNREACHABLE  _PyGC_NEXT_MASK_UNREACHABLE
 
 #define AS_GC(op) _Py_AS_GC(op)
 #define FROM_GC(gc) _Py_FROM_GC(gc)
 
 // Automatically choose the generation that needs collecting.
 #define GENERATION_AUTO (-1)
+
+#define _Py_region_data_CAST(op)  _Py_CAST(_Py_region_data*, op)
 
 static inline int
 gc_is_collecting(PyGC_Head *g)
@@ -191,57 +256,6 @@ _PyGC_Init(PyInterpreterState *interp)
     return _PyStatus_OK();
 }
 
-
-/*
-_gc_prev values
----------------
-
-Between collections, _gc_prev is used for doubly linked list.
-
-Lowest two bits of _gc_prev are used for flags.
-PREV_MASK_COLLECTING is used only while collecting and cleared before GC ends
-or _PyObject_GC_UNTRACK() is called.
-
-During a collection, _gc_prev is temporary used for gc_refs, and the gc list
-is singly linked until _gc_prev is restored.
-
-gc_refs
-    At the start of a collection, update_refs() copies the true refcount
-    to gc_refs, for each object in the generation being collected.
-    subtract_refs() then adjusts gc_refs so that it equals the number of
-    times an object is referenced directly from outside the generation
-    being collected.
-
-PREV_MASK_COLLECTING
-    Objects in generation being collected are marked PREV_MASK_COLLECTING in
-    update_refs().
-
-
-_gc_next values
----------------
-
-_gc_next takes these values:
-
-0
-    The object is not tracked
-
-!= 0
-    Pointer to the next object in the GC list.
-    Additionally, lowest bit is used temporary for
-    NEXT_MASK_UNREACHABLE flag described below.
-
-NEXT_MASK_UNREACHABLE
-    move_unreachable() then moves objects not reachable (whether directly or
-    indirectly) from outside the generation into an "unreachable" set and
-    set this flag.
-
-    Objects that are found to be reachable have gc_refs set to 1.
-    When this flag is set for the reachable object, the object must be in
-    "unreachable" set.
-    The flag is unset and the object is moved back to "reachable" set.
-
-    move_legacy_finalizers() will remove this flag from "unreachable" set.
-*/
 
 /*** list functions ***/
 
@@ -1106,6 +1120,16 @@ debug_cycle(const char *msg, PyObject *op)
                        msg, Py_TYPE(op)->tp_name, op);
 }
 
+static void
+debug_print_unreachable(GCState *gcstate, PyGC_Head *unreachable)
+{
+    if (gcstate->debug & _PyGC_DEBUG_COLLECTABLE) {
+        for (PyGC_Head *gc = GC_NEXT(unreachable); gc != unreachable; gc = GC_NEXT(gc)) {
+            debug_cycle("collectable", FROM_GC(gc));
+        }
+    }
+}
+
 /* Handle uncollectable garbage (cycles with tp_del slots, and stuff reachable
  * only from such cycles).
  * If _PyGC_DEBUG_SAVEALL, all objects in finalizers are appended to the module
@@ -1164,9 +1188,16 @@ finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
             (finalize = Py_TYPE(op)->tp_finalize) != NULL)
         {
             _PyGC_SET_FINALIZED(op);
+            // Regions: This barrier should always succeed:
+            // If called from the local GC, op is local.
+            // If called from the region GC, the region is already open.
+            int res = PyRegion_AddLocalRef(op);
+            assert(res == 0);
+            (void)res;
             Py_INCREF(op);
             finalize(op);
             assert(!_PyErr_Occurred(tstate));
+            PyRegion_RemoveLocalRef(op);
             Py_DECREF(op);
         }
     }
@@ -1199,6 +1230,9 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
         else {
             inquiry clear;
             if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
+                // Regions: No barrier needed.
+                // If called from the local GC, op is local.
+                // If called from the region GC, the region is already open.
                 Py_INCREF(op);
                 // TODO(Immutable): This is only required until we have the SCC support working.
                 _Py_CLEAR_IMMUTABLE(op);
@@ -1237,9 +1271,6 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
 Contracts:
 
     * The "base" has to be a valid list with no mask set.
-
-    * The "unreachable" list must be uninitialized (this function calls
-      gc_list_init over 'unreachable').
 
 IMPORTANT: This function leaves 'unreachable' with the NEXT_MASK_UNREACHABLE
 flag set but it does not clear it to skip unnecessary iteration. Before the
@@ -1304,9 +1335,6 @@ deduce_unreachable(PyGC_Head *base, PyGC_Head *unreachable) {
        * After this function 'unreachable' must not be used anymore and 'still_unreachable'
          will contain the objects that did not resurrect.
 
-       * The "still_unreachable" list must be uninitialized (this function calls
-         gc_list_init over 'still_unreachable').
-
 IMPORTANT: After a call to this function, the 'still_unreachable' set will have the
 PREV_MARK_COLLECTING set, but the objects in this set are going to be removed so
 we can skip the expense of clearing the flag to avoid extra iteration. */
@@ -1330,7 +1358,7 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
 }
 
 static void
-gc_collect_region(PyThreadState *tstate,
+gc_collect_chunk(PyThreadState *tstate,
                   PyGC_Head *from,
                   PyGC_Head *to,
                   struct gc_collection_stats *stats);
@@ -1388,7 +1416,7 @@ gc_collect_young(PyThreadState *tstate,
     PyGC_Head survivors;
     gc_list_init(&survivors);
     gc_list_set_space(young, gcstate->visited_space);
-    gc_collect_region(tstate, young, &survivors, stats);
+    gc_collect_chunk(tstate, young, &survivors, stats);
     gc_list_merge(&survivors, visited);
     validate_spaces(gcstate);
     gcstate->young.count = 0;
@@ -1433,7 +1461,7 @@ visit_add_to_container(PyObject *op, void *arg)
 }
 
 static intptr_t
-expand_region_transitively_reachable(PyGC_Head *container, PyGC_Head *gc, GCState *gcstate)
+expand_chunk_transitively_reachable(PyGC_Head *container, PyGC_Head *gc, GCState *gcstate)
 {
     struct container_and_flag arg = {
         .container = container,
@@ -1698,14 +1726,14 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
         increment_size++;
         assert(!_Py_IsImmortal(FROM_GC(gc)) && PyRegion_IsLocal(FROM_GC(gc)));
         gc_set_old_space(gc, gcstate->visited_space);
-        increment_size += expand_region_transitively_reachable(&increment, gc, gcstate);
+        increment_size += expand_chunk_transitively_reachable(&increment, gc, gcstate);
     }
     GC_STAT_ADD(1, objects_not_transitively_reachable, increment_size);
     validate_list(&increment, collecting_clear_unreachable_clear);
     gc_list_validate_space(&increment, gcstate->visited_space);
     PyGC_Head survivors;
     gc_list_init(&survivors);
-    gc_collect_region(tstate, &increment, &survivors, stats);
+    gc_collect_chunk(tstate, &increment, &survivors, stats);
     gc_list_merge(&survivors, visited);
     assert(gc_list_is_empty(&increment));
     gcstate->work_to_do += gcstate->heap_size / SCAN_RATE_DIVISOR / scale_factor;
@@ -1737,7 +1765,7 @@ gc_collect_full(PyThreadState *tstate,
     gc_list_merge(pending, visited);
     validate_spaces(gcstate);
 
-    gc_collect_region(tstate, visited, visited,
+    gc_collect_chunk(tstate, visited, visited,
                       stats);
     validate_spaces(gcstate);
     gcstate->young.count = 0;
@@ -1752,7 +1780,7 @@ gc_collect_full(PyThreadState *tstate,
 /* This is the main function. Read this to understand how the
  * collection process works. */
 static void
-gc_collect_region(PyThreadState *tstate,
+gc_collect_chunk(PyThreadState *tstate,
                   PyGC_Head *from,
                   PyGC_Head *to,
                   struct gc_collection_stats *stats)
@@ -1791,12 +1819,7 @@ gc_collect_region(PyThreadState *tstate,
     move_legacy_finalizer_reachable(&finalizers);
     validate_list(&finalizers, collecting_clear_unreachable_clear);
     validate_list(&unreachable, collecting_set_unreachable_clear);
-    /* Print debugging information. */
-    if (gcstate->debug & _PyGC_DEBUG_COLLECTABLE) {
-        for (gc = GC_NEXT(&unreachable); gc != &unreachable; gc = GC_NEXT(gc)) {
-            debug_cycle("collectable", FROM_GC(gc));
-        }
-    }
+    debug_print_unreachable(gcstate, &unreachable);
 
     /* Invoke weakref callbacks as necessary. */
     stats->collected += handle_weakref_callbacks(&unreachable, to);
@@ -1843,6 +1866,272 @@ gc_collect_region(PyThreadState *tstate,
     validate_list(to, collecting_clear_unreachable_clear);
 }
 
+static PyObject*
+region_get_name(_PyRegionObject *bridge)
+{
+    PyObject *name = bridge->name;
+    if (name == NULL || !PyUnicode_Check(name)) {
+        return NULL;
+    }
+    return name;
+}
+
+static void
+debug_region_collection(const char *message, _PyRegionObject *bridge)
+{
+    PyObject *name = region_get_name(bridge);
+    if (name == NULL) {
+        PySys_FormatStderr("gc: %s at %p\n", message, bridge);
+    }
+    else {
+        PySys_FormatStderr("gc: %s '%U' at %p\n", message, name, bridge);
+    }
+}
+
+static void region_list_add_children(_PyRegionObject **list, Py_region_t parent)
+{
+    _Py_region_data *data = _Py_region_data_CAST(parent);
+    PyGC_Head *gc = GC_NEXT(&data->gc_list);
+    while (gc != &data->gc_list) {
+        // Stop looping if this is not a bridge.
+        PyObject *obj = _Py_FROM_GC(gc);
+        if (Py_TYPE(obj) != &_PyRegion_Type) {
+            break;
+        }
+        // Prepend to list.
+        _PyRegionObject *child = _PyRegionObject_CAST(obj);
+        child->next = *list;
+        *list = child;
+        gc = GC_NEXT(gc);
+    }
+}
+
+/* Unwrap the region tree into a linked list in depth-first order. */
+static void
+region_list_build_dfs(_PyRegionObject *root)
+{
+    root->next = NULL;
+    _PyRegionObject *current = root;
+    while (current != NULL) {
+        // Adding child regions will prepend before next and update it.
+        region_list_add_children(&current->next, _PyRegion_Get(current));
+        current = current->next;
+    }
+}
+
+/* Create artificial local references to the bridges. */
+static int
+region_list_add_local_refs(_PyRegionObject *root) {
+    _PyRegionObject *revert_end = NULL;
+    for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
+        if (PyRegion_AddLocalRef(curr)) {
+            revert_end = curr;
+            break;
+        }
+        Py_INCREF(curr);
+    }
+    if (revert_end == NULL) {
+        return 0;
+    }
+    // AddLocalRef failed, revert the changes.
+    for (_PyRegionObject *curr = root; curr != revert_end; curr = curr->next) {
+        PyRegion_RemoveLocalRef(curr);
+        Py_DECREF(curr);
+    }
+    return 1;
+}
+
+static void
+gc_region_list_split(PyGC_Head *list, PyGC_Head *contained)
+{
+    // Child regions are at the start of the list
+    PyGC_Head *node = GC_NEXT(list);
+    while (node != list) {
+        // Stop looping if this is not a bridge
+        PyObject *obj = _Py_FROM_GC(node);
+        if (Py_TYPE(obj) != &_PyRegion_Type) {
+            break;
+        }
+        node = GC_NEXT(node);
+    }
+    if (node == list) {
+        // No contained objects
+        return;
+    }
+    // Splice the contained objects out of the list
+    PyGC_Head *first_contained = node;
+    PyGC_Head *last_contained = GC_PREV(list);
+    _PyGCHead_SET_NEXT(GC_PREV(first_contained), list);
+    _PyGCHead_SET_PREV(list, GC_PREV(first_contained));
+    _PyGCHead_SET_NEXT(contained, first_contained);
+    _PyGCHead_SET_PREV(first_contained, contained);
+    _PyGCHead_SET_NEXT(last_contained, contained);
+    _PyGCHead_SET_PREV(contained, last_contained);
+    validate_list(list, collecting_clear_unreachable_clear);
+    validate_list(contained, collecting_clear_unreachable_clear);
+}
+
+/* Identify unreachable objects in a region and move them
+ * from the region GC list to the region unreachable list.
+ * This function can run without the GIL if the region is closed.
+ */
+static void
+region_extract_unreachable(Py_region_t region_id, Py_ssize_t *object_count)
+{
+    _Py_region_data *data = _Py_region_data_CAST(region_id);
+
+    /* Separate child regions from contained objects.
+     * Finalizers need them to be in the GC list, at the start of the list.
+     */
+    PyGC_Head contained;
+    gc_list_init(&contained);
+    gc_region_list_split(&data->gc_list, &contained);
+
+    /* Identify unreachable objects. */
+    PyGC_Head unreachable;
+    gc_list_init(&unreachable);
+    deduce_unreachable(&contained, &unreachable);
+    untrack_tuples(&contained);
+    clear_unreachable_mask(&unreachable);
+
+    /* Return the reachable objects, making sure child regions come first. */
+    gc_list_merge(&contained, &data->gc_list);
+    /* Save the unreachable objects. */
+    gc_list_merge(&unreachable, &data->unreachable);
+
+    /* Estimate number of objects using the rc.*/
+    *object_count += data->rc;
+}
+
+static void
+region_handle_garbage(PyThreadState *tstate,
+                      Py_region_t region_id,
+                      struct gc_collection_stats *stats)
+{
+    GCState *gcstate = &tstate->interp->gc;
+    _Py_region_data *data = _Py_region_data_CAST(region_id);
+    if (gcstate->debug & _PyGC_DEBUG_STATS) {
+        debug_region_collection("handling garbage in region", data->bridge);
+    }
+
+    PyGC_Head surviving;
+    gc_list_init(&surviving);
+    PyGC_Head unreachable;
+    gc_list_init(&unreachable);
+    /* Move the unreachable objects to the local list.
+     * This prevents objects being taken out of the region GC list
+     * in case it is merged with another region.
+     */
+    gc_list_merge(&data->unreachable, &unreachable);
+    debug_print_unreachable(gcstate, &unreachable);
+
+    /* Invoke weakref callbacks as necessary. */
+    stats->collected += handle_weakref_callbacks(&unreachable, &surviving);
+    validate_list(&unreachable, collecting_set_unreachable_clear);
+
+    /* Call tp_finalize on objects which have one. */
+    finalize_garbage(tstate, &unreachable);
+    /* Handle any objects that may have resurrected after the call
+     * to 'finalize_garbage' and continue the collection with the
+     * objects that are still unreachable */
+    PyGC_Head final_unreachable;
+    gc_list_init(&final_unreachable);
+    handle_resurrected_objects(&unreachable, &final_unreachable, &surviving);
+
+    /* Clear weakrefs to objects in the unreachable set.  See the comments
+     * above handle_weakref_callbacks() for details.
+     */
+    clear_weakrefs(&final_unreachable);
+
+    /* Call tp_clear on objects in the final_unreachable set.  This will cause
+    * the reference cycles to be broken.  It may also cause some objects
+    * in finalizers to be freed.
+    */
+    stats->collected += gc_list_size(&final_unreachable);
+    delete_garbage(tstate, gcstate, &final_unreachable, &surviving);
+    validate_list(&surviving, collecting_clear_unreachable_clear);
+
+    /* The region could have been merged with another region.
+     * Find out where to return the surviving objects.
+     */
+    if (data->bridge == NULL) {
+        /* The region has been dissolved, return to the local GC. */
+        gc_list_set_space(&surviving, gcstate->visited_space);
+        gc_list_merge(&surviving, &gcstate->young.head);
+    }
+    else {
+        Py_region_t new_region = _PyRegion_Get(data->bridge);
+        /* Objects in the region GC list always use old space 0. */
+        gc_list_validate_space(&surviving, 0);
+        gc_list_merge(&surviving, &_Py_region_data_CAST(new_region)->gc_list);
+    }
+}
+
+/* Collect garbage in a region and its tree. */
+static void
+gc_collect_region_tree(PyThreadState *tstate,
+                       Py_region_t root_id,
+                       _PyCownObject *cown,
+                       struct gc_collection_stats *stats)
+{
+    assert(!_PyErr_Occurred(tstate));
+    _PyRegionObject *root = _Py_region_data_CAST(root_id)->bridge;
+
+    /* If the region is closed, nobody can interfere with unreachable
+     * object identification, and this section can run without the GIL.
+     * To prevent the current interpreter from opening the region,
+     * we switch the cown's owner to a special owner representing the GC.
+     */
+    bool release_gil = cown != NULL && !_PyRegion_IsOpen(root_id);
+    PyThreadState *_save;
+    if (release_gil) {
+        int res = _PyCown_SwitchFromIpToGc(cown);
+        assert(res == 0);
+        (void)res;
+        Py_UNBLOCK_THREADS
+    }
+    region_list_build_dfs(root);
+    for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
+        // Abusing stats.uncollectable to count objects in the region tree.
+        region_extract_unreachable(_PyRegion_Get(curr), &stats->uncollectable);
+    }
+    if (release_gil) {
+        Py_BLOCK_THREADS
+        int res = _PyCown_SwitchFromGcToIp(cown);
+        assert(res == 0);
+        (void)res;
+    }
+
+    /* Create artificial local references to the bridges to:
+     * 1. ensure they will not go away,
+     * 2. prevent Python code from sharing them with other interpreters.
+     */
+    if (region_list_add_local_refs(root)) {
+        PyErr_Clear();
+        return;
+    }
+
+    /* This runs Python code, which can change the region topology.
+     * We hold the GIL and only this interpreter has access to the regions,
+     * so nobody should interfere and we can safely handle the garbage.
+     */
+    for (_PyRegionObject *curr = root; curr != NULL; curr = curr->next) {
+        region_handle_garbage(tstate, _PyRegion_Get(curr), stats);
+    }
+
+    /* Remove the artificial local references.
+     * That can cause deallocation of the bridge objects.
+     */
+    _PyRegionObject *curr = root;
+    while (curr != NULL) {
+        _PyRegionObject *next = curr->next;
+        curr->next = NULL; // not necessary but nice
+        PyRegion_RemoveLocalRef(curr);
+        Py_DECREF(curr);
+        curr = next;
+    }
+}
+
 /* Invoke progress callbacks to notify clients that garbage collection
  * is starting or stopping
  */
@@ -1876,6 +2165,9 @@ do_gc_callback(GCState *gcstate, const char *phase,
     PyObject *stack[] = {phase_obj, info};
     for (Py_ssize_t i=0; i<PyList_GET_SIZE(gcstate->callbacks); i++) {
         PyObject *r, *cb = PyList_GET_ITEM(gcstate->callbacks, i);
+        if (PyRegion_AddLocalRef(cb)) {
+            continue;
+        }
         Py_INCREF(cb); /* make sure cb doesn't go away */
         r = PyObject_Vectorcall(cb, stack, 2, NULL);
         if (r == NULL) {
@@ -1883,8 +2175,10 @@ do_gc_callback(GCState *gcstate, const char *phase,
                                    "calling GC callback %R", cb);
         }
         else {
+            PyRegion_RemoveLocalRef(r);
             Py_DECREF(r);
         }
+        PyRegion_RemoveLocalRef(cb);
         Py_DECREF(cb);
     }
     Py_DECREF(phase_obj);
@@ -2147,6 +2441,86 @@ _PyGC_CollectNoFail(PyThreadState *tstate)
        See http://bugs.python.org/issue8713#msg195178 for an example.
        */
     _PyGC_Collect(_PyThreadState_GET(), 2, _Py_GC_REASON_SHUTDOWN);
+}
+
+Py_ssize_t
+_PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason)
+{
+    _PyCownObject *cown = NULL;
+    // We accept cowns to allow passing a closed region.
+    if (Py_IS_TYPE(region, &_PyCown_Type)) {
+        cown = _PyCownObject_CAST(region);
+        PyObject *value = _PyCown_GetValue(cown);
+        if (value == NULL) {
+            goto error;
+        }
+        region = value;
+        // Remove the reference to allow gc_collect_region_tree to
+        // release the GIL if the region is closed.
+        PyRegion_RemoveLocalRef(value);
+        Py_DECREF(value);
+    }
+    // We should have reached the bridge now.
+    if (!Py_IS_TYPE(region, &_PyRegion_Type)) {
+        goto error;
+    }
+
+    GCState *gcstate = &tstate->interp->gc;
+    // TODO(regions): GC callback
+    // The current callback API is made for the local GC
+    // (for example, it reports on the generation being collected).
+    // Invoking the callbacks from the region GC would break existing code.
+    // We could skip callbacks or add gc.region_callbacks.
+    if (gcstate->debug & _PyGC_DEBUG_STATS) {
+        debug_region_collection("collecting region tree with root", _PyRegionObject_CAST(region));
+    }
+
+    struct gc_collection_stats stats = { 0 };
+    Py_region_t region_id = _PyRegion_Get(region);
+
+    if (cown != NULL) {
+        // Ensure the cown will not be released.
+        _PyCown_SetCollecting(cown, 1);
+    }
+    PyObject *exc = _PyErr_GetRaisedException(tstate);
+    gc_collect_region_tree(tstate, region_id, cown, &stats);
+    _PyErr_SetRaisedException(tstate, exc);
+    if (cown != NULL) {
+        _PyCown_SetCollecting(cown, 0);
+    }
+    if (reason == _Py_GC_REASON_HEAP) {
+        // uncollectable is used to count the objects in the region tree.
+        gcstate->region_budget -= stats.uncollectable;
+    }
+    return stats.collected;
+
+error:
+    PyErr_SetString(PyExc_TypeError,
+        "region parameter must be a bridge or an acquired cown storing a bridge");
+    return -1;
+}
+
+/* Called when an object is added to a region. */
+void
+_PyGC_IncreaseRegionBudget(PyThreadState *tstate)
+{
+    GCState *gcstate = &tstate->interp->gc;
+    /* From assess_work_to_do:
+     * For a steady state heap, the amount of work to do is three times the number
+     * of new objects added to the heap. This ensures that we stay ahead in the
+     * worst case of all new objects being garbage.
+     */
+    gcstate->region_budget += 3;
+    if (gcstate->region_budget > gcstate->young.threshold) {
+        gcstate->region_budget = gcstate->young.threshold;
+    }
+}
+
+bool
+_PyGC_CanRunRegionGC(PyThreadState *tstate)
+{
+    GCState *gcstate = &tstate->interp->gc;
+    return gcstate->enabled && gcstate->region_budget > 0;
 }
 
 void
@@ -2472,6 +2846,8 @@ visit_generation(gcvisitobjects_t callback, void *arg, struct gc_generation *gen
     gc_list = &gen->head;
     for (gc = GC_NEXT(gc_list); gc != gc_list; gc = GC_NEXT(gc)) {
         PyObject *op = FROM_GC(gc);
+        // TODO(regions): If callback moves op into a region,
+        // this function would start iterating objects in the region.
         Py_INCREF(op);
         int res = callback(op, arg);
         Py_DECREF(op);

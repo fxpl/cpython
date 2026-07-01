@@ -227,6 +227,9 @@ struct _gc_runtime_state {
     int visited_space;
     int phase;
 
+    /* How many objects in regions can be collected within this cycle */
+    Py_ssize_t region_budget;
+
 #ifdef Py_GIL_DISABLED
     /* This is the number of objects that survived the last full
        collection. It approximates the number of long lived objects

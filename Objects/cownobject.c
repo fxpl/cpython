@@ -57,6 +57,9 @@ struct _PyCownObject {
      * Therefore, we are responsible for releasing and acquireing the GIL.
      */
     PyMutex lock;
+
+    /* Whether this cown is currently being collected by the region GC. */
+    int collecting;
 };
 
 static _PyCown_ipid_t cown_get_owner(_PyCownObject *obj) {
@@ -431,6 +434,13 @@ static int cown_release(_PyCownObject *self, _PyCown_ipid_t unlocking_ip) {
         return -1;
     }
 
+    if (self->collecting) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "the cown can't be released, since it is currently being garbage collected");
+        return -1;
+    }
+
     if (cown_is_value_cown_or_immutable(self)) {
         // Can be released without any restrictions
         return cown_release_unchecked(self, unlocking_ip);
@@ -451,11 +461,54 @@ static int cown_release(_PyCownObject *self, _PyCown_ipid_t unlocking_ip) {
     return cown_release_unchecked(self, unlocking_ip);
 }
 
+/* Release the cown after performing garbage collection. */
+static void cown_gc_release(_PyCownObject *self, _PyCown_ipid_t this_ip) {
+    if (cown_release(self, this_ip) == 0) {
+        return;
+    }
+    // Cannot release the cown, likely because the region has been opened.
+    // Nobody expects this cown to suddently be acquired.
+    // Replace the cown's value.
+    // FIXME(cowns): Replace with an exception once they can be frozen.
+    PyErr_FormatUnraisable("Exception ignored while garbage collecting a cown");
+    cown_set_value_unchecked(self, Py_None);
+    // Should be able to release now.
+    int res = cown_release(self, this_ip);
+    assert(res == 0);
+    (void)res;
+}
+
+/* Collect the region tree inside the cown,
+ * but only if we have budget to do so and the cown is released.
+ */
+static void cown_try_collect(_PyCownObject *self, _PyCown_ipid_t this_ip) {
+    if (cown_is_value_cown_or_immutable(self)) {
+        // Not a region.
+        return;
+    }
+    PyThreadState *tstate = PyThreadState_Get();
+    if (!_PyGC_CanRunRegionGC(tstate)) {
+        return;
+    }
+
+    // Lock without blocking, we only want the cown if it is released.
+    int res = cown_lock(self, NO_BLOCKING_TIMEOUT, this_ip, true);
+    if (res != COWN_ACQUIRE_SUCCESS) {
+        // Could not acquire the cown, perhaps another interpreter has it.
+        // Ignore the error, the region will be collected later.
+        PyErr_Clear();
+        return;
+    }
+    _PyGC_CollectRegion(tstate, _PyObject_CAST(self), _Py_GC_REASON_HEAP);
+    cown_gc_release(self, this_ip);
+}
+
 static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
     _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
     if (cown_release(self, this_ip) < 0) {
         return NULL;
     }
+    cown_try_collect(self, this_ip);
 
     Py_RETURN_NONE;
 }
@@ -531,10 +584,18 @@ static PyObject *CownObject_get_value(_PyCownObject *self, void *closure) {
     return PyRegion_NewRef(self->value);
 }
 
+PyObject *_PyCown_GetValue(_PyCownObject* self) {
+    return CownObject_get_value(self, NULL);
+}
+
 static int CownObject_set_value(_PyCownObject *self, PyObject *value, void *closure) {
     BAIL_UNLESS_OWNED(self, -1);
 
     return cown_set_value(self, value);
+}
+
+int _PyCown_SetValue(_PyCownObject* self, PyObject* value) {
+    return CownObject_set_value(self, value, NULL);
 }
 
 static PyGetSetDef PyCownObject_getset[] = {
@@ -611,84 +672,28 @@ PyTypeObject _PyCown_Type = {
     .tp_flags2 = Py_TPFLAGS2_REGION_AWARE
 };
 
-/* This acquires the current cown for the GC. The cown returns a borrowed
- * reference to the contained region via the `region` argument.
- *
- * Possible returns:
- *  (-1): Indicates a error state. (This should never happen).
- *   (0): the acquisition failed, probably because a different thread
- *        acquired the cown first.
- *   (1): The cown was acquired and the `region` argument was updated. The
- *        cown needs to be manually released via `_PyCown_ReleaseGC`.
- */
-int _PyCown_AcquireGC(_PyCownObject *self, Py_region_t *region) {
-    // Attempt to lock the cown
-    int res = cown_lock(self, NO_BLOCKING_TIMEOUT, GC_IPID, false);
-    if (res == COWN_ACQUIRE_ERROR) {
-        return -1;
-    }
-
-    // The cown was snatched up by something else. This is fine for
-    // the GC
-    if (res == COWN_ACQUIRE_FAIL) {
-        return 0;
-    }
-    assert(res == COWN_ACQUIRE_SUCCESS);
-
-    // This accesses the value directly, to keep a potential region closed
-    *region = _PyRegion_Get(self->value);
-    return 1;
+void _PyCown_SetCollecting(_PyCownObject *self, int value) {
+    self->collecting = value;
 }
 
 int _PyCown_SwitchFromGcToIp(_PyCownObject *self) {
-    BAIL_UNLESS_OWNED_BY(self, GC_IPID, -1);
-
     _PyCown_ipid_t ipid = _PyCown_ThisInterpreterId();
     _PyCown_ipid_t gcid = GC_IPID;
+    BAIL_UNLESS_OWNED_BY(self, gcid, -1);
+
     if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &gcid, ipid)) {
         return -1;
     }
-
     return 0;
 }
 
-static int cown_switch_to_gc_unchecked(_PyCownObject *self, _PyCown_ipid_t ipid, Py_region_t *contained_region) {
-    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, GC_IPID)) {
-        return -1;
-    }
-    *contained_region = _PyRegion_Get(self->value);
-    return 0;
-}
-
-int _PyCown_SwitchFromIpToGc(_PyCownObject *self, Py_region_t *contained_region) {
+int _PyCown_SwitchFromIpToGc(_PyCownObject *self) {
     _PyCown_ipid_t ipid = _PyCown_ThisInterpreterId();
-    *contained_region = NULL_REGION;
-    if (cown_check_owner_before_release(self, ipid) < 0) {
+    _PyCown_ipid_t gcid = GC_IPID;
+    BAIL_UNLESS_OWNED_BY(self, ipid, -1);
+
+    if (!_Py_atomic_compare_exchange_uint64(&self->owning_ip, &ipid, gcid)) {
         return -1;
     }
-
-    if (cown_is_value_cown_or_immutable(self)) {
-        // Can be switched without any restrictions
-        return cown_switch_to_gc_unchecked(self, ipid, contained_region);
-    }
-    assert(_PyRegion_Get(self->value) != _Py_LOCAL_REGION);
-
-    int clean_res = cown_try_closing_region(self);
-    if (clean_res < 0) {
-        return -1;
-    }
-    if (clean_res == 1) {
-        // The region is still open, and we won't be able to release the cown.
-        // After GC, the cown will still be owned by the current interpreter.
-        // Nobody expects this.
-        // Replace the cown's value with an exception.
-        // FIXME(cowns): exceptions cannot yet be frozen, setting None for now
-        cown_set_value_unchecked(self, Py_None);
-    }
-    // Region is closed, safe to switch
-    return cown_switch_to_gc_unchecked(self, ipid, contained_region);
-}
-
-int _PyCown_ReleaseGC(_PyCownObject *self) {
-    return cown_release(self, GC_IPID);
+    return 0;
 }

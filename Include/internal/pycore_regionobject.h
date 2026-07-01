@@ -22,6 +22,8 @@ struct _PyRegionObject {
     /** The name of the region or NULL */
     PyObject *name;
     PyObject *dict;
+    /* A link in a list of regions to be garbage collected. */
+    struct _PyRegionObject *next;
 };
 #define _PyRegionObject_CAST(op) _Py_CAST(_PyRegionObject*, op)
 

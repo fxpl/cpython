@@ -98,6 +98,9 @@ typedef struct _Py_region_data {
      */
     PyGC_Head gc_list;
 
+    /* List of unreachable objects in the region, saved to be deleted later. */
+    PyGC_Head unreachable;
+
 #ifdef Py_OWNERSHIP_INVARIANT
     _Py_ownership_invariant_region_data invariant_data;
 #endif
@@ -133,6 +136,7 @@ static inline Py_region_t __PyRegion_Get(PyObject *obj, int follow_pending) {
 
 PyAPI_FUNC(int) _PyRegion_New(_PyRegionObject *bridge);
 PyAPI_FUNC(int) _PyRegion_Dissolve(Py_region_t region);
+PyAPI_FUNC(void) _PyRegion_IncRc(Py_region_t region);
 PyAPI_FUNC(void) _PyRegion_DecRc(Py_region_t region);
 
 PyAPI_FUNC(Py_ssize_t) _PyRegion_GetLrc(Py_region_t region);
