@@ -250,7 +250,7 @@ method_dealloc(PyObject *self)
     Py_DECREF(im->im_func);
     Py_XDECREF(im->im_self);
     assert(Py_IS_TYPE(self, &PyMethod_Type));
-    _Py_FREELIST_FREE(pymethodobjects, (PyObject *)im, PyObject_GC_Del);
+    _Py_FREELIST_FREE_OBJ(pymethodobjects, (PyObject *)im, PyObject_GC_Del);
 }
 
 static PyObject *

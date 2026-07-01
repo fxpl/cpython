@@ -148,6 +148,7 @@ __pragma(warning(disable: 4201))
 #include "cpython/pyfpe.h"
 #include "cpython/tracemalloc.h"
 #include "immutability.h"
+#include "region.h"
 
 #ifdef _MSC_VER
 __pragma(warning(pop))  // warning(disable: 4201)

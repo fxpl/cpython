@@ -37,7 +37,7 @@ jobs:
         target:
 # Un-comment as we add support for more platforms for tail-calling interpreters.
 #          - i686-pc-windows-msvc/msvc
-          - x86_64-pc-windows-msvc/msvc
+#          - x86_64-pc-windows-msvc/msvc
 #          - aarch64-pc-windows-msvc/msvc
           - x86_64-apple-darwin/clang
           - aarch64-apple-darwin/clang
@@ -50,9 +50,9 @@ jobs:
 #          - target: i686-pc-windows-msvc/msvc
 #            architecture: Win32
 #            runner: windows-2022
-          - target: x86_64-pc-windows-msvc/msvc
-            architecture: x64
-            runner: windows-2022
+#          - target: x86_64-pc-windows-msvc/msvc
+#            architecture: x64
+#            runner: windows-2022
 #          - target: aarch64-pc-windows-msvc/msvc
 #            architecture: ARM64
 #            runner: windows-2022

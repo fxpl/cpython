@@ -70,7 +70,7 @@ gc.collect -> Py_ssize_t
 
     generation: int(c_default="NUM_GENERATIONS - 1") = 2
 
-Run the garbage collector.
+Run the garbage collector on the local region.
 
 With no arguments, run a full collection.  The optional argument
 may be an integer specifying which generation to collect.  A ValueError
@@ -81,7 +81,7 @@ The number of unreachable objects is returned.
 
 static Py_ssize_t
 gc_collect_impl(PyObject *module, int generation)
-/*[clinic end generated code: output=b697e633043233c7 input=40720128b682d879]*/
+/*[clinic end generated code: output=b697e633043233c7 input=7031efb5f4ff564a]*/
 {
     PyThreadState *tstate = _PyThreadState_GET();
 
@@ -92,6 +92,28 @@ gc_collect_impl(PyObject *module, int generation)
 
     return _PyGC_Collect(tstate, generation, _Py_GC_REASON_MANUAL);
 }
+
+/*[clinic input]
+gc.collect_region -> Py_ssize_t
+
+    region: object
+
+Run the garbage collector on a specific region.
+
+The argument should be either a Region object
+or an acquired Cown object holding the region to collect.
+
+The number of unreachable objects is returned.
+[clinic start generated code]*/
+
+static Py_ssize_t
+gc_collect_region_impl(PyObject *module, PyObject *region)
+/*[clinic end generated code: output=16b435a6dab62cc1 input=da1f6879e70ac5a4]*/
+{
+    PyThreadState *tstate = _PyThreadState_GET();
+    return _PyGC_CollectRegion(tstate, region, _Py_GC_REASON_MANUAL);
+}
+
 
 /*[clinic input]
 gc.set_debug
@@ -471,7 +493,8 @@ PyDoc_STRVAR(gc__doc__,
 "enable() -- Enable automatic garbage collection.\n"
 "disable() -- Disable automatic garbage collection.\n"
 "isenabled() -- Returns true if automatic collection is enabled.\n"
-"collect() -- Do a full collection right now.\n"
+"collect() -- Do a full collection on the local region right now.\n"
+"collect_region() -- Do a collection on a specific region right now.\n"
 "get_count() -- Return the current collection counts.\n"
 "get_stats() -- Return list of dictionaries containing per-generation stats.\n"
 "set_debug() -- Set debugging flags.\n"
@@ -497,6 +520,7 @@ static PyMethodDef GcMethods[] = {
     GC_SET_THRESHOLD_METHODDEF
     GC_GET_THRESHOLD_METHODDEF
     GC_COLLECT_METHODDEF
+    GC_COLLECT_REGION_METHODDEF
     GC_GET_OBJECTS_METHODDEF
     GC_GET_STATS_METHODDEF
     GC_IS_TRACKED_METHODDEF

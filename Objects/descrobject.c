@@ -1194,7 +1194,7 @@ mappingproxy_dealloc(PyObject *self)
 {
     mappingproxyobject *pp = (mappingproxyobject *)self;
     _PyObject_GC_UNTRACK(pp);
-    Py_DECREF(pp->mapping);
+    PyRegion_CLEAR(pp, pp->mapping);
     PyObject_GC_Del(pp);
 }
 
@@ -1279,6 +1279,10 @@ mappingproxy_new_impl(PyTypeObject *type, PyObject *mapping)
     mappingproxy = PyObject_GC_New(mappingproxyobject, &PyDictProxy_Type);
     if (mappingproxy == NULL)
         return NULL;
+    if (PyRegion_AddRef(mappingproxy, mapping)) {
+        Py_DECREF(mappingproxy);
+        return NULL;
+    }
     mappingproxy->mapping = Py_NewRef(mapping);
     _PyObject_GC_TRACK(mappingproxy);
     return (PyObject *)mappingproxy;
@@ -1293,10 +1297,14 @@ PyDictProxy_New(PyObject *mapping)
         return NULL;
 
     pp = PyObject_GC_New(mappingproxyobject, &PyDictProxy_Type);
-    if (pp != NULL) {
-        pp->mapping = Py_NewRef(mapping);
-        _PyObject_GC_TRACK(pp);
+    if (pp == NULL)
+        return NULL;
+    if (PyRegion_AddRef(pp, mapping)) {
+        Py_DECREF(pp);
+        return NULL;
     }
+    pp->mapping = Py_NewRef(mapping);
+    _PyObject_GC_TRACK(pp);
     return (PyObject *)pp;
 }
 
@@ -1319,6 +1327,8 @@ wrapper_dealloc(PyObject *self)
 {
     wrapperobject *wp = (wrapperobject *)self;
     PyObject_GC_UnTrack(wp);
+    PyRegion_RemoveRef(wp, wp->descr);
+    PyRegion_RemoveRef(wp, wp->self);
     Py_XDECREF(wp->descr);
     Py_XDECREF(wp->self);
     PyObject_GC_Del(wp);
@@ -1505,11 +1515,15 @@ PyWrapper_New(PyObject *d, PyObject *self)
                                     (PyObject *)PyDescr_TYPE(descr)));
 
     wp = PyObject_GC_New(wrapperobject, &_PyMethodWrapper_Type);
-    if (wp != NULL) {
-        wp->descr = (PyWrapperDescrObject*)Py_NewRef(descr);
-        wp->self = Py_NewRef(self);
-        _PyObject_GC_TRACK(wp);
+    if (wp == NULL)
+        return NULL;
+    if (PyRegion_AddRef(wp, descr)){
+        Py_DECREF(wp);
+        return NULL;
     }
+    wp->descr = (PyWrapperDescrObject*)Py_NewRef(descr);
+    wp->self = Py_NewRef(self);
+    _PyObject_GC_TRACK(wp);
     return (PyObject *)wp;
 }
 
@@ -1624,7 +1638,9 @@ property_set_name(PyObject *self, PyObject *args) {
     propertyobject *prop = (propertyobject *)self;
     PyObject *name = PyTuple_GET_ITEM(args, 1);
 
-    Py_XSETREF(prop->prop_name, Py_XNewRef(name));
+    if (PyRegion_XSETNEWREF(prop, prop->prop_name, name)) {
+        return NULL;
+    }
 
     Py_RETURN_NONE;
 }
@@ -1795,12 +1811,15 @@ property_copy(PyObject *old, PyObject *get, PyObject *set, PyObject *del)
     }
 
     new =  PyObject_CallFunctionObjArgs(type, get, set, del, doc, NULL);
+    PyRegion_RemoveLocalRef(type);
     Py_DECREF(type);
     if (new == NULL)
         return NULL;
 
     if (PyObject_TypeCheck((new), &PyProperty_Type)) {
-        Py_XSETREF(((propertyobject *) new)->prop_name, Py_XNewRef(pold->prop_name));
+        if (PyRegion_XSETNEWREF(new, ((propertyobject *) new)->prop_name, pold->prop_name)) {
+            return NULL;
+        }
     }
     return new;
 }
@@ -1854,6 +1873,10 @@ property_init_impl(propertyobject *self, PyObject *fget, PyObject *fset,
     if (fdel == Py_None)
         fdel = NULL;
 
+    if (PyRegion_AddRefs(self, fget, fset, fdel)) {
+        return -1;
+    }
+
     Py_XSETREF(self->prop_get, Py_XNewRef(fget));
     Py_XSETREF(self->prop_set, Py_XNewRef(fset));
     Py_XSETREF(self->prop_del, Py_XNewRef(fdel));
@@ -1864,7 +1887,7 @@ property_init_impl(propertyobject *self, PyObject *fget, PyObject *fset,
     PyObject *prop_doc = NULL;
 
     if (doc != NULL && doc != Py_None) {
-        prop_doc = Py_XNewRef(doc);
+        prop_doc = PyRegion_XNewRef(doc);
     }
     /* if no docstring given and the getter has one, use that one */
     else if (fget != NULL) {
@@ -1885,17 +1908,20 @@ property_init_impl(propertyobject *self, PyObject *fget, PyObject *fset,
        a non-None object with incremented ref counter */
 
     if (Py_IS_TYPE(self, &PyProperty_Type)) {
-        Py_XSETREF(self->prop_doc, prop_doc);
+        if (PyRegion_XSETREF(self, self->prop_doc, prop_doc)) {
+            return -1;
+        }
     } else {
         /* If this is a property subclass, put __doc__ in the dict
            or designated slot of the subclass instance instead, otherwise
            it gets shadowed by __doc__ in the class's dict. */
 
         if (prop_doc == NULL) {
-            prop_doc = Py_NewRef(Py_None);
+            prop_doc = PyRegion_NewRef(Py_None);
         }
         int err = PyObject_SetAttr(
                     (PyObject *)self, &_Py_ID(__doc__), prop_doc);
+        PyRegion_RemoveLocalRef(prop_doc);
         Py_DECREF(prop_doc);
         if (err < 0) {
             assert(PyErr_Occurred());
@@ -1939,8 +1965,7 @@ static int
 property_set__name__(PyObject *op, PyObject *value, void *Py_UNUSED(ignored))
 {
     propertyobject *prop = _propertyobject_CAST(op);
-    Py_XSETREF(prop->prop_name, Py_XNewRef(value));
-    return 0;
+    return PyRegion_XSETNEWREF(prop, prop->prop_name, value);
 }
 
 static PyObject *
@@ -1997,7 +2022,7 @@ static int
 property_clear(PyObject *self)
 {
     propertyobject *pp = (propertyobject *)self;
-    Py_CLEAR(pp->prop_doc);
+    PyRegion_CLEAR(pp, pp->prop_doc);
     return 0;
 }
 

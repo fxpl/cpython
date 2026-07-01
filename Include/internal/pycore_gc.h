@@ -118,20 +118,18 @@ static inline void _PyObject_GC_SET_SHARED(PyObject *op) {
 /* Bit 1 is set when the object is in generation which is GCed currently. */
 #define _PyGC_PREV_MASK_COLLECTING ((uintptr_t)2)
 
-/* Bit 0 in _gc_next is the old space bit.
+/* Bit flags for _gc_next */
+/* Bit 0 is the old space bit.
+ * It describes the generation space the object is in.
  * It is set as follows:
  * Young: gcstate->visited_space
  * old[0]: 0
  * old[1]: 1
  * permanent: 0
- *
- * During a collection all objects handled should have the bit set to
- * gcstate->visited_space, as objects are moved from the young gen
- * and the increment into old[gcstate->visited_space].
- * When object are moved from the pending space, old[gcstate->visited_space^1]
- * into the increment, the old space bit is flipped.
 */
-#define _PyGC_NEXT_MASK_OLD_SPACE_1    1
+#define _PyGC_NEXT_MASK_OLD_SPACE_1 ((uintptr_t)1)
+/* Bit 1 is set when the object is in the unreachable list. */
+#define _PyGC_NEXT_MASK_UNREACHABLE ((uintptr_t)2)
 
 #define _PyGC_PREV_SHIFT           2
 #define _PyGC_PREV_MASK            (((uintptr_t) -1) << _PyGC_PREV_SHIFT)
@@ -340,6 +338,9 @@ extern void _PyGC_InitState(struct _gc_runtime_state *);
 
 extern Py_ssize_t _PyGC_Collect(PyThreadState *tstate, int generation, _PyGC_Reason reason);
 extern void _PyGC_CollectNoFail(PyThreadState *tstate);
+extern Py_ssize_t _PyGC_CollectRegion(PyThreadState *tstate, PyObject *region, _PyGC_Reason reason);
+extern void _PyGC_IncreaseRegionBudget(PyThreadState *tstate);
+extern bool _PyGC_CanRunRegionGC(PyThreadState *tstate);
 
 /* Freeze objects tracked by the GC and ignore them in future collections. */
 extern void _PyGC_Freeze(PyInterpreterState *interp);

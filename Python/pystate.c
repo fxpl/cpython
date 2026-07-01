@@ -804,6 +804,15 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
     Py_CLEAR(interp->immutability.traceback_func);
 #endif
 
+    if (interp->ownership.warned_types != NULL) {
+        _Py_hashtable_destroy(interp->ownership.warned_types);
+        interp->ownership.warned_types = NULL;
+    }
+    interp->ownership.tick = 0;
+#ifdef Py_OWNERSHIP_INVARIANT
+    interp->ownership.invariant_state = Py_OWNERSHIP_INVARIANT_DISABLED;
+#endif
+
     Py_CLEAR(interp->sysdict_copy);
     Py_CLEAR(interp->builtins_copy);
     Py_CLEAR(interp->dict);

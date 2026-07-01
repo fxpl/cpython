@@ -199,22 +199,22 @@ unreachable:
 
 ```pycon
 >>> import gc
->>> 
+>>>
 >>> class Link:
 ...    def __init__(self, next_link=None):
 ...        self.next_link = next_link
-...  
+...
 >>> link_3 = Link()
 >>> link_2 = Link(link_3)
 >>> link_1 = Link(link_2)
 >>> link_3.next_link = link_1
 >>> A = link_1
 >>> del link_1, link_2, link_3
->>> 
+>>>
 >>> link_4 = Link()
 >>> link_4.next_link = link_4
 >>> del link_4
->>> 
+>>>
 >>> # Collect the unreachable Link object (and its .__dict__ dict).
 >>> gc.collect()
 2
@@ -278,7 +278,7 @@ state in the previous image and after examining the objects referred to by `link
 the GC knows that `link_3` is reachable after all, so it is moved back to the
 original list and its `gc_ref` field is set to 1 so that if the GC visits it again,
 it will know that it's reachable. To avoid visiting an object twice, the GC marks all
-objects that have already been visited once (by unsetting the `PREV_MASK_COLLECTING`
+objects that have already been visited once (by unsetting the `_PyGC_PREV_MASK_COLLECTING`
 flag) so that if an object that has already been processed is referenced by some other
 object, the GC does not process it twice.
 
@@ -465,11 +465,11 @@ specifically in a generation by calling `gc.collect(generation=NUM)`.
 >>> # Create a reference cycle.
 >>> x = MyObj()
 >>> x.self = x
->>> 
+>>>
 >>> # Initially the object is in the young generation.
 >>> gc.get_objects(generation=0)
 [..., <__main__.MyObj object at 0x7fbcc12a3400>, ...]
->>> 
+>>>
 >>> # After a collection of the youngest generation the object
 >>> # moves to the old generation.
 >>> gc.collect(generation=0)
@@ -725,21 +725,27 @@ of `PyGC_Head` discussed in the `Memory layout and object structure`_ section:
 
 - The `_gc_prev` field is normally used as the "previous" pointer to maintain the
   doubly linked list but its lowest two bits are used to keep the flags
-  `PREV_MASK_COLLECTING` and `_PyGC_PREV_MASK_FINALIZED`. Between collections,
+  `_PyGC_PREV_MASK_COLLECTING` and `_PyGC_PREV_MASK_FINALIZED`. Between collections,
   the only flag that can be present is `_PyGC_PREV_MASK_FINALIZED` that indicates
   if an object has been already finalized. During collections `_gc_prev` is
   temporarily used for storing a copy of the reference count (`gc_ref`), in
   addition to two flags, and the GC linked list becomes a singly linked list until
   `_gc_prev` is restored.
 
-- The `_gc_next` field is used as the "next" pointer to maintain the doubly linked
-  list but during collection its lowest bit is used to keep the
-  `NEXT_MASK_UNREACHABLE` flag that indicates if an object is tentatively
+- The `_gc_next` field is normally used as the "next" pointer to maintain the
+  doubly linked list but its lowest two bits are used to keep the flags
+  `_PyGC_NEXT_MASK_OLD_SPACE_1` and `_PyGC_NEXT_MASK_UNREACHABLE`.
+  During collection, the `_PyGC_NEXT_MASK_UNREACHABLE` flag indicates if an object is tentatively
   unreachable during the cycle detection algorithm.  This is a drawback to using only
   doubly linked lists to implement partitions:  while most needed operations are
   constant-time, there is no efficient way to determine which partition an object is
   currently in.  Instead, when that's needed, ad hoc tricks (like the
-  `NEXT_MASK_UNREACHABLE` flag) are employed.
+  `_PyGC_NEXT_MASK_UNREACHABLE` flag) are employed.
+  The `_PyGC_NEXT_MASK_OLD_SPACE_1` flag
+  indicates whether the object belongs to the pending space or the
+  visited space. The objects in the pending space are yet to be processed
+  during future incremental collections. Which space is which is determined
+  by gcstate->visited_space.
 
 Optimization: delayed untracking containers
 ===========================================
