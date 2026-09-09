@@ -968,7 +968,7 @@ handle_weakref_callbacks(PyGC_Head *unreachable, PyGC_Head *old)
              * Since the callback is never needed and may be unsafe in this
              * case, wr is simply left in the unreachable set.  Note that
              * clear_weakrefs() will ensure its callback will not trigger
-             * inside delete_garbage().
+             * inside _PyGC_DeleteGarbage().
              *
              * OTOH, if wr isn't part of CT, we should invoke the callback:  the
              * weakref outlived the trash.  Note that since wr isn't CT in this
@@ -1061,10 +1061,11 @@ clear_weakrefs(PyGC_Head *unreachable)
         PyObject *op = FROM_GC(gc);
         next = GC_NEXT(gc);
 
-        if (PyWeakref_Check(op)) {
+        if (_PyWeakrefOrRegionRef_Check(op)) {
             /* A weakref inside the unreachable set is always cleared. See
              * the comments above handle_weakref_callbacks() for why these
-             * must be cleared.
+             * must be cleared. Region references reuse the same struct
+             * without being a weakref subtype, and need it just as much.
              */
             _PyWeakref_ClearRef((PyWeakReference *)op);
         }
@@ -1136,9 +1137,10 @@ handle_legacy_finalizers(PyThreadState *tstate,
  * Note that this may remove some (or even all) of the objects from the
  * list, due to refcounts falling to 0.
  */
-static void
-finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
+void
+_PyGC_FinalizeGarbage(PyGC_Head *collectable)
 {
+    PyThreadState *tstate = _PyThreadState_GET();
     destructor finalize;
     PyGC_Head seen;
 
@@ -1173,10 +1175,12 @@ finalize_garbage(PyThreadState *tstate, PyGC_Head *collectable)
  * tricky business as the lists can be changing and we don't know which
  * objects may be freed.  It is possible I screwed something up here.
  */
-static void
-delete_garbage(PyThreadState *tstate, GCState *gcstate,
-               PyGC_Head *collectable, PyGC_Head *old)
+void
+_PyGC_DeleteGarbage(PyGC_Head *collectable, PyGC_Head *old)
 {
+    PyThreadState *tstate = _PyThreadState_GET();
+    GCState *gcstate = &tstate->interp->gc;
+
     assert(!_PyErr_Occurred(tstate));
 
     while (!gc_list_is_empty(collectable)) {
@@ -1796,7 +1800,7 @@ gc_collect_region(PyThreadState *tstate,
     validate_list(&unreachable, collecting_set_unreachable_clear);
 
     /* Call tp_finalize on objects which have one. */
-    finalize_garbage(tstate, &unreachable);
+    _PyGC_FinalizeGarbage(&unreachable);
     /* Handle any objects that may have resurrected after the call
      * to 'finalize_garbage' and continue the collection with the
      * objects that are still unreachable */
@@ -1814,7 +1818,7 @@ gc_collect_region(PyThreadState *tstate,
     * in finalizers to be freed.
     */
     stats->collected += gc_list_size(&final_unreachable);
-    delete_garbage(tstate, gcstate, &final_unreachable, to);
+    _PyGC_DeleteGarbage(&final_unreachable, to);
 
     /* Collect statistics on uncollectable objects found and print
      * debugging information. */

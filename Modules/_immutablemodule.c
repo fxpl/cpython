@@ -8,6 +8,7 @@
 
 #include "Python.h"
 #include <stdbool.h>
+#include "pycore_cown.h"
 #include "pycore_object.h"
 #include "pycore_immutability.h"
 #include "pycore_critical_section.h"
@@ -647,6 +648,32 @@ immutable_exec(PyObject *module) {
     }
     if (_PyImmutability_SetFreezable(
             module_state->sharedfield_type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, &_PyTracingRegion_Type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_SetFreezable(
+            (PyObject*)&_PyTracingRegion_Type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, &_PyCown_Type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_SetFreezable((PyObject*)&_PyCown_Type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, &_PyRegionref_RefType) != 0) {
+        return -1;
+    }
+    // The type object itself has to be freezable: the close trace freezes the
+    // type of every object it moves into a region. Individual references are
+    // marked unfreezable in `regionref___new__()` instead.
+    if (_PyImmutability_SetFreezable(
+            (PyObject*)&_PyRegionref_RefType, _Py_FREEZABLE_YES) < 0) {
         return -1;
     }
 
