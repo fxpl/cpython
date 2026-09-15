@@ -14,11 +14,9 @@
 
 // This file has many in progress aspects
 //
-// 1. Improve backtracking of freezing in the presence of failures.
-// 2. Support GIL disabled mode properly.
-// 3. Improve storage of freeze_location
-// 4. Improve Mermaid output to handle re-entrancy
-// 5. Add pre-freeze hook to allow custom objects to prepare for freezing.
+// 1. Support GIL disabled mode properly.
+// 2. Improve storage of freeze_location
+// 3. Improve Mermaid output to handle re-entrancy
 
 
 // #define IMMUTABLE_TRACING
