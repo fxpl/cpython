@@ -1403,7 +1403,7 @@ PyModuleObject* _PyInterpreterState_GetModuleState(PyObject *mod) {
             }
 
             // The returned mod should always be mutable and different
-            assert(!_Py_IsImmutable(local_mod));
+            assert(!_Py_IsShallowImmutable(local_mod));
             assert(local_mod != mod);
 
             // Store mutable state

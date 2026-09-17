@@ -456,7 +456,7 @@ PyModule_FromDefAndSpec2(PyModuleDef* def, PyObject *spec, int module_api_versio
     }
 
     if (PyModule_Check(m)) {
-        assert(!_Py_IsImmutable(m));
+        assert(!_Py_IsShallowImmutable(m));
         ((PyModuleObject*)m)->md_state = NULL;
         ((PyModuleObject*)m)->md_def = def;
 #ifdef Py_GIL_DISABLED

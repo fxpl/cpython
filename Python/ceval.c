@@ -76,25 +76,43 @@
 
 #ifndef Py_GIL_DISABLED
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+#define _Py_DECREF_PYRONA(arg, dealloc) \
+    if (_Py_NeedsAtomicRC(arg)) { \
+        if (_Py_IsImmutableIndirectSCC(arg)) { \
+            if (_Py_DecRef_Immutable(arg)) { \
+                _Py_CLEAR_IMMUTABLE(arg); \
+                _PyReftracerTrack(arg, PyRefTracer_DESTROY); \
+                destructor d = (destructor)(dealloc); \
+                d(arg); \
+            } \
+        } else { \
+            uint32_t old = _Py_atomic_add_uint32(&arg->ob_refcnt, -1); \
+            assert(old > 0); \
+            if (old == 1) { \
+                _PyReftracerTrack(arg, PyRefTracer_DESTROY); \
+                destructor d = (destructor)(dealloc); \
+                d(arg); \
+            } \
+        } \
+        break; \
+    }
+#else
+#define _Py_DECREF_PYRONA(arg, dealloc)
+#endif
+
 #undef Py_DECREF
 /// TODO(Immutable):
 ///  Need to double check logic here as ImmortalOrImmutable ocassionally says yes when it shouldn't!
 #define Py_DECREF(arg) \
     do { \
         PyObject *op = _PyObject_CAST(arg); \
-        if (_Py_IsImmortalOrImmutable(op)) { \
+        if (_Py_NeedsSlowRcBranch(op)) { \
             if (_Py_IsImmortal(op)) { \
                 _Py_DECREF_IMMORTAL_STAT_INC(); \
                 break; \
             } \
-            if (_Py_IsImmutable(op)) { \
-                if (_Py_DecRef_Immutable(op)) { \
-                    _PyReftracerTrack(op, PyRefTracer_DESTROY); \
-                    destructor dealloc = Py_TYPE(op)->tp_dealloc; \
-                    (*dealloc)(op); \
-                } \
-                break; \
-            } \
+            _Py_DECREF_PYRONA(op, Py_TYPE(op)->tp_dealloc) \
         } \
         _Py_DECREF_STAT_INC(); \
         if ((--op->ob_refcnt) == 0) { \
@@ -108,19 +126,12 @@
 #define _Py_DECREF_SPECIALIZED(arg, dealloc) \
     do { \
         PyObject *op = _PyObject_CAST(arg); \
-        if (_Py_IsImmortalOrImmutable(op)) { \
+        if (_Py_NeedsSlowRcBranch(op)) { \
             if (_Py_IsImmortal(op)) { \
                 _Py_DECREF_IMMORTAL_STAT_INC(); \
                 break; \
             } \
-            if (_Py_IsImmutable(op)) { \
-                if (_Py_DecRef_Immutable(op)) { \
-                    _PyReftracerTrack(op, PyRefTracer_DESTROY); \
-                    destructor d = (destructor)(dealloc); \
-                    d(op); \
-                } \
-                break; \
-            } \
+            _Py_DECREF_PYRONA(op, dealloc) \
         } \
         _Py_DECREF_STAT_INC(); \
         if (--op->ob_refcnt == 0) { \
@@ -137,6 +148,7 @@
     do { \
         PyObject *op = _PyObject_CAST(arg); \
         uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local); \
+        /* FIXME(regions): This needs a _Py_NeedsSlowRcBranch for regions */ \
         if (local == _Py_IMMORTAL_REFCNT_LOCAL) { \
             _Py_DECREF_IMMORTAL_STAT_INC(); \
             break; \

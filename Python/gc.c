@@ -15,6 +15,19 @@
 
 #include "pydtrace.h"
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+
+static inline Py_ALWAYS_INLINE int _Py_PyronaIgnoreObj(PyObject *op)
+{
+    // Some atomic RCed objects could probably be investigated but the GC,
+    // but for now this is a good enough heuristic.
+    return _Py_IsDeepImmutable(op) || _Py_NeedsAtomicRC(op);
+}
+#define _Py_PyronaIgnoreObj(op) _Py_PyronaIgnoreObj(_PyObject_CAST(op))
+#else
+#define _Py_PyronaIgnoreObj(op) (false)
+#endif
+
 
 #ifndef Py_GIL_DISABLED
 
@@ -1416,7 +1429,7 @@ visit_add_to_container(PyObject *op, void *arg)
     struct container_and_flag *cf = (struct container_and_flag *)arg;
     int visited = cf->visited_space;
     assert(visited == get_gc_state()->visited_space);
-    if (!_Py_IsImmortal(op) && !(_Py_IsImmutable(op)) && _PyObject_IS_GC(op)) {
+    if (!_Py_IsImmortal(op) && !(_Py_PyronaIgnoreObj(op)) && _PyObject_IS_GC(op)) {
         PyGC_Head *gc = AS_GC(op);
         if (_PyObject_GC_IS_TRACKED(op) &&
             gc_old_space(gc) != visited) {
@@ -1490,7 +1503,7 @@ completed_scavenge(GCState *gcstate)
 static intptr_t
 move_to_reachable(PyObject *op, PyGC_Head *reachable, int visited_space)
 {
-    if (op != NULL && !_Py_IsImmortal(op) && !_Py_IsImmutable(op) && _PyObject_IS_GC(op)) {
+    if (op != NULL && !_Py_IsImmortal(op) && !_Py_PyronaIgnoreObj(op) && _PyObject_IS_GC(op)) {
         PyGC_Head *gc = AS_GC(op);
         if (_PyObject_GC_IS_TRACKED(op) &&
             gc_old_space(gc) != visited_space) {
@@ -1554,7 +1567,7 @@ mark_stacks(PyInterpreterState *interp, PyGC_Head *visited, int visited_space, b
                     continue;
                 }
                 PyObject *op = PyStackRef_AsPyObjectBorrow(*sp);
-                if (_Py_IsImmortal(op) || _Py_IsImmutable(op)) {
+                if (_Py_IsImmortal(op) || _Py_PyronaIgnoreObj(op)) {
                     continue;
                 }
                 if (_PyObject_IS_GC(op)) {
@@ -1687,7 +1700,7 @@ gc_collect_increment(PyThreadState *tstate, struct gc_collection_stats *stats)
         PyGC_Head *gc = _PyGCHead_NEXT(not_visited);
         gc_list_move(gc, &increment);
         increment_size++;
-        assert(!_Py_IsImmortal(FROM_GC(gc)) && !_Py_IsImmutable(FROM_GC(gc)));
+        assert(!_Py_IsImmortal(FROM_GC(gc)) && !_Py_PyronaIgnoreObj(FROM_GC(gc)));
         gc_set_old_space(gc, gcstate->visited_space);
         increment_size += expand_region_transitively_reachable(&increment, gc, gcstate);
     }

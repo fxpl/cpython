@@ -133,13 +133,21 @@ extern PyAPI_FUNC(void) _Py_DecRefTotal(PyThreadState *);
 // Increment reference count by n
 static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
 {
-    if (_Py_IsImmortal(op)) {
-        _Py_INCREF_IMMORTAL_STAT_INC();
-        return;
-    }
-    if (_Py_IsImmutable(op)) {
-        _Py_RefcntAdd_Immutable(op, n);
-        return;
+    if (_Py_NeedsSlowRcBranch(op)) {
+        if (_Py_IsImmortal(op)) {
+            _Py_INCREF_IMMORTAL_STAT_INC();
+            return;
+        }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        if (_Py_NeedsAtomicRC(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
+                _Py_RefcntAdd_Immutable(op, n);
+            } else {
+                _Py_atomic_add_uint32(&op->ob_refcnt, (uint32_t)n);
+            }
+            return;
+        }
+#endif
     }
 #ifndef Py_GIL_DISABLED
     Py_ssize_t refcnt = _Py_REFCNT(op);
@@ -240,16 +248,30 @@ static inline void _Py_ClearImmortal(PyObject *op)
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
-    if (_Py_IsImmortalOrImmutable(op)) {
+    if (_Py_NeedsSlowRcBranch(op)) {
         if (_Py_IsImmortal(op)) {
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        assert(_Py_IsImmutable(op));
-        if (_Py_DecRef_Immutable(op)) {
-            destruct(op);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        if (_Py_NeedsAtomicRC(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
+                if (_Py_DecRef_Immutable(op)) {
+                    _Py_CLEAR_IMMUTABLE(op);
+                    destruct(op);
+                }
+            } else {
+                // A previous value of 1 means the new value is now 0
+                uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+                assert(old > 0);
+                if (old == 1) {
+                    _Py_CLEAR_IMMUTABLE(op);
+                    destruct(op);
+                }
+            }
+            return;
         }
-        return;
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
@@ -263,6 +285,7 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 #ifdef Py_TRACE_REFS
         _Py_ForgetReference(op);
 #endif
+        _Py_CLEAR_IMMUTABLE(op);
         _PyReftracerTrack(op, PyRefTracer_DESTROY);
         destruct(op);
     }
@@ -271,13 +294,22 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 static inline void
 _Py_DECREF_NO_DEALLOC(PyObject *op)
 {
-    if (_Py_IsImmortalOrImmutable(op)) {
+    if (_Py_NeedsSlowRcBranch(op)) {
         if (_Py_IsImmortal(op)) {
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        _Py_DecRef_Immutable(op);
-        return;
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        if (_Py_NeedsAtomicRC(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
+                _Py_DecRef_Immutable(op);
+            } else {
+                _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+            }
+            return;
+        }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
@@ -467,13 +499,21 @@ static inline void Py_DECREF_MORTAL(const char *filename, int lineno, PyObject *
     if (!_Py_IsImmortal(op)) {
         _Py_DECREF_DecRefTotal();
     }
-    // TODO(Immutable): Check this is okay, does it perform okay?
-    if (_Py_IsImmutable(op)) {
-        if (_Py_DecRef_Immutable(op)) {
-            _Py_Dealloc(op);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsAtomicRC(op)) {
+        if (_Py_IsImmutableIndirectSCC(op)) {
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+        } else {
+            uint32_t old =  _Py_atomic_or_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            if (old == 1) {
+                _Py_Dealloc(op);
+            }
         }
         return;
     }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -492,12 +532,21 @@ static inline void _Py_DECREF_MORTAL_SPECIALIZED(const char *filename, int linen
     }
 
     // TODO(Immutable): Check this is okay, does it perform okay?
-    if (_Py_IsImmutable(op)) {
-        if (_Py_DecRef_Immutable(op)) {
-            _Py_Dealloc(op);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsAtomicRC(op)) {
+        if (_Py_IsImmutableIndirectSCC(op)) {
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+        } else {
+            uint32_t old =  _Py_atomic_or_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            if (old == 1) {
+                _Py_Dealloc(op);
+            }
         }
         return;
     }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
     if (--op->ob_refcnt == 0) {
 #ifdef Py_TRACE_REFS
@@ -515,13 +564,22 @@ static inline void Py_DECREF_MORTAL(PyObject *op)
 {
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
-    // TODO(Immutable): Check this is okay, does it perform okay?
-    if (_Py_IsImmutable(op)) {
-        if (_Py_DecRef_Immutable(op)) {
-            _Py_Dealloc(op);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsAtomicRC(op)) {
+        // TODO(Immutable): Check this is okay, does it perform okay?
+        if (_Py_IsImmutableIndirectSCC(op)) {
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+        } else {
+            uint32_t old =  _Py_atomic_or_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            if (old == 1) {
+                _Py_Dealloc(op);
+            }
         }
         return;
     }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -532,13 +590,22 @@ static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruc
 {
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
-    // TODO(Immutable): Check this is okay, does it perform okay?
-    if (_Py_IsImmutable(op)) {
-        if (_Py_DecRef_Immutable(op)) {
-            destruct(op);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsAtomicRC(op)) {
+        // TODO(Immutable): Check this is okay, does it perform okay?
+        if (_Py_IsImmutableIndirectSCC(op)) {
+            if (_Py_DecRef_Immutable(op)) {
+                destruct(op);
+            }
+        } else {
+            uint32_t old =  _Py_atomic_or_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            if (old == 1) {
+                _Py_Dealloc(op);
+            }
         }
         return;
     }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
     if (--op->ob_refcnt == 0) {
         _PyReftracerTrack(op, PyRefTracer_DESTROY);
@@ -811,6 +878,17 @@ _Py_TryIncref(PyObject *op)
 #ifdef Py_GIL_DISABLED
     return _Py_TryIncrefFast(op) || _Py_TryIncRefShared(op);
 #else
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsAtomicRC(op)) {
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)1);
+        // We shouldn't revive the object:
+        if (old == 0) {
+            _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            return 0;
+        }
+        return 1;
+    }
+#endif
     assert(!_Py_IsImmutable(op) && "Use _Py_TryIncref_Immutable for immutable objects");
     if (Py_REFCNT(op) > 0) {
         Py_INCREF(op);
@@ -1093,11 +1171,18 @@ extern int _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict);
 #ifndef Py_GIL_DISABLED
 static inline Py_ALWAYS_INLINE void _Py_INCREF_MORTAL(PyObject *op)
 {
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     assert(!_Py_IsStaticImmortal(op));
-    if (_Py_IsImmutable(op)) {
-        _Py_RefcntAdd_Immutable(op, 1);
+    if (_Py_NeedsAtomicRC(op)) {
+        if (_Py_IsImmutableIndirectSCC(op)) {
+            _Py_RefcntAdd_Immutable(op, 1);
+        } else {
+            _Py_atomic_or_uint32(&op->ob_refcnt, (PY_UINT32_T)1);
+        }
+        
         return;
     }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
     op->ob_refcnt++;
     _Py_INCREF_STAT_INC();

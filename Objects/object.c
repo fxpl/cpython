@@ -3224,6 +3224,7 @@ _Py_Dealloc(PyObject *op)
 #ifdef Py_TRACE_REFS
     _Py_ForgetReference(op);
 #endif
+    _Py_RESET_IMMUTABLE(op);
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
     (*dealloc)(op);
 

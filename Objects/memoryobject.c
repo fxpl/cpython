@@ -100,7 +100,7 @@ _PyManagedBuffer_FromObject(PyObject *base, int flags)
         return NULL;
     }
 
-    if(_Py_IsImmutable(base)){
+    if(_Py_IsShallowImmutable(base)){
         if(_PyImmutability_Freeze(_PyObject_CAST(mbuf)) < 0){
             PyBuffer_Release(&mbuf->master);
             Py_DECREF(mbuf);
