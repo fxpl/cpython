@@ -48,32 +48,6 @@ increase over time until it reaches _Py_IMMORTAL_INITIAL_REFCNT.
 #define _Py_STATIC_FLAG_BITS ((Py_ssize_t)(_Py_STATICALLY_ALLOCATED_FLAG | _Py_IMMORTAL_FLAGS))
 #define _Py_STATIC_IMMORTAL_INITIAL_REFCNT (((Py_ssize_t)_Py_IMMORTAL_INITIAL_REFCNT) | (_Py_STATIC_FLAG_BITS << 48))
 
-/*
-  Immutability:
-    In 64bit builds, we use the ob_flags field to store the immutability status of the object.
-  Immutable SCC algorithm requires three states
-    1. Immutable:
-        a. Direct: The object is immutable and it has the reference count
-        b. Indirect: The object is immutable and is part of an SCC, and another
-        object in the SCC carries the reference count.
-    2. Immutable pending: The object is currently being processed by the freeze
-    algorithm.
- */
-#define _Py_IMMUTABLE_FLAG 8
-#define _Py_IMMUTABLE_SCC_FLAG 16
-#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
-#define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) refcnt
-
-#define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
-#define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
-#define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
-
-// Per-object freezable status stored in ob_flags (64-bit only).
-// Bit 5-6: 2-bit enum value (_Py_freezable_status)
-// Bit 7: set flag (1 = freezable status has been explicitly set)
-#define _Py_FREEZABLE_SET_FLAG  (1 << 7)
-#define _Py_FREEZABLE_STATUS_SHIFT 5
-#define _Py_FREEZABLE_STATUS_MASK (0x3 << _Py_FREEZABLE_STATUS_SHIFT)
 #else
 /*
 In 32 bit systems, an object will be treated as immortal if its reference
@@ -91,22 +65,42 @@ check by comparing the reference count field to the minimum immortality refcount
 #define _Py_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(1L << 28))
 #define _Py_STATIC_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(7L << 26))
 #define _Py_STATIC_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(6L << 26))
-/*
-Immutability:
+#endif
 
-Immutability is tracked in the top bit of the reference count. The immutability
-system also uses the second-to-top bit for managing immutable graphs.
-*/
-// TODO(Immutable): Will need more states for IMMUTABLE + SCC, this doesn't
-// currently cover the SCC states.
-#define _Py_IMMUTABLE_FLAG ((Py_ssize_t)1L << 29)
-#define _Py_IMMUTABLE_SCC_FLAG ((Py_ssize_t)1L << 30)
+/*
+  Immutability:
+    The immutability status of an object lives in ob_flags, which only has spare
+    bits on 64 bit builds. There is no 32 bit fallback.
+  Immutable SCC algorithm requires three states
+    1. Immutable:
+        a. Direct: The object is immutable and it has the reference count
+        b. Indirect: The object is immutable and is part of an SCC, and another
+        object in the SCC carries the reference count.
+    2. Immutable pending: The object is currently being processed by the freeze
+    algorithm.
+ */
+#if SIZEOF_VOID_P <= 4
+#  error "Immutability currently only works on 64bit platforms"
+#endif
+
+// ob_flags bits 4-9 are owned by the immutability system; see Include/object.h
+// for the flags upstream keeps in bits 0-3.
+#define _Py_IMMUTABLE_FLAG (1 << 4)
+#define _Py_IMMUTABLE_SCC_FLAG (1 << 5)
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
-#define _Py_IMMUTABLE_FLAG_CLEAR(refcnt) (refcnt & ~_Py_IMMUTABLE_MASK)
+
 #define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
 #define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
-#endif
+
+// Bits 6-7 hold a 2-bit _Py_freezable_status, bit 8 records whether it was ever
+// explicitly set.
+#define _Py_FREEZABLE_STATUS_SHIFT 6
+#define _Py_FREEZABLE_STATUS_MASK (0x3 << _Py_FREEZABLE_STATUS_SHIFT)
+#define _Py_FREEZABLE_SET_FLAG (1 << 8)
+
+// Set once the pre-freeze hook has run for an object.
+#define _Py_PREFREEZE_RAN_FLAG (1 << 9)
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
 // always 32-bits.
@@ -134,11 +128,7 @@ system also uses the second-to-top bit for managing immutable graphs.
 
 static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 {
-#if SIZEOF_VOID_P > 4
     return (op->ob_flags & _Py_IMMUTABLE_MASK) != 0;
-#else
-    return (op->ob_refcnt & _Py_IMMUTABLE_MASK) != 0;
-#endif
 }
 #define _Py_IsImmutable(op) _Py_IsImmutable(_PyObject_CAST(op))
 
@@ -150,11 +140,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
 
 static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
 {
-#if SIZEOF_VOID_P > 4
     op->ob_flags &= ~_Py_IMMUTABLE_MASK;
-#else
-    op->ob_refcnt &= ~_Py_IMMUTABLE_MASK;
-#endif
 }
 
 // Py_REFCNT() implementation for the stable ABI
@@ -166,7 +152,7 @@ PyAPI_FUNC(Py_ssize_t) Py_REFCNT(PyObject *ob);
 #else
     static inline Py_ssize_t _Py_REFCNT(PyObject *ob) {
     #if !defined(Py_GIL_DISABLED)
-        return _Py_IMMUTABLE_FLAG_CLEAR(ob->ob_refcnt);
+        return ob->ob_refcnt;
     #else
         uint32_t local = _Py_atomic_load_uint32_relaxed(&ob->ob_ref_local);
         if (local == _Py_IMMORTAL_REFCNT_LOCAL) {
@@ -191,7 +177,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmortal(PyObject *op)
 #elif SIZEOF_VOID_P > 4
     return _Py_CAST(PY_INT32_T, op->ob_refcnt) < 0;
 #else
-    return _Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) >= _Py_IMMORTAL_MINIMUM_REFCNT;
+    return op->ob_refcnt >= _Py_IMMORTAL_MINIMUM_REFCNT;
 #endif
 }
 #define _Py_IsImmortal(op) _Py_IsImmortal(_PyObject_CAST(op))
@@ -201,7 +187,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsStaticImmortal(PyObject *op)
 #if defined(Py_GIL_DISABLED) || SIZEOF_VOID_P > 4
     return (op->ob_flags & _Py_STATICALLY_ALLOCATED_FLAG) != 0;
 #else
-    return _Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) >= _Py_STATIC_IMMORTAL_MINIMUM_REFCNT;
+    return op->ob_refcnt >= _Py_STATIC_IMMORTAL_MINIMUM_REFCNT;
 #endif
 }
 #define _Py_IsStaticImmortal(op) _Py_IsStaticImmortal(_PyObject_CAST(op))
@@ -249,7 +235,7 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
         // place to allow the refcnt to be set to 1, and clear the immutable flag.
 
         // TODO(Immutable): This assert does not hold should it.
-        // assert(_Py_IMMUTABLE_FLAG_CLEAR(ob->ob_refcnt) == 0);
+        // assert(ob->ob_refcnt == 0);
 
         // TODO(Immutable): Do we need to clear the immutability state here?
         // TODO(Immutable): Is here even reachable?

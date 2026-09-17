@@ -2716,8 +2716,7 @@ _Py_SetImmortalUntracked(PyObject *op)
     op->ob_flags = _Py_IMMORTAL_FLAGS | (op->ob_flags & _Py_IMMUTABLE_MASK);
     op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;
 #else
-    // Preserve immutable flag
-    op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT | (op->ob_refcnt & _Py_IMMUTABLE_FLAG);
+    op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;
 #endif
 }
 

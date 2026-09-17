@@ -84,11 +84,7 @@
 #define TRACE_MERMAID_END()
 #endif
 
-#if SIZEOF_VOID_P > 4
 #define IMMUTABLE_FLAG_FIELD(op) (op->ob_flags)
-#else
-#define IMMUTABLE_FLAG_FIELD(op) (op->ob_refcnt)
-#endif
 
 // Macro that jumps to error, if the expression `x` does not succeed.
 #define SUCCEEDS(x) { do { int r = (x); if (r != 0) goto error; } while (0); }
@@ -302,7 +298,7 @@ static bool is_c_wrapper(PyObject* obj){
  * both builds, and we can optimize later.
  **/
 struct FreezeState {
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
     // Used to track traversal order
     PyObject *dfs;
     // Used to track SCC to handle cycles during traversal
@@ -310,7 +306,7 @@ struct FreezeState {
 #endif
     // Used to track visited nodes that don't have inline GC state.
     // This is required to be able to backtrack a failed freeze.
-    // It is also used to track nodes in GIL_DISABLED builds.
+    // It is also used to track nodes in Py_GIL_DISABLED builds.
     _Py_hashtable_t *visited;
 
     // The objects that freeze() was called directly on.
@@ -414,7 +410,7 @@ get_reachable_proc(PyTypeObject *tp)
     return traverse_via_tp_traverse;
 }
 
-#ifdef GIL_DISABLED
+#ifdef Py_GIL_DISABLED
 static inline void _Py_SetImmutable(PyObject *op)
 {
     if(op) {
@@ -464,7 +460,7 @@ static int init_freeze_state(struct FreezeState *state)
     state->traversing = false;
     state->freeze_location = NULL;
 #endif
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
     state->dfs = PyList_New(0);
     if (state->dfs == NULL) {
         goto error;
@@ -507,7 +503,7 @@ static void deallocate_FreezeState(struct FreezeState *state)
         state->roots = NULL;
     }
 
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
     // We can't call the destructor directly as we didn't newref the objects
     // on push.  This is a slow path if there are still objects in the stack,
     // so there is no need to optimize it.
@@ -530,7 +526,7 @@ static void deallocate_FreezeState(struct FreezeState *state)
 
 static void set_direct_rc(PyObject* obj)
 {
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
     IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_DIRECT;
 #else
     (void)obj;
@@ -539,7 +535,7 @@ static void set_direct_rc(PyObject* obj)
 
 static void set_indirect_rc(PyObject* obj)
 {
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
     IMMUTABLE_FLAG_FIELD(obj) = (IMMUTABLE_FLAG_FIELD(obj) & ~_Py_IMMUTABLE_MASK) | _Py_IMMUTABLE_INDIRECT;
 #else
     (void)obj;
@@ -548,7 +544,7 @@ static void set_indirect_rc(PyObject* obj)
 
 static bool has_direct_rc(PyObject* obj)
 {
-#ifdef GIL_DISABLED
+#ifdef Py_GIL_DISABLED
     return false;
 #else
     return (IMMUTABLE_FLAG_FIELD(obj) & _Py_IMMUTABLE_MASK) == _Py_IMMUTABLE_DIRECT;
@@ -558,7 +554,7 @@ static bool has_direct_rc(PyObject* obj)
 
 static int is_representative(PyObject* obj, struct FreezeState *state)
 {
-#ifdef GIL_DISABLED
+#ifdef Py_GIL_DISABLED
     void* result = _Py_hashtable_get(state->rep, obj);
     return ((uintptr_t)result & REPRESENTATIVE_FLAG) != 0;
 #else
@@ -719,14 +715,14 @@ union_scc(PyObject* a, PyObject* b, struct FreezeState *state)
 
 static int has_visited(struct FreezeState *state, PyObject* obj)
 {
-#ifdef GIL_DISABLED
+#ifdef Py_GIL_DISABLED
     return _Py_hashtable_get(state->visited, obj) != NULL;
 #else
     return _Py_IsImmutable(obj);
 #endif
 }
 
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
 static PyObject* scc_root(PyObject* obj)
 {
     assert(_Py_IsImmutable(obj));
@@ -1237,7 +1233,7 @@ static int add_visited(PyObject* obj, struct FreezeState *state)
     //     }
     // }
 #endif
-#ifdef GIL_DISABLED
+#ifdef Py_GIL_DISABLED
     // TODO(Immutable): Need to mark as immutable but not deeply immutable here.
 #else
     debug_obj("Adding visited  %s (%p)\n", obj);
@@ -1250,7 +1246,7 @@ static int add_visited(PyObject* obj, struct FreezeState *state)
     }
 #endif
     if (_Py_hashtable_set(state->visited, obj, obj) == -1) {
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
         // This clears the effects of set_direct_rc.
         _Py_CLEAR_IMMUTABLE(obj);
 #endif
@@ -1464,7 +1460,7 @@ static int clear_immutable_visitor(
     return 0;
 }
 
-#ifdef GIL_DISABLED
+#ifdef Py_GIL_DISABLED
 /*
   Function for use in _Py_hashtable_foreach.
   Marks the key as immutable/frozen.
@@ -1485,7 +1481,7 @@ static int mark_frozen(_Py_hashtable_t* tbl, const void* key, const void* value,
 */
 static void mark_all_frozen(struct FreezeState *state)
 {
-#ifdef GIL_DISABLED
+#ifdef Py_GIL_DISABLED
     _Py_hashtable_foreach(state->visited, mark_frozen, state);
 #endif
 }
@@ -1596,24 +1592,13 @@ int _PyImmutability_SetFreezable(PyObject *obj, _Py_freezable_status status)
         return -1;
     }
 
-    // If the object doesn't support attribute setting, fall back
-    // to ob_flags (64-bit only).
-#if SIZEOF_VOID_P > 4
-    // Store the freezable status in ob_flags bits 5-7.
+    // If the object doesn't support attribute setting, fall back to ob_flags.
     uint16_t flags = obj->ob_flags;
     flags &= ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
     flags |= _Py_FREEZABLE_SET_FLAG |
              ((status << _Py_FREEZABLE_STATUS_SHIFT) & _Py_FREEZABLE_STATUS_MASK);
     obj->ob_flags = flags;
     return 0;
-#else
-    // 32-bit builds do not have ob_flags for freezable status.
-    assert(0 && "set_freezable ob_flags fallback not supported on 32-bit");
-    PyErr_SetString(PyExc_TypeError,
-                    "Cannot set freezable status: object has no attribute "
-                    "support and ob_flags fallback is not available on 32-bit");
-    return -1;
-#endif
 }
 
 
@@ -1636,39 +1621,25 @@ int _PyImmutability_UnsetFreezable(PyObject *obj)
         return -1;
     }
 
-    // The object doesn't support attributes; need ob_flags to clear.
-#if SIZEOF_VOID_P <= 4
-    // 32-bit builds do not have ob_flags for freezable status.
-    assert(0 && "unset_freezable ob_flags fallback not supported on 32-bit");
-    PyErr_SetString(PyExc_TypeError,
-                    "Cannot unset freezable status: object has no attribute "
-                    "support and ob_flags fallback is not available on 32-bit");
-    return -1;
-#endif
-
 clear_flags:
-#if SIZEOF_VOID_P > 4
     {
         uint16_t flags = obj->ob_flags;
         flags &= ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
         obj->ob_flags = flags;
     }
-#endif
     return 0;
 }
 
 
-// Read the freezable status from ob_flags (64-bit only).
+// Read the freezable status from ob_flags.
 // Returns the status if set, or -1 if not set.
 static inline int
 _get_freezable_from_flags(PyObject *obj)
 {
-#if SIZEOF_VOID_P > 4
     uint16_t flags = obj->ob_flags;
     if (flags & _Py_FREEZABLE_SET_FLAG) {
         return (flags & _Py_FREEZABLE_STATUS_MASK) >> _Py_FREEZABLE_STATUS_SHIFT;
     }
-#endif
     return -1;
 }
 
@@ -1931,26 +1902,18 @@ int _Py_DecRef_Immutable(PyObject *op)
     // Find SCC if required.
     op = scc_root(op);
 
-#if SIZEOF_VOID_P > 4
-
     uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
-#else
-    // TODO(Immutable 32): Find SCC if required.
-
-    Py_ssize_t old = _Py_atomic_add_ssize(&op->ob_refcnt, -1);
-    old = _Py_IMMUTABLE_FLAG_CLEAR(old);
-#endif
     assert(old > 0);
 
     if (old != 1) {
-        assert(_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) != 0);
+        assert(op->ob_refcnt != 0);
         // Context does not to dealloc this object.
         return false;
     }
 
     debug("DecRef reached zero for immutable %p of type %s\n",  op, op->ob_type->tp_name);
 
-    assert(_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) == 0);
+    assert(op->ob_refcnt == 0);
 
     // First, we only clear weakrefs with callbacks.
     // Callbackless weakrefs are cleared after finalizers have run.
@@ -2005,11 +1968,7 @@ void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 
     // Increment the reference count of an immutable object.
     assert(_Py_IsImmutable(op));
-#if SIZEOF_VOID_P > 4
     _Py_atomic_add_uint32(&op->ob_refcnt, increment);
-#else
-    _Py_atomic_add_ssize(&op->ob_refcnt, increment);
-#endif
 }
 
 /* Tries to incref op and returns 1 if successful or 0 otherwise.
@@ -2022,21 +1981,12 @@ int _Py_TryIncref_Immutable(PyObject *op)
     op = scc_root(op);
     assert(_Py_IsImmutable(op));
 
-#if SIZEOF_VOID_P > 4
     uint32_t old = _Py_atomic_load_uint32_relaxed(&op->ob_refcnt);
     while (old > 0) {
         if (_Py_atomic_compare_exchange_uint32(&op->ob_refcnt, &old, old + 1)) {
             return 1;
         }
     }
-#else
-    Py_ssize_t old = _Py_atomic_load_ssize_relaxed(&op->ob_refcnt);
-    while (_Py_IMMUTABLE_FLAG_CLEAR(old) != 0) {
-        if (_Py_atomic_compare_exchange_ssize(&op->ob_refcnt, &old, old + 1)) {
-            return 1;
-        }
-    }
-#endif
     return 0;
 }
 
@@ -2047,11 +1997,7 @@ int _Py_IsDead_Immutable(PyObject *op)
     op = scc_root(op);
     assert(_Py_IsImmutable(op));
 
-#if SIZEOF_VOID_P > 4
     return _Py_atomic_load_uint32_relaxed(&op->ob_refcnt) == 0;
-#else
-    return _Py_IMMUTABLE_FLAG_CLEAR(_Py_atomic_load_ssize_relaxed(&op->ob_refcnt)) == 0;
-#endif
 }
 
 static void make_weakrefs_safe_scc(PyObject* scc)
@@ -2135,7 +2081,7 @@ undo_add_visited(struct FreezeState *state)
         return;
     }
     state->error_visited_item = NULL;
-#ifndef GIL_DISABLED
+#ifndef Py_GIL_DISABLED
     if (_PyObject_IS_GC(item)) {
         assert(scc_is_pending(item));
         if (peek(state->pending) == item) {
@@ -2262,13 +2208,9 @@ static int check_pre_freeze_hook(struct _Py_immutability_state *imm_state, PyObj
     }
 
     // Check if the pre-freeze hook already ran for this object
-#if SIZEOF_VOID_P > 4
     if ((obj->ob_flags & _Py_PREFREEZE_RAN_FLAG) != 0) {
         return 0;
     }
-#else
-#error "Immutability currently only works on 64bit platforms"
-#endif
 
     // Mark pre-freeze hook as completed. This has to be set before calling
     // the pre-freeze hook in case the pre-freeze hook reenters to prevent

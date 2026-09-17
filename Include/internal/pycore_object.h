@@ -214,8 +214,6 @@ static inline void _Py_SetMortal(PyObject *op, short refcnt)
         op->ob_ref_local = 0;
         op->ob_ref_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED);
 #else
-        // TODO(Immutable): Need to clear flag in other cases?
-        // note this also clears the _Py_IMMUTABLE_FLAG, if set in 32bit
         op->ob_refcnt = refcnt;
 #if SIZEOF_VOID_P > 4
         op->ob_flags &= ~_Py_IMMORTAL_FLAGS;
@@ -258,7 +256,7 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
     _Py_DEC_REFTOTAL(PyInterpreterState_Get());
 #endif
     op->ob_refcnt -= 1;
-    if (_Py_IMMUTABLE_FLAG_CLEAR(op->ob_refcnt) != 0) {
+    if (op->ob_refcnt != 0) {
         assert(op->ob_refcnt > 0);
     }
     else {

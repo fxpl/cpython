@@ -642,7 +642,8 @@ given type object has a specified feature.
 #if defined(Py_GIL_DISABLED) && defined(Py_DEBUG)
 #define _Py_TYPE_REVEALED_FLAG (1 << 3)
 #endif
-#define _Py_PREFREEZE_RAN_FLAG (1 << 8)
+/* Bits 4-9 are reserved for the immutability system, see Include/refcount.h.
+   New flags here must use bit 10 or above. */
 
 #define Py_CONSTANT_NONE 0
 #define Py_CONSTANT_FALSE 1
