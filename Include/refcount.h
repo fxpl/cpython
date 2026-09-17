@@ -152,16 +152,40 @@ Sub-Interpreter/GIL-enabled Specific flags:
               (((refcnt) << _Py_REF_SHARED_SHIFT) + (flags))
 #endif  // Py_GIL_DISABLED
 
-static inline Py_ALWAYS_INLINE int _Py_IsImmutable(PyObject *op)
+static inline Py_ALWAYS_INLINE int _Py_IsShallowImmutable(PyObject *op)
 {
     return (op->ob_flags & _Py_IMMUTABLE_MASK) != 0;
 }
-#define _Py_IsImmutable(op) _Py_IsImmutable(_PyObject_CAST(op))
+#define _Py_IsImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
+#define _Py_IsShallowImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+static inline Py_ALWAYS_INLINE int _Py_NeedsAtomicRC(PyObject *op)
+{
+    return (op->ob_flags & _Py_ATOMIC_RC_FLAG) != 0;
+}
+#define _Py_NeedsAtomicRC(op) _Py_NeedsAtomicRC(_PyObject_CAST(op))
+
+static inline Py_ALWAYS_INLINE int _Py_IsImmutableIndirectSCC(PyObject *op)
+{
+    return (op->ob_flags & _Py_IMMUTABLE_SCC_FLAG) != 0;
+}
+#define _Py_IsImmutableIndirectSCC(op) _Py_IsImmutableIndirectSCC(_PyObject_CAST(op))
+
+static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
+{
+    return (op->ob_flags & (_Py_IMMORTAL_FLAGS | _Py_IMMUTABLE_SCC_FLAG | _Py_ATOMIC_RC_FLAG)) != 0;
+}
+#define _Py_NeedsSlowRcBranch(op) _Py_NeedsSlowRcBranch(_PyObject_CAST(op))
+
+#else
+
+#endif
 
 // Artifact[Implementation]: The definition of the `Py_CHECKWRITE` macro
 // Check whether an object is writeable.
 // This check will always succeed during runtime finalization.
-#define Py_CHECKWRITE(op) ((op) && (!_Py_IsImmutable(op) || _PyImmModule_Check(op) || Py_IsFinalizing()))
+#define Py_CHECKWRITE(op) ((op) && (!_Py_IsShallowImmutable(op) || _PyImmModule_Check(op) || Py_IsFinalizing()))
 #define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
 
 static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
@@ -223,7 +247,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmortalOrImmutable(PyObject *op)
 {
 #if defined(Py_GIL_DISABLED)
     // TODO(Immutable): Is there a more efficient way to check this?
-    return (_Py_IsImmortal(op) || _Py_IsImmutable(op));
+    return (_Py_IsImmortal(op) || _Py_IsShallowImmutable(op));
 #elif SIZEOF_VOID_P > 4
     return op->ob_refcnt_full >= (Py_ssize_t)_Py_IMMORTAL_MINIMUM_REFCNT;
 #else
@@ -393,22 +417,25 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 #elif SIZEOF_VOID_P > 4
     // Using ob_refcnt_full allows us to check if a flag has been set for immutable too.
     Py_ssize_t cur_refcnt = op->ob_refcnt_full;
-    if (cur_refcnt >= (Py_ssize_t)_Py_IMMORTAL_INITIAL_REFCNT) {
-        // the object is immortal or immutable
+    if (_Py_NeedsSlowRcBranch(op)) {
+        // the object is immortal
         if (_Py_IsImmortal(op))
         {
             _Py_INCREF_IMMORTAL_STAT_INC();
             return;
         }
 #ifndef Py_LIMITED_API
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
         // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
-        if (_Py_IsImmutable(op)) {
-            // Object is immutable.
-            // Slight chance of overflow, and an issue here, so check, and
-            // fall back to original core if it wasn't immutable after all.
-            _Py_RefcntAdd_Immutable(op, 1);
+        if (_Py_NeedsAtomicRC(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
+                _Py_RefcntAdd_Immutable(op, 1);
+            } else {
+                _Py_atomic_add_uint32(&op->ob_refcnt, 1);
+            }
             return;
         }
+#endif
 #else
         // Immutable object in limited API: delegate to runtime function
         Py_IncRef(op);
@@ -417,24 +444,9 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
     }
     op->ob_refcnt = (uint32_t)cur_refcnt + 1;
 #else
-    if (_Py_IsImmortalOrImmutable(op)) {
-        if (_Py_IsImmortal(op)) {
-            _Py_INCREF_IMMORTAL_STAT_INC();
-            return;
-        }
-#ifndef Py_LIMITED_API
-        if (_Py_IsImmutable(op)) {
-            // Object is immutable.
-            // Slight chance of overflow, and an issue here, so check, and
-            // fall back to original core if it wasn't immutable after all.
-            _Py_RefcntAdd_Immutable(op, 1);
-            return;
-        }
-#else
-        // Immutable object in limited API: delegate to runtime function
-        Py_IncRef(op);
+    if (_Py_IsImmortal(op)) {
+        _Py_INCREF_IMMORTAL_STAT_INC();
         return;
-#endif
     }
     op->ob_refcnt++;
 #endif
