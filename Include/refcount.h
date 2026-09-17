@@ -68,16 +68,35 @@ check by comparing the reference count field to the minimum immortality refcount
 #endif
 
 /*
-  Immutability:
+Immutability:
     The immutability status of an object lives in ob_flags, which only has spare
     bits on 64 bit builds. There is no 32 bit fallback.
-  Immutable SCC algorithm requires three states
-    1. Immutable:
-        a. Direct: The object is immutable and it has the reference count
-        b. Indirect: The object is immutable and is part of an SCC, and another
-        object in the SCC carries the reference count.
-    2. Immutable pending: The object is currently being processed by the freeze
-    algorithm.
+Immutability Flags:
+    1. Mutability:
+       - 0: The object is mutable
+       - 1: The object is immutable
+    2. Depth:
+       - 0: The object is shallow immutable, but it could be deeply immutable
+       - 1: The object is deeply immutable
+Immutability Convenience Flags:
+    These are flags that we store in the object for convenience, but they could
+    be stored somewhere else to regain these bits.
+    3 & 4: The freezability of this specific object.
+        - See _Py_freezable_status for values
+    5: Has the freezability been explicitly set
+        - 0: Not explicitly set
+        - 1: Explicitly set
+    6: Pre-Freeze Hook
+        - 0: The pre-freeze hook did not run yet
+        - 1: The pre-freeze hook did run
+Sub-Interpreter/GIL-enabled Specific flags:
+    7. SCC
+        - 0 -> Direct: The object is immutable and it has the reference count
+        - 1 -> Indirect: The object is immutable and is part of an SCC, and another
+            object in the SCC carries the reference count.
+    8. Atomic RC:
+        - 0: The object is normally reference counted
+        - 1: The object uses atomic reference counting (Or maybe SCC reference counting)
  */
 #if SIZEOF_VOID_P <= 4
 #  error "Immutability currently only works on 64bit platforms"
@@ -85,22 +104,29 @@ check by comparing the reference count field to the minimum immortality refcount
 
 // ob_flags bits 4-9 are owned by the immutability system; see Include/object.h
 // for the flags upstream keeps in bits 0-3.
-#define _Py_IMMUTABLE_FLAG (1 << 4)
-#define _Py_IMMUTABLE_SCC_FLAG (1 << 5)
-#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
+#define _Py_IMM_FLAGS_SHIFT(x) (x + 3)
+// Immutability Flags:
+#define _Py_IMMUTABLE_FLAG (1 << _Py_IMM_FLAGS_SHIFT(1))
+#define _Py_IMMUTABLE_DEPTH_FLAG (1 << _Py_IMM_FLAGS_SHIFT(2))
 
+// Immutability Convenience Flags:
+#define _Py_FREEZABLE_STATUS_SHIFT _Py_IMM_FLAGS_SHIFT(3)
+#define _Py_FREEZABLE_STATUS_MASK (0x3 << _Py_FREEZABLE_STATUS_SHIFT)
+#define _Py_FREEZABLE_SET_FLAG (1 << _Py_IMM_FLAGS_SHIFT(5))
+#define _Py_PREFREEZE_RAN_FLAG (1 << _Py_IMM_FLAGS_SHIFT(6))
+
+// Sub-Interpreter/GIL-enabled Specific flags:
+#ifndef Py_GIL_DISABLED
+#define _Py_PYRONA_INTERPRETER_SHARING
+#define _Py_IMMUTABLE_SCC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(7))
+#define _Py_ATOMIC_RC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(8))
+#endif
+
+// FIXME(immutability): These should probably be removed.
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
 #define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_INDIRECT _Py_IMMUTABLE_MASK
 #define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
-
-// Bits 6-7 hold a 2-bit _Py_freezable_status, bit 8 records whether it was ever
-// explicitly set.
-#define _Py_FREEZABLE_STATUS_SHIFT 6
-#define _Py_FREEZABLE_STATUS_MASK (0x3 << _Py_FREEZABLE_STATUS_SHIFT)
-#define _Py_FREEZABLE_SET_FLAG (1 << 8)
-
-// Set once the pre-freeze hook has run for an object.
-#define _Py_PREFREEZE_RAN_FLAG (1 << 9)
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
 // always 32-bits.

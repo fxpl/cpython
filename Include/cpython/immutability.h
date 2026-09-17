@@ -2,6 +2,12 @@
 #  error "this header file must not be included directly"
 #endif
 
+static inline Py_ALWAYS_INLINE int _Py_IsDeepImmutable(PyObject *op)
+{
+    return (op->ob_flags & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
+}
+#define _Py_IsDeepImmutable(op) _Py_IsDeepImmutable(_PyObject_CAST(op))
+
 typedef enum {
     _Py_FREEZABLE_YES = 0,
     _Py_FREEZABLE_NO = 1,
