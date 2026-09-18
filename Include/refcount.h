@@ -120,20 +120,27 @@ Sub-Interpreter/GIL-enabled Specific flags:
 #define _Py_PYRONA_INTERPRETER_SHARING
 #define _Py_IMMUTABLE_SCC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(7))
 #define _Py_ATOMIC_RC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(8))
-#define _Py_IMMUTABLE_MASK ( \
-    _Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_DEPTH_FLAG \
-    | _Py_FREEZABLE_STATUS_MASK | _Py_FREEZABLE_SET_FLAG \
-    | _Py_PREFREEZE_RAN_FLAG | _Py_IMMUTABLE_SCC_FLAG \
-    | _Py_ATOMIC_RC_FLAG)
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
+// The immutability state proper. Cleared whenever an object stops being
+// immutable, including when a partial freeze is rolled back.
+#define _Py_IMMUTABLE_CLEAR_MASK \
+    (_Py_IMMUTABLE_MASK | _Py_IMMUTABLE_DEPTH_FLAG | _Py_ATOMIC_RC_FLAG)
+// Additionally drops the per-object freeze bookkeeping. Only valid once the
+// object is dead; a rollback has to keep those bits, or the pre-freeze hook
+// runs a second time on the next freeze attempt.
+#define _Py_IMMUTABLE_RESET_MASK ( \
+    _Py_IMMUTABLE_CLEAR_MASK | _Py_FREEZABLE_STATUS_MASK \
+    | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
 #define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_INDIRECT (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
 #define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
 #else
 // FIXME(immutability): These should probably be removed.
-#define _Py_IMMUTABLE_MASK ( \
-    _Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_DEPTH_FLAG \
-    | _Py_FREEZABLE_STATUS_MASK | _Py_FREEZABLE_SET_FLAG \
-    | _Py_PREFREEZE_RAN_FLAG)
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_CLEAR_MASK (_Py_IMMUTABLE_MASK | _Py_IMMUTABLE_DEPTH_FLAG)
+#define _Py_IMMUTABLE_RESET_MASK ( \
+    _Py_IMMUTABLE_CLEAR_MASK | _Py_FREEZABLE_STATUS_MASK \
+    | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
 #endif
 
 
@@ -163,7 +170,7 @@ Sub-Interpreter/GIL-enabled Specific flags:
 
 static inline Py_ALWAYS_INLINE int _Py_IsShallowImmutable(PyObject *op)
 {
-    return (op->ob_flags & _Py_IMMUTABLE_FLAG) != 0;
+    return (op->ob_flags & _Py_IMMUTABLE_MASK) != 0;
 }
 #define _Py_IsImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
 #define _Py_IsShallowImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
@@ -172,7 +179,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsShallowImmutable(PyObject *op)
 static inline Py_ALWAYS_INLINE int _Py_NeedsAtomicRC(PyObject *op)
 {
     // TODO(xFrednet): _Py_IMMUTABLE_FLAG should be removed from this
-    return (op->ob_flags & (_Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_FLAG)) != 0;
+    return (op->ob_flags & (_Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_MASK)) != 0;
 }
 #define _Py_NeedsAtomicRC(op) _Py_NeedsAtomicRC(_PyObject_CAST(op))
 
@@ -209,7 +216,14 @@ static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
 
 static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
 {
-    op->ob_flags &= ~_Py_IMMUTABLE_MASK;
+    op->ob_flags &= ~_Py_IMMUTABLE_CLEAR_MASK;
+}
+
+// Only for objects that are being deallocated: also drops the freeze
+// bookkeeping so a recycled allocation starts from a clean slate.
+static inline Py_ALWAYS_INLINE void _Py_RESET_IMMUTABLE(PyObject *op)
+{
+    op->ob_flags &= ~_Py_IMMUTABLE_RESET_MASK;
 }
 
 // Py_REFCNT() implementation for the stable ABI

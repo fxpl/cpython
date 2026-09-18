@@ -88,8 +88,13 @@ _weakref_getweakrefs(PyObject *module, PyObject *object)
     PyWeakReference *current = *GET_WEAKREFS_LISTPTR(object);
     while (current != NULL) {
         PyObject *curobj = (PyObject *) current;
-        int incref_res = _Py_IsImmutable(curobj) ?
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        // FIXME(immutability): We need to support atomic RC...
+        int incref_res = _Py_IsShallowImmutable(curobj) ?
             _Py_TryIncref_Immutable(curobj) : _Py_TryIncref(curobj);
+#else
+        int incref_res = _Py_TryIncref(curobj);
+#endif // _Py_PYRONA_INTERPRETER_SHARING
         if (incref_res) {
             if (PyList_Append(result, curobj)) {
                 UNLOCK_WEAKREFS(object);

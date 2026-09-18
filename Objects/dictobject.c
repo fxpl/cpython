@@ -6965,7 +6965,7 @@ _PyObject_MaterializeManagedDict_LockHeld(PyObject *obj)
     else {
         dict = (PyDictObject *)PyDict_New();
     }
-    if (_Py_IsImmutable(obj)) {
+    if (_Py_IsShallowImmutable(obj)) {
         // TODO(Immutable): For subinterpreters this will probably also need a lock!
         _PyImmutability_Freeze(_PyObject_CAST(dict));
     }
@@ -7681,7 +7681,7 @@ ensure_nonmanaged_dict(PyObject *obj, PyObject **dictptr)
         else {
             dict = PyDict_New();
         }
-        if (_Py_IsImmutable(obj)) {
+        if (_Py_IsShallowImmutable(obj)) {
             // TODO(Immutable): For subinterpreters this will probably also need a lock!
             _PyImmutability_Freeze(dict);
         }
