@@ -133,13 +133,19 @@ extern PyAPI_FUNC(void) _Py_DecRefTotal(PyThreadState *);
 // Increment reference count by n
 static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
 {
-    if (_Py_IsImmortal(op)) {
-        _Py_INCREF_IMMORTAL_STAT_INC();
-        return;
-    }
-    if (_Py_IsImmutable(op)) {
-        _Py_RefcntAdd_Immutable(op, n);
-        return;
+    if (_Py_NeedsSlowRcBranch(op)) {
+        if (_Py_IsImmortal(op)) {
+            _Py_INCREF_IMMORTAL_STAT_INC();
+            return;
+        }
+        if (_Py_NeedsAtomicRC(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
+                _Py_RefcntAdd_Immutable(op, n);
+            } else {
+                _Py_atomic_add_uint32(&op->ob_refcnt, (uint32_t)n);
+            }
+            return;
+        }
     }
 #ifndef Py_GIL_DISABLED
     Py_ssize_t refcnt = _Py_REFCNT(op);
@@ -247,7 +253,7 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
         }
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
         if (_Py_NeedsAtomicRC(op)) {
-            if (_Py_IsShallowImmutable(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
                 if (_Py_DecRef_Immutable(op)) {
                     _Py_CLEAR_IMMUTABLE(op);
                     destruct(op);
@@ -294,7 +300,7 @@ _Py_DECREF_NO_DEALLOC(PyObject *op)
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
         if (_Py_NeedsAtomicRC(op)) {
-            if (_Py_IsShallowImmutable(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
                 _Py_DecRef_Immutable(op);
             } else {
                 _Py_atomic_add_uint32(&op->ob_refcnt, -1);

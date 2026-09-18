@@ -178,8 +178,8 @@ static inline Py_ALWAYS_INLINE int _Py_NeedsAtomicRC(PyObject *op)
 
 static inline Py_ALWAYS_INLINE int _Py_IsImmutableIndirectSCC(PyObject *op)
 {
-    // TODO(immutability): Set SCC flag for root, to make the branch
-    return (op->ob_flags & _Py_IMMUTABLE_SCC_FLAG) != 0;
+    // TODO(immutability): Set SCC flag for root, then "_Py_IMMUTABLE_FLAG" can be removed from this check
+    return (op->ob_flags & (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)) != 0;
 }
 #define _Py_IsImmutableIndirectSCC(op) _Py_IsImmutableIndirectSCC(_PyObject_CAST(op))
 
@@ -448,7 +448,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
         // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
         if (_Py_NeedsAtomicRC(op)) {
-            if (_Py_IsShallowImmutable(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
                 _Py_RefcntAdd_Immutable(op, 1);
             } else {
                 _Py_atomic_add_uint32(&op->ob_refcnt, 1);
@@ -582,7 +582,7 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
         if (_Py_NeedsAtomicRC(op))
         {
             // Deallocating the SCC root also needs special handling.
-            if (_Py_IsShallowImmutable(op)) {
+            if (_Py_IsImmutableIndirectSCC(op)) {
                 if (_Py_DecRef_Immutable(op)) {
                     _Py_Dealloc(op);
                 }
@@ -623,7 +623,7 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
         // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_DECREF
         if (_Py_NeedsAtomicRC(op)) {
             // Deallocating the SCC root also needs special handling.
-            if (_Py_IsShallowImmutable(op))
+            if (_Py_IsImmutableIndirectSCC(op))
             {
                 if (_Py_DecRef_Immutable(op)) {
                     _Py_Dealloc(op);
