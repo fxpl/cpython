@@ -240,16 +240,30 @@ static inline void _Py_ClearImmortal(PyObject *op)
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
-    if (_Py_IsImmortalOrImmutable(op)) {
+    if (_Py_NeedsSlowRcBranch(op)) {
         if (_Py_IsImmortal(op)) {
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        assert(_Py_IsImmutable(op));
-        if (_Py_DecRef_Immutable(op)) {
-            destruct(op);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        if (_Py_NeedsAtomicRC(op)) {
+            if (_Py_IsShallowImmutable(op)) {
+                if (_Py_DecRef_Immutable(op)) {
+                    _Py_CLEAR_IMMUTABLE(op);
+                    destruct(op);
+                }
+            } else {
+                // A previous value of 1 means the new value is now 0
+                uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+                assert(old > 0);
+                if (old == 1) {
+                    _Py_CLEAR_IMMUTABLE(op);
+                    destruct(op);
+                }
+            }
+            return;
         }
-        return;
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
@@ -263,6 +277,7 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 #ifdef Py_TRACE_REFS
         _Py_ForgetReference(op);
 #endif
+        _Py_CLEAR_IMMUTABLE(op);
         _PyReftracerTrack(op, PyRefTracer_DESTROY);
         destruct(op);
     }
@@ -271,13 +286,22 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 static inline void
 _Py_DECREF_NO_DEALLOC(PyObject *op)
 {
-    if (_Py_IsImmortalOrImmutable(op)) {
+    if (_Py_NeedsSlowRcBranch(op)) {
         if (_Py_IsImmortal(op)) {
             _Py_DECREF_IMMORTAL_STAT_INC();
             return;
         }
-        _Py_DecRef_Immutable(op);
-        return;
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        if (_Py_NeedsAtomicRC(op)) {
+            if (_Py_IsShallowImmutable(op)) {
+                _Py_DecRef_Immutable(op);
+            } else {
+                _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+            }
+            return;
+        }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
