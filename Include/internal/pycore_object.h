@@ -878,6 +878,17 @@ _Py_TryIncref(PyObject *op)
 #ifdef Py_GIL_DISABLED
     return _Py_TryIncrefFast(op) || _Py_TryIncRefShared(op);
 #else
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsAtomicRC(op)) {
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)1);
+        // We shouldn't revive the object:
+        if (old == 0) {
+            _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            return 0;
+        }
+        return 1;
+    }
+#endif
     assert(!_Py_IsImmutable(op) && "Use _Py_TryIncref_Immutable for immutable objects");
     if (Py_REFCNT(op) > 0) {
         Py_INCREF(op);

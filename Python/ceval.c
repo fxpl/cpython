@@ -79,7 +79,7 @@
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 #define _Py_DECREF_PYRONA(arg, dealloc) \
     if (_Py_NeedsAtomicRC(arg)) { \
-        if (_Py_IsImmutable(arg)) { \
+        if (_Py_IsImmutableIndirectSCC(arg)) { \
             if (_Py_DecRef_Immutable(arg)) { \
                 _Py_CLEAR_IMMUTABLE(arg); \
                 _PyReftracerTrack(arg, PyRefTracer_DESTROY); \

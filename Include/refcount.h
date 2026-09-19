@@ -175,6 +175,12 @@ static inline Py_ALWAYS_INLINE int _Py_IsShallowImmutable(PyObject *op)
 #define _Py_IsImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
 #define _Py_IsShallowImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
 
+static inline Py_ALWAYS_INLINE int _Py_IsDeepImmutable(PyObject *op)
+{
+    return (op->ob_flags & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
+}
+#define _Py_IsDeepImmutable(op) _Py_IsDeepImmutable(_PyObject_CAST(op))
+
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 static inline Py_ALWAYS_INLINE int _Py_NeedsAtomicRC(PyObject *op)
 {

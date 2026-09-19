@@ -3349,7 +3349,7 @@ PyCData_FromBaseObj(ctypes_state *st,
         cmem->b_index = index;
     }
 
-    if(base && _Py_IsImmutable(base)) {
+    if(base && _Py_IsShallowImmutable(base)) {
         if(_PyImmutability_Freeze(_PyObject_CAST(cmem)) < 0){
             Py_DECREF(cmem);
             return NULL;
