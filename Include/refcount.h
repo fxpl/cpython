@@ -118,6 +118,9 @@ Sub-Interpreter/GIL-enabled Specific flags:
 // Sub-Interpreter/GIL-enabled Specific flags:
 #ifndef Py_GIL_DISABLED
 #define _Py_PYRONA_INTERPRETER_SHARING
+#endif
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 #define _Py_IMMUTABLE_SCC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(7))
 #define _Py_ATOMIC_RC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(8))
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
@@ -134,14 +137,18 @@ Sub-Interpreter/GIL-enabled Specific flags:
 #define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_INDIRECT (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
 #define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
-#else
+
+PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
+PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
+
+#else // _Py_PYRONA_INTERPRETER_SHARING
 // FIXME(immutability): These should probably be removed.
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_CLEAR_MASK (_Py_IMMUTABLE_MASK | _Py_IMMUTABLE_DEPTH_FLAG)
 #define _Py_IMMUTABLE_RESET_MASK ( \
     _Py_IMMUTABLE_CLEAR_MASK | _Py_FREEZABLE_STATUS_MASK \
     | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
-#endif
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
@@ -172,7 +179,6 @@ static inline Py_ALWAYS_INLINE int _Py_IsShallowImmutable(PyObject *op)
 {
     return (op->ob_flags & _Py_IMMUTABLE_MASK) != 0;
 }
-#define _Py_IsImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
 #define _Py_IsShallowImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
 
 static inline Py_ALWAYS_INLINE int _Py_IsDeepImmutable(PyObject *op)
@@ -184,22 +190,20 @@ static inline Py_ALWAYS_INLINE int _Py_IsDeepImmutable(PyObject *op)
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 static inline Py_ALWAYS_INLINE int _Py_NeedsAtomicRC(PyObject *op)
 {
-    // TODO(xFrednet): _Py_IMMUTABLE_FLAG should be removed from this
-    return (op->ob_flags & (_Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_MASK)) != 0;
+    return (op->ob_flags & (_Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
 }
 #define _Py_NeedsAtomicRC(op) _Py_NeedsAtomicRC(_PyObject_CAST(op))
 
-static inline Py_ALWAYS_INLINE int _Py_IsImmutableIndirectSCC(PyObject *op)
+static inline Py_ALWAYS_INLINE int _Py_NeedsImmutableRC(PyObject *op)
 {
-    // TODO(immutability): Set SCC flag for root, then "_Py_IMMUTABLE_FLAG" can be removed from this check
-    return (op->ob_flags & (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)) != 0;
+    return (op->ob_flags & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
 }
-#define _Py_IsImmutableIndirectSCC(op) _Py_IsImmutableIndirectSCC(_PyObject_CAST(op))
+#define _Py_NeedsImmutableRC(op) _Py_NeedsImmutableRC(_PyObject_CAST(op))
 
 static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
 {
     // TODO(xFrednet): _Py_IMMUTABLE_MASK should be removed from this
-    return (op->ob_flags & (_Py_IMMORTAL_FLAGS | _Py_IMMUTABLE_SCC_FLAG | _Py_IMMUTABLE_MASK | _Py_ATOMIC_RC_FLAG)) != 0;
+    return (op->ob_flags & (_Py_IMMORTAL_FLAGS | _Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
 }
 #define _Py_NeedsSlowRcBranch(op) _Py_NeedsSlowRcBranch(_PyObject_CAST(op))
 
@@ -305,7 +309,6 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
         if (_Py_NeedsAtomicRC(ob)) {
             // TODO This assertion is not valid as refcount overflows can trigger the
             // PyImmortalOrImmutable check to fire.
-            // assert(_Py_IsImmutable(ob));
     
             // TODO(Immutable): It is dangerous to set the reference count of an
             // immutable object. The majority of calls appear to be where the rc
@@ -320,7 +323,7 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     
             // TODO(Immutable): Care should be taken to make the whole SCC mutable
             // again if needed.
-            assert(!_Py_IsImmutableIndirectSCC(ob));
+            assert(!_Py_NeedsImmutableRC(ob));
 
 #ifndef Py_LIMITED_API
             _Py_atomic_store_uint32_relaxed(&ob->ob_refcnt, (PY_UINT32_T)refcnt);
@@ -419,12 +422,6 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
-#ifndef Py_LIMITED_API
-// Implements special logic for immutable objects.
-PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
-PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
-#endif
-
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
 #if defined(Py_LIMITED_API) && (Py_LIMITED_API+0 >= 0x030c0000 || defined(Py_REF_DEBUG))
@@ -468,7 +465,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
         // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
         if (_Py_NeedsAtomicRC(op)) {
-            if (_Py_IsImmutableIndirectSCC(op)) {
+            if (_Py_NeedsImmutableRC(op)) {
                 _Py_RefcntAdd_Immutable(op, 1);
             } else {
                 _Py_atomic_add_uint32(&op->ob_refcnt, 1);
@@ -602,7 +599,7 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
         if (_Py_NeedsAtomicRC(op))
         {
             // Deallocating the SCC root also needs special handling.
-            if (_Py_IsImmutableIndirectSCC(op)) {
+            if (_Py_NeedsImmutableRC(op)) {
                 if (_Py_DecRef_Immutable(op)) {
                     _Py_Dealloc(op);
                 }
@@ -643,7 +640,7 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
         // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_DECREF
         if (_Py_NeedsAtomicRC(op)) {
             // Deallocating the SCC root also needs special handling.
-            if (_Py_IsImmutableIndirectSCC(op))
+            if (_Py_NeedsImmutableRC(op))
             {
                 if (_Py_DecRef_Immutable(op)) {
                     _Py_Dealloc(op);

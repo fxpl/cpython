@@ -22,11 +22,6 @@ FREEZABLE_PROXY = _c.FREEZABLE_PROXY
 InterpreterLocal = _c.InterpreterLocal
 SharedField = _c.SharedField
 
-# FIXME(immutable): For the longest time we used the name `isfrozen`
-# without the underscore. This keeps the function name for now, but
-# aliases it to `is_frozen`
-isfrozen = is_frozen
-
 
 # Artifact[Benchmarking]: The implementation of immutability related decorators
 def freezable(cls):

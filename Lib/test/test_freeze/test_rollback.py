@@ -139,7 +139,7 @@ class TestRollbackNormalFreezeStillWorks(unittest.TestCase):
         self.assertFalse(is_frozen(parent))
 
         # Remove the blocker and try again
-        del parent.child
+        set_freezable(child, FREEZABLE_YES)
         freeze(parent)
         self.assertTrue(is_frozen(parent))
 

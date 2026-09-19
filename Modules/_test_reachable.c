@@ -292,7 +292,7 @@ static PyTypeObject HasReachable_Type = {
 /* ---- ShallowImmutable ------------------------------------------------ */
 /*
  * A C-level type registered as shallow immutable via
- * _PyImmutability_RegisterShallowImmutable.  Instances hold a single
+ * _PyImmutability_RegisterImmutableByConstruction.  Instances hold a single
  * PyObject* but are declared shallow-immutable, meaning the implicit
  * check trusts that the instance itself won't be mutated.
  */
@@ -421,7 +421,7 @@ _test_reachable_exec(PyObject *module)
         return -1;
     if (_PyImmutability_SetFreezable((PyObject*)&ShallowImmutable_Type, _Py_FREEZABLE_YES) < 0)
         return -1;
-    if (_PyImmutability_RegisterShallowImmutable(&ShallowImmutable_Type) < 0)
+    if (_PyImmutability_RegisterImmutableByConstruction(&ShallowImmutable_Type) < 0)
         return -1;
 
     return 0;

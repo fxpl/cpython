@@ -70,7 +70,7 @@ static inline int _is_dead(PyObject *obj)
 #else
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     if (_Py_NeedsAtomicRC(obj)) {
-        if (_Py_IsImmutableIndirectSCC(obj)) {
+        if (_Py_NeedsImmutableRC(obj)) {
             return _Py_IsDead_Immutable(obj);
         } else {
             Py_ssize_t rc = _Py_atomic_load_uint32(&obj->ob_refcnt);
@@ -102,7 +102,7 @@ static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
             return NULL;
         }
 
-        if (_Py_IsImmutableIndirectSCC(obj)) {
+        if (_Py_NeedsImmutableRC(obj)) {
             if (_Py_TryIncref_Immutable(obj)) {
                 return obj;
             } else {
@@ -167,8 +167,11 @@ extern Py_ssize_t _PyWeakref_GetWeakrefCount(PyObject *obj);
 // intact.
 extern void _PyWeakref_ClearWeakRefsNoCallbacks(PyObject *obj);
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 PyAPI_FUNC(void) _PyWeakref_OnObjectFreeze(PyObject *object);
 PyAPI_FUNC(void) _PyImmutability_ClearWeakRefsWithCallback(PyObject *object, PyWeakReference **callbacks);
+#endif
+
 PyAPI_FUNC(int) _PyWeakref_IsDead(PyObject *weakref);
 
 #ifdef __cplusplus

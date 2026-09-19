@@ -11,7 +11,7 @@ typedef enum {
 
 PyAPI_FUNC(int) _PyImmutability_Freeze(PyObject*);
 PyAPI_FUNC(int) _PyImmutability_FreezeMany(PyObject *const *, Py_ssize_t);
-PyAPI_FUNC(int) _PyImmutability_RegisterShallowImmutable(PyTypeObject*);
+PyAPI_FUNC(int) _PyImmutability_RegisterImmutableByConstruction(PyTypeObject*);
 PyAPI_FUNC(int) _PyImmutability_CanViewAsImmutable(PyObject*);
 PyAPI_FUNC(int) _PyImmutability_SetFreezable(PyObject *, _Py_freezable_status);
 PyAPI_FUNC(int) _PyImmutability_GetFreezable(PyObject *);

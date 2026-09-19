@@ -469,7 +469,7 @@ _check_xidata(PyThreadState *tstate, _PyXIData_t *xidata)
 static PyObject* immutable_new_object(_PyXIData_t* data) {
     assert(data->data == (void*) 0xdeadbeef);
     assert(data->obj != NULL);
-    assert(_Py_IsImmutable(data->obj));
+    assert(_Py_IsDeepImmutable(data->obj));
     Py_IncRef(data->obj);
 
     return data->obj;

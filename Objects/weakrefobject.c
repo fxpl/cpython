@@ -57,18 +57,12 @@
  *
  * We also need to handle refcounts for the weakref object and the callback.
  *
- * - Basic weakrefs pointing to immutable objects are marked as immutable,
- *   which turns on atomic reference counting.
- * - Weakrefs with callbacks and pointing to immutable objects
- *   have their refcount pre-emptively incremented upon creation.
- *   That accounts for the TryIncref that would be called when clearing
- *   weakrefs, which would require atomic reference counting.
- *   However, we cannot easily achieve atomic reference counting for weakrefs
- *   with callbacks: we cannot make them immutable, and adding another branch
- *   to PY_INCREF and PY_DECREF would have a significant performance impact.
- *   The downside of our approach is that the weakref objects are kept alive
- *   until the immutable object dies.
- *   FIXME(Immutable): If the weakref is a part of an SCC, it never dies.
+ * - Every weakref pointing to a frozen object has atomic reference counting
+ *   turned on, so it can be increfed from any interpreter.
+ * - When a frozen object dies, its weakrefs with callbacks are moved onto a
+ *   pending list which owns a reference to each of them. That reference is
+ *   released once the callback has been dispatched, so a weakref only outlives
+ *   its referent for as long as its callback is pending.
  * - We keep the callback in the weakref object until it is about to be called.
  *   That keeps it alive, so we don't need to increment its refcount.
  *
@@ -401,7 +395,7 @@ try_reuse_basic_ref(PyWeakReference *list, PyTypeObject *type,
         return NULL;
     }
     PyObject* candobj = _PyObject_CAST(cand);
-    int incref_res = _Py_IsImmutable(candobj) ?
+    int incref_res = _Py_NeedsImmutableRC(candobj) ?
         _Py_TryIncref_Immutable(candobj) : _Py_TryIncref(candobj);
     if (incref_res) {
         return cand;
@@ -453,27 +447,17 @@ insert_weakref(PyWeakReference *newref, PyWeakReference **list)
     }
 }
 
-static void
-immutable_make_weakref_safe(PyWeakReference *self)
-{
-    if (self->wr_callback == NULL) {
-        // Turn on atomic reference counting for the weakref.
-        // FIXME(Immutable): freezing a weakref makes it strong
-        // _PyImmutability_Freeze(_PyObject_CAST(newref));
-    }
-    else {
-        // Pre-emptively increment the weakref's refcount.
-        // See the comment at the start of this file for details.
-        Py_INCREF(self);
-    }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 
+void make_weakref_interpreter_safe(PyObject *object) {
+    _Py_EnableAtomicRC(object);
 }
 
 /* Make weakrefs to the newly frozen object thread-safe. */
 void
 _PyWeakref_OnObjectFreeze(PyObject *object)
 {
-    assert(_Py_IsImmutable(object));
+    assert(_Py_IsDeepImmutable(object));
     if (!_PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))) {
         return;
     }
@@ -485,11 +469,12 @@ _PyWeakref_OnObjectFreeze(PyObject *object)
     LOCK_WEAKREFS(object);
     PyWeakReference *current = *list;
     while (current != NULL) {
-        immutable_make_weakref_safe(current);
+        make_weakref_interpreter_safe(_PyObject_CAST(current));
         current = current->wr_next;
     }
     UNLOCK_WEAKREFS(object);
 }
+#endif
 
 static PyWeakReference *
 allocate_weakref(PyTypeObject *type, PyObject *obj, PyObject *callback)
@@ -499,9 +484,11 @@ allocate_weakref(PyTypeObject *type, PyObject *obj, PyObject *callback)
         return NULL;
     }
     init_weakref(newref, obj, callback);
-    if (_Py_IsImmutable(obj)) {
-        immutable_make_weakref_safe(newref);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_IsDeepImmutable(obj)) {
+        make_weakref_interpreter_safe(_PyObject_CAST(newref));
     }
+#endif
     return newref;
 }
 
@@ -1112,7 +1099,9 @@ PyObject_ClearWeakRefs(PyObject *object)
 
     if (object == NULL
         || !_PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))
-        || _Py_IsImmutable(object)
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        || _Py_IsDeepImmutable(object)
+#endif
         || Py_REFCNT(object) != 0)
     {
         PyErr_BadInternalCall();
@@ -1190,15 +1179,19 @@ PyObject_ClearWeakRefs(PyObject *object)
     PyErr_SetRaisedException(exc);
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 /* Clear weak references with callbacks of an immutable object.
  * Store them in a list to be able to call their callbacks later.
  */
 void
 _PyImmutability_ClearWeakRefsWithCallback(PyObject *object, PyWeakReference **callbacks)
 {
+    // Matches _Py_DecRef_Immutable, the only caller, which dispatches on the
+    // deep flag. Checking the shallow one here made implicitly frozen roots
+    // fail this guard.
     if (object == NULL
         || !_PyType_SUPPORTS_WEAKREFS(Py_TYPE(object))
-        || !_Py_IsImmutable(object))
+        || !_Py_IsDeepImmutable(object))
     {
         PyErr_BadInternalCall();
         return;
@@ -1216,12 +1209,17 @@ _PyImmutability_ClearWeakRefsWithCallback(PyObject *object, PyWeakReference **ca
         PyWeakReference *current = next;
         next = next->wr_next;
         if (current->wr_callback != NULL) {
+            // The callback list owns a reference to each weakref until its
+            // callback has been dispatched; released by weakref_call_callbacks
+            // and weakref_decref_weakrefs.
+            Py_INCREF(current);
             clear_weakref_lock_held(current, NULL); // keeps the callback
             insert_head(current, callbacks);
         }
     }
     UNLOCK_WEAKREFS(object);
 }
+#endif
 
 void
 PyUnstable_Object_ClearWeakRefsNoCallbacks(PyObject *obj)
