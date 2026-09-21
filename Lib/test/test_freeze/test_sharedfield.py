@@ -1,5 +1,6 @@
 import os
 import unittest
+import immutable
 from immutable import deep_freeze, is_deep_frozen, SharedField, set_freezable, FREEZABLE_NO
 from test.support import import_helper
 
@@ -178,6 +179,8 @@ class TestSharedFieldErrors(unittest.TestCase):
         self.assertEqual(f2.get(), 2)
 
 
+@unittest.skipUnless(immutable._cross_interpreter_sharing,
+                     "frozen objects are not shared across interpreters")
 class TestSharedFieldSubinterpreters(unittest.TestCase):
     """Test that SharedField is shared across sub-interpreters."""
 

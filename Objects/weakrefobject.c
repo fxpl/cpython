@@ -395,8 +395,14 @@ try_reuse_basic_ref(PyWeakReference *list, PyTypeObject *type,
         return NULL;
     }
     PyObject* candobj = _PyObject_CAST(cand);
-    int incref_res = _Py_NeedsImmutableRC(candobj) ?
-        _Py_TryIncref_Immutable(candobj) : _Py_TryIncref(candobj);
+
+
+    int incref_res =
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        _Py_NeedsImmutableRC(candobj) ? _Py_TryIncref_Immutable(candobj) :
+#endif
+        _Py_TryIncref(candobj);
+
     if (incref_res) {
         return cand;
     }

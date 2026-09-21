@@ -1966,10 +1966,24 @@ static int traverse_freeze(PyObject *obj, shallow_freeze_state_t *freeze_state)
         return 0;
     }
 
-    Py_BEGIN_CRITICAL_SECTION(obj);
     traverseproc reachable = get_reachable_proc(Py_TYPE(obj));
-    result = reachable(obj, (visitproc)freeze_visit, freeze_state);
-    Py_END_CRITICAL_SECTION();
+    if (PyType_Check(obj)) {
+        // tp_mro, tp_bases and tp_base are guarded by the interpreter-wide
+        // type lock, not by the type's own mutex (see TYPE_LOCK in
+        // typeobject.c). The GC gets away without it by only traversing with
+        // the world stopped; we traverse with other threads live, so we need
+        // both locks. Holding them across the whole traversal is also what
+        // keeps the borrowed references handed to freeze_visit alive.
+        Py_BEGIN_CRITICAL_SECTION2_MUTEX(&PyInterpreterState_Get()->types.mutex,
+                                         &obj->ob_mutex);
+        result = reachable(obj, (visitproc)freeze_visit, freeze_state);
+        Py_END_CRITICAL_SECTION2();
+    }
+    else {
+        Py_BEGIN_CRITICAL_SECTION(obj);
+        result = reachable(obj, (visitproc)freeze_visit, freeze_state);
+        Py_END_CRITICAL_SECTION();
+    }
     if (result != 0) {
         goto error;
     }
@@ -2203,9 +2217,7 @@ int _PyImmutability_DeepFreezeMany(PyObject *const *objs, Py_ssize_t nobjs, int 
 }
 
 // TODOs:
-// - Interface with deep and shallow
-// - Run tests on Free-Threaded
-//    - Free-Threaded bug hunting
+// - Run tests on Free-Threaded: Done :D
 //    - RWLock on freeze for Rollback support
 //    - Most `ob_flags` accesses will probably need to be atomic..
 // - Maybe fix mermaid output

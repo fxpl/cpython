@@ -1,5 +1,6 @@
 import os
 import unittest
+import immutable
 from immutable import deep_freeze, is_deep_frozen, InterpreterLocal
 from test.support import import_helper
 
@@ -150,6 +151,8 @@ class TestInterpreterLocalErrors(unittest.TestCase):
             InterpreterLocal(factory)
 
 
+@unittest.skipUnless(immutable._cross_interpreter_sharing,
+                     "frozen objects are not shared across interpreters")
 class TestInterpreterLocalSubinterpreters(unittest.TestCase):
     """Test that InterpreterLocal provides per-interpreter isolation."""
 

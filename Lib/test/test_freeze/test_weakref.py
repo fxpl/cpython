@@ -2,6 +2,7 @@ import sys
 import unittest
 import weakref
 
+import immutable
 from immutable import deep_freeze, is_deep_frozen
 
 
@@ -101,6 +102,8 @@ class TestCallbacks(unittest.TestCase):
         self.assertTrue(detector.called)
         self.assertTrue(sys.deallocated)
 
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+                         "without SCC refcounting the cycle needs a GC pass")
     def test_callback_scc(self):
         f = Finalizable()
         f.b = A()

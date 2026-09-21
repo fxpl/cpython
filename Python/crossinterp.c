@@ -466,6 +466,7 @@ _check_xidata(PyThreadState *tstate, _PyXIData_t *xidata)
     return 0;
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 static PyObject* immutable_new_object(_PyXIData_t* data) {
     assert(data->data == (void*) 0xdeadbeef);
     assert(data->obj != NULL);
@@ -474,6 +475,7 @@ static PyObject* immutable_new_object(_PyXIData_t* data) {
 
     return data->obj;
 }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
 static int
 _get_xidata(PyThreadState *tstate,
@@ -489,6 +491,7 @@ _get_xidata(PyThreadState *tstate,
     }
 
     // Artifact[Implementation]: The branch that allows direct sharing for immutable object across sub-interpreters
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     int deep_immutable = _PyImmutability_CanViewAsDeepImmutable(obj);
     if (deep_immutable < 0) {
         return -1;
@@ -502,6 +505,7 @@ _get_xidata(PyThreadState *tstate,
                        (xid_newobjfunc) immutable_new_object);
         return 0;
     }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
     // Call the "getdata" func for the object.
     dlcontext_t ctx;

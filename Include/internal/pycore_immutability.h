@@ -24,11 +24,13 @@ struct _Py_immutability_state {
 #endif
 };
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 static inline void _Py_EnableAtomicRC(PyObject *op)
 {
     op->ob_flags |= _Py_ATOMIC_RC_FLAG;
 }
 #define _Py_EnableAtomicRC(op) _Py_EnableAtomicRC(_PyObject_CAST(op))
+#endif
 
 #ifdef __cplusplus
 }
