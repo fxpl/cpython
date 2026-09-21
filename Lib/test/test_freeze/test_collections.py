@@ -1,5 +1,5 @@
 from collections import defaultdict, deque
-from immutable import freeze
+from immutable import deep_freeze
 
 from .test_common import BaseObjectTest
 
@@ -75,12 +75,12 @@ class TestDeque(BaseObjectTest):
     def test_iter(self):
         it = iter(self.obj)
         with self.assertRaises(TypeError):
-            freeze(it)
+            deep_freeze(it)
 
     def test_reviter(self):
         it = reversed(self.obj)
         with self.assertRaises(TypeError):
-            freeze(it)
+            deep_freeze(it)
 
 
 class TestDefaultDict(BaseObjectTest):

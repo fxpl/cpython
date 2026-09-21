@@ -2,7 +2,7 @@ import sys
 import unittest
 import weakref
 
-from immutable import freeze, is_frozen
+from immutable import deep_freeze, is_deep_frozen
 
 
 class A:
@@ -36,43 +36,43 @@ class TestRefcounts(unittest.TestCase):
     def test_weakref_to_frozen_object(self):
         baseline = A()
         a = A()
-        freeze(a)
+        deep_freeze(a)
         wr = weakref.ref(a)
         # The weakref should be frozen to ensure atomic refcounting.
         # FIXME(Immutable): Freezing a weakref currently makes it strong.
-        # self.assertTrue(is_frozen(wr))
+        # self.assertTrue(is_deep_frozen(wr))
         self.assertEqual(sys.getrefcount(wr), sys.getrefcount(baseline))
 
     def test_weakref_to_frozen_object_callback(self):
         baseline = A()
         a = A()
-        freeze(a)
+        deep_freeze(a)
         wr = weakref.ref(a, dummy_callback)
-        self.assertFalse(is_frozen(wr))
+        self.assertFalse(is_deep_frozen(wr))
 
     def test_freeze_object_with_weakref(self):
         baseline = A()
         a = A()
         wr = weakref.ref(a)
-        freeze(a)
+        deep_freeze(a)
         # The weakref should be frozen to ensure atomic refcounting.
         # FIXME(Immutable): Freezing a weakref currently makes it strong.
-        # self.assertTrue(is_frozen(wr))
+        # self.assertTrue(is_deep_frozen(wr))
         self.assertEqual(sys.getrefcount(wr), sys.getrefcount(baseline))
 
     def test_freeze_object_with_weakref_callback(self):
         baseline = A()
         a = A()
         wr = weakref.ref(a, dummy_callback)
-        freeze(a)
+        deep_freeze(a)
         # The weakref should have had its refcount pre-emptively incremented.
-        self.assertFalse(is_frozen(wr))
+        self.assertFalse(is_deep_frozen(wr))
 
 
 class TestWeakrefList(unittest.TestCase):
     def test_remove_weakref(self):
         a = A()
-        freeze(a)
+        deep_freeze(a)
         wr = weakref.ref(a)
         wr = None
         # The reference should have been removed.
@@ -80,7 +80,7 @@ class TestWeakrefList(unittest.TestCase):
 
     def test_reuse_weakref(self):
         a = A()
-        freeze(a)
+        deep_freeze(a)
         wr1 = weakref.ref(a)
         wr2 = weakref.ref(a)
         # The weakrefs should be the same, as they refer to the same object.
@@ -93,7 +93,7 @@ class TestCallbacks(unittest.TestCase):
 
     def test_callback_single(self):
         f = Finalizable()
-        freeze(f)
+        deep_freeze(f)
         detector = CallbackDetector()
         wr = weakref.ref(f, detector.callback)
         f = None
@@ -105,7 +105,7 @@ class TestCallbacks(unittest.TestCase):
         f = Finalizable()
         f.b = A()
         f.b.f = f
-        freeze(f)
+        deep_freeze(f)
         detector = CallbackDetector()
         wr = weakref.ref(f, detector.callback)
         f = None

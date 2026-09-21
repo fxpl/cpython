@@ -489,11 +489,17 @@ _get_xidata(PyThreadState *tstate,
     }
 
     // Artifact[Implementation]: The branch that allows direct sharing for immutable object across sub-interpreters
-    if (_PyImmutability_CanViewAsImmutable(obj)) {
-        _Py_IncRef(obj);
-        xidata->obj = obj;
-        xidata->data = (void*) 0xdeadbeef;
-        xidata->new_object = (xid_newobjfunc) immutable_new_object;
+    int deep_immutable = _PyImmutability_CanViewAsDeepImmutable(obj);
+    if (deep_immutable < 0) {
+        return -1;
+    }
+    if (deep_immutable) {
+        // `data` is only a marker: the object itself is handed over, so there
+        // is nothing to free and `free` stays NULL. This still has to go
+        // through _PyXIData_Init() to record the owning interpreter, which
+        // _PyXIData_Clear() and _tuple_shared_free() check against.
+        _PyXIData_Init(xidata, interp, (void*) 0xdeadbeef, obj,
+                       (xid_newobjfunc) immutable_new_object);
         return 0;
     }
 

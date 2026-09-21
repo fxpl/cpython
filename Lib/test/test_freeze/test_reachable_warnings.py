@@ -29,7 +29,7 @@ class TestReachableWarnings(unittest.TestCase):
         stdout, stderr = self._run_code("""\
             import _immutable, _test_reachable
             obj = _test_reachable.HasTraverseNoReachable(42)
-            _immutable.freeze(obj)
+            _immutable.deep_freeze(obj)
         """)
         self.assertIn(
             "freeze: type '_test_reachable.HasTraverseNoReachable' "
@@ -42,7 +42,7 @@ class TestReachableWarnings(unittest.TestCase):
         stdout, stderr = self._run_code("""\
             import _immutable, _test_reachable
             obj = _test_reachable.NoTraverseNoReachable()
-            _immutable.freeze(obj)
+            _immutable.deep_freeze(obj)
         """)
         self.assertIn(
             "freeze: type '_test_reachable.NoTraverseNoReachable' "
@@ -54,9 +54,9 @@ class TestReachableWarnings(unittest.TestCase):
         """A type should only produce the warning on the first freeze."""
         stdout, stderr = self._run_code("""\
             import _immutable, _test_reachable
-            _immutable.freeze(_test_reachable.HasTraverseNoReachable(1))
-            _immutable.freeze(_test_reachable.HasTraverseNoReachable(2))
-            _immutable.freeze(_test_reachable.HasTraverseNoReachable(3))
+            _immutable.deep_freeze(_test_reachable.HasTraverseNoReachable(1))
+            _immutable.deep_freeze(_test_reachable.HasTraverseNoReachable(2))
+            _immutable.deep_freeze(_test_reachable.HasTraverseNoReachable(3))
         """)
         msg = (
             "freeze: type '_test_reachable.HasTraverseNoReachable' "
@@ -69,8 +69,8 @@ class TestReachableWarnings(unittest.TestCase):
         """Different types should each produce their own warning."""
         stdout, stderr = self._run_code("""\
             import _immutable, _test_reachable
-            _immutable.freeze(_test_reachable.HasTraverseNoReachable(1))
-            _immutable.freeze(_test_reachable.NoTraverseNoReachable())
+            _immutable.deep_freeze(_test_reachable.HasTraverseNoReachable(1))
+            _immutable.deep_freeze(_test_reachable.NoTraverseNoReachable())
         """)
         self.assertIn("HasTraverseNoReachable", stderr)
         self.assertIn("NoTraverseNoReachable", stderr)
@@ -80,7 +80,7 @@ class TestReachableWarnings(unittest.TestCase):
         stdout, stderr = self._run_code("""\
             import _immutable, _test_reachable
             obj = _test_reachable.HasReachable(42)
-            _immutable.freeze(obj)
+            _immutable.deep_freeze(obj)
         """)
         self.assertNotIn("HasReachable", stderr)
 

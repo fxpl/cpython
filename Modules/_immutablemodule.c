@@ -65,24 +65,30 @@ immutable_free(void *module)
 }
 
 /*[clinic input]
-_immutable.freeze
+_immutable.shallow_freeze
     *args: array
 
-Freeze one or more objects and their graphs.
+Shallowly freeze one or more objects.
+
+Each object's own state becomes immutable, but the objects it references
+are left untouched and may still be mutable. Every argument counts as a
+root of this call, so objects marked FREEZABLE_EXPLICIT are frozen.
+
+Returns the first argument.
 [clinic start generated code]*/
 
 static PyObject *
-_immutable_freeze_impl(PyObject *module, PyObject * const *args,
-                       Py_ssize_t args_length)
-/*[clinic end generated code: output=7be8a1c8b3aed004 input=6f071d066cb91bc8]*/
+_immutable_shallow_freeze_impl(PyObject *module, PyObject * const *args,
+                               Py_ssize_t args_length)
+/*[clinic end generated code: output=0015d31fd4e61173 input=9cfbdc343e6f3280]*/
 {
     if (args_length == 0) {
         PyErr_SetString(PyExc_TypeError,
-                        "freeze() requires at least one argument");
+                        "shallow_freeze() requires at least one argument");
         return NULL;
     }
 
-    if (_PyImmutability_FreezeMany(args, args_length) < 0) {
+    if (_PyImmutability_ShallowFreezeMany(args, args_length) < 0) {
         return NULL;
     }
 
@@ -90,21 +96,80 @@ _immutable_freeze_impl(PyObject *module, PyObject * const *args,
 }
 
 /*[clinic input]
-_immutable.is_frozen
-    obj: object
-    /
+_immutable.deep_freeze
+    *args: array
+    atomic: bool = False
 
-Check if an object is frozen (or can be viewed as immutable).
+Deeply freeze one or more objects and their graphs.
 
-If the object graph can be viewed as immutable, it will be frozen as a
-side effect and True is returned.
+The objects and everything reachable from them become immutable. Only
+deeply frozen objects can be shared between interpreters. Every argument
+counts as a root of this call, so objects marked FREEZABLE_EXPLICIT are
+frozen.
+
+Returns the first argument.
 [clinic start generated code]*/
 
 static PyObject *
-_immutable_is_frozen(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=880efe7d38b137b5 input=97c61fe65ccb1574]*/
+_immutable_deep_freeze_impl(PyObject *module, PyObject * const *args,
+                            Py_ssize_t args_length, int atomic)
+/*[clinic end generated code: output=5ca0554d7ac259b2 input=3ad7bce5782db0f7]*/
 {
-    int result = _PyImmutability_CanViewAsImmutable(obj);
+    if (args_length == 0) {
+        PyErr_SetString(PyExc_TypeError,
+                        "deep_freeze() requires at least one argument");
+        return NULL;
+    }
+
+    if (_PyImmutability_DeepFreezeMany(args, args_length, atomic) < 0) {
+        return NULL;
+    }
+
+    return Py_NewRef(args[0]);
+}
+
+/*[clinic input]
+_immutable.is_shallow_frozen
+    obj: object
+    /
+
+Check if an object is shallowly frozen.
+
+Says nothing about what the object references; use is_deep_frozen() for
+that. If the object is immutable by construction, it will be marked
+shallowly frozen as a side effect and True is returned.
+[clinic start generated code]*/
+
+static PyObject *
+_immutable_is_shallow_frozen(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=d6371904e00bb3c3 input=a835cae3663b0a77]*/
+{
+    int result = _PyImmutability_CanViewAsShallowImmutable(obj);
+    if (result < 0) {
+        return NULL;
+    }
+    if (result) {
+        Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+}
+
+/*[clinic input]
+_immutable.is_deep_frozen
+    obj: object
+    /
+
+Check if an object and everything it reaches is frozen.
+
+If the object graph is immutable by construction, it will be deeply
+frozen as a side effect and True is returned.
+[clinic start generated code]*/
+
+static PyObject *
+_immutable_is_deep_frozen(PyObject *module, PyObject *obj)
+/*[clinic end generated code: output=4bc9dd7ea5eeb677 input=181d2cab07ffc2e2]*/
+{
+    int result = _PyImmutability_CanViewAsDeepImmutable(obj);
     if (result < 0) {
         return NULL;
     }
@@ -125,14 +190,14 @@ Set the freezable status of an object.
 Status values:
   FREEZABLE_YES (0): always freezable
   FREEZABLE_NO (1): never freezable
-  FREEZABLE_EXPLICIT (2): freezable only when freeze() is
-                          called directly on it
+  FREEZABLE_EXPLICIT (2): freezable only when shallow_freeze() or
+                          deep_freeze() is called directly on it
   FREEZABLE_PROXY (3): reserved for future use
 [clinic start generated code]*/
 
 static PyObject *
 _immutable_set_freezable_impl(PyObject *module, PyObject *obj, int status)
-/*[clinic end generated code: output=73cad0b4df9a46f9 input=6528458c547e93a8]*/
+/*[clinic end generated code: output=73cad0b4df9a46f9 input=8952516a09cd2cfd]*/
 {
     if (_PyImmutability_SetFreezable(obj, status) < 0) {
         return NULL;
@@ -151,14 +216,14 @@ Returns the freezable status, or -1 if no status has been set.
 Status values:
   FREEZABLE_YES (0): always freezable
   FREEZABLE_NO (1): never freezable
-  FREEZABLE_EXPLICIT (2): freezable only when freeze() is
-                          called directly on it
+  FREEZABLE_EXPLICIT (2): freezable only when shallow_freeze() or
+                          deep_freeze() is called directly on it
   FREEZABLE_PROXY (3): reserved for future use
 [clinic start generated code]*/
 
 static PyObject *
 _immutable_get_freezable(PyObject *module, PyObject *obj)
-/*[clinic end generated code: output=bc22cd6d416850e3 input=a8ab19eb5ed3df08]*/
+/*[clinic end generated code: output=bc22cd6d416850e3 input=49c55780047d22c3]*/
 {
     int status = _PyImmutability_GetFreezable(obj);
     if (status == -2) {
@@ -193,14 +258,14 @@ _immutable_unset_freezable(PyObject *module, PyObject *obj)
 /*
  * InterpreterLocal type
  *
- * An immutable indirection to per-interpreter mutable state.
+ * A deeply immutable indirection to per-interpreter mutable state.
  * tp_reachable hides per-interpreter values from the freeze walk.
  */
 
 typedef struct {
     PyObject_HEAD
-    PyObject *default_value;  // Immutable default, or NULL if factory form
-    PyObject *factory;        // Frozen callable, or NULL if value form
+    PyObject *default_value;  // Deeply immutable default, or NULL if factory form
+    PyObject *factory;        // Deeply frozen callable, or NULL if value form
 } PyInterpreterLocalObject;
 
 static PyObject *
@@ -283,14 +348,14 @@ interpreterlocal_init(PyObject *self, PyObject *args, PyObject *kwds)
     }
 
     if (PyCallable_Check(default_or_factory)) {
-        if (_PyImmutability_Freeze(default_or_factory) < 0) {
+        if (_PyImmutability_DeepFreeze(default_or_factory, 0) < 0) {
             return -1;
         }
         il->factory = Py_NewRef(default_or_factory);
         il->default_value = NULL;
     }
     else {
-        if (_PyImmutability_Freeze(default_or_factory) < 0) {
+        if (_PyImmutability_DeepFreeze(default_or_factory, 0) < 0) {
             return -1;
         }
         il->default_value = Py_NewRef(default_or_factory);
@@ -366,8 +431,8 @@ static PyType_Spec interpreterlocal_spec = {
 /*
  * SharedField type
  *
- * A mutable field inside a frozen object that only holds frozen values.
- * Because the stored value is always immutable, it can be safely shared
+ * A mutable field inside a frozen object that only holds deeply frozen
+ * values. Because the stored value is deeply immutable, it can be safely shared
  * across sub-interpreters.  All access is protected by a PyMutex to
  * avoid TOCTOU races between reading the pointer and adjusting reference
  * counts.  A PyMutex is used rather than Py_BEGIN_CRITICAL_SECTION
@@ -377,16 +442,20 @@ static PyType_Spec interpreterlocal_spec = {
  */
 typedef struct {
     PyObject_HEAD
-    PyObject *value;   // Always frozen; guarded by lock
+    PyObject *value;   // Always deeply frozen; guarded by lock
     PyMutex lock;      // Protects value across sub-interpreters
 } PySharedFieldObject;
 
 static int
 sharedfield_check_frozen(PyObject *value)
 {
-    if (!_PyImmutability_CanViewAsImmutable(value)) {
+    int deep_immutable = _PyImmutability_CanViewAsDeepImmutable(value);
+    if (deep_immutable < 0) {
+        return -1;
+    }
+    if (!deep_immutable) {
         PyErr_SetString(PyExc_TypeError,
-                        "SharedField value must be frozen");
+                        "SharedField value must be deeply frozen");
         return -1;
     }
     return 0;
@@ -478,7 +547,7 @@ sharedfield_init(PyObject *self, PyObject *args, PyObject *kwds)
         return -1;
     }
 
-    if (_PyImmutability_Freeze(initial) < 0) {
+    if (_PyImmutability_DeepFreeze(initial, 0) < 0) {
         return -1;
     }
 
@@ -515,14 +584,14 @@ static PyMethodDef sharedfield_methods[] = {
     {"get", sharedfield_get, METH_NOARGS,
      "Return the current value."},
     {"set", sharedfield_set, METH_O,
-     "Set a new value. The value must be frozen."},
+     "Set a new value. The value must be deeply frozen."},
     {"swap", sharedfield_swap, METH_O,
-     "Replace the value and return the old value. The new value must be frozen."},
+     "Replace the value and return the old value. The new value must be deeply frozen."},
     {"compare_and_swap",
      _PyCFunction_CAST(sharedfield_compare_and_swap), METH_FASTCALL,
      "compare_and_swap(old, new) -> bool.\n"
      "If the current value is `old`, replace it with `new` and return True.\n"
-     "Otherwise return False. The new value must be frozen."},
+     "Otherwise return False. The new value must be deeply frozen."},
     {NULL, NULL}
 };
 
@@ -568,12 +637,15 @@ PyDoc_STRVAR(immutable_module_doc,
 "\n"
 "Module for immutability support.\n"
 "\n"
-"This module provides functions to freeze objects and their graphs,\n"
-"making them immutable at runtime.");
+"This module provides functions to freeze objects at runtime, either\n"
+"shallowly (only the object's own state) or deeply (the object and\n"
+"everything reachable from it).");
 
 static struct PyMethodDef immutable_methods[] = {
-    _IMMUTABLE_FREEZE_METHODDEF
-    _IMMUTABLE_IS_FROZEN_METHODDEF
+    _IMMUTABLE_SHALLOW_FREEZE_METHODDEF
+    _IMMUTABLE_DEEP_FREEZE_METHODDEF
+    _IMMUTABLE_IS_SHALLOW_FROZEN_METHODDEF
+    _IMMUTABLE_IS_DEEP_FROZEN_METHODDEF
     _IMMUTABLE_SET_FREEZABLE_METHODDEF
     _IMMUTABLE_GET_FREEZABLE_METHODDEF
     _IMMUTABLE_UNSET_FREEZABLE_METHODDEF

@@ -2,7 +2,7 @@
 
 import unittest
 from immutable import (
-    freeze, is_frozen, set_freezable, get_freezable,
+    deep_freeze, is_deep_frozen, set_freezable, get_freezable,
     FreezabilityOverride, require_mutable,
     FREEZABLE_YES, FREEZABLE_NO, FREEZABLE_EXPLICIT,
 )
@@ -27,24 +27,24 @@ class TestFreezabilityOverride(unittest.TestCase):
             self.assertEqual(get_freezable(obj), FREEZABLE_NO)
         self.assertEqual(get_freezable(obj), FREEZABLE_YES)
 
-    def test_override_prevents_freeze(self):
+    def test_override_prevents_deep_freeze(self):
         C = make_freezable_class()
         obj = C()
         set_freezable(obj, FREEZABLE_YES)
         with FreezabilityOverride(obj, FREEZABLE_NO):
             with self.assertRaises(TypeError):
-                freeze(obj)
+                deep_freeze(obj)
         # After the context manager, freezing should work again.
-        freeze(obj)
-        self.assertTrue(is_frozen(obj))
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
 
-    def test_override_allows_freeze(self):
+    def test_override_allows_deep_freeze(self):
         C = make_freezable_class()
         obj = C()
         set_freezable(obj, FREEZABLE_NO)
         with FreezabilityOverride(obj, FREEZABLE_YES):
-            freeze(obj)
-            self.assertTrue(is_frozen(obj))
+            deep_freeze(obj)
+            self.assertTrue(is_deep_frozen(obj))
 
     def test_override_to_explicit(self):
         C = make_freezable_class()
@@ -128,12 +128,12 @@ class TestRequireMutable(unittest.TestCase):
         obj = C()
         with require_mutable(obj):
             with self.assertRaises(TypeError):
-                freeze(obj)
+                deep_freeze(obj)
 
     def test_raises_if_already_frozen(self):
         C = make_freezable_class()
         obj = C()
-        freeze(obj)
+        deep_freeze(obj)
         with self.assertRaises(TypeError):
             with require_mutable(obj):
                 pass  # should never reach here

@@ -1,7 +1,7 @@
 import sys
 import unittest
 
-from immutable import freeze, is_frozen, ImmutableModule
+from immutable import deep_freeze, is_deep_frozen, ImmutableModule
 
 class TestModuleProxy(unittest.TestCase):
     def setUp(self):
@@ -10,33 +10,33 @@ class TestModuleProxy(unittest.TestCase):
 
     def test_freeze_function_with_random_module_creates_proxy(self):
         import random
-        self.assertFalse(is_frozen(random))
+        self.assertFalse(is_deep_frozen(random))
 
         def coin():
             return random.random()
 
-        freeze(coin)
+        deep_freeze(coin)
 
         captured_random = coin.__closure__[0].cell_contents
-        self.assertTrue(is_frozen(captured_random))
-        self.assertTrue(is_frozen(random))
+        self.assertTrue(is_deep_frozen(captured_random))
+        self.assertTrue(is_deep_frozen(random))
         self.assertIsInstance(captured_random, ImmutableModule)
         self.assertIsInstance(random, ImmutableModule)
 
         self.assertIn("random", sys.mut_modules)
         mut_random = sys.mut_modules["random"]
         self.assertIsNot(mut_random, captured_random)
-        self.assertFalse(is_frozen(mut_random))
+        self.assertFalse(is_deep_frozen(mut_random))
         self.assertIsInstance(mut_random, sys.__class__)
 
     def test_random_state_remains_mutable_via_proxy(self):
         import random
-        self.assertFalse(is_frozen(random))
+        self.assertFalse(is_deep_frozen(random))
 
         def coin():
             return random.random()
 
-        freeze(coin)
+        deep_freeze(coin)
 
         random.seed(42)
         first = coin()
@@ -48,12 +48,12 @@ class TestModuleProxy(unittest.TestCase):
 
     def test_proxy_attribute_writes_delegate_to_mutable_module(self):
         import random
-        self.assertFalse(is_frozen(random))
+        self.assertFalse(is_deep_frozen(random))
 
         def coin():
             return random.random()
 
-        freeze(coin)
+        deep_freeze(coin)
 
         proxy_random = coin.__closure__[0].cell_contents
         mut_random = sys.mut_modules["random"]
@@ -72,9 +72,9 @@ class TestModuleProxy(unittest.TestCase):
 
     def test_proxy_reimport(self):
         import random
-        self.assertFalse(is_frozen(random))
+        self.assertFalse(is_deep_frozen(random))
 
-        freeze(random)
+        deep_freeze(random)
 
         # Unimport "random"
         old_mut_random = sys.mut_modules["random"]

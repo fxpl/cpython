@@ -2,14 +2,22 @@
 
 This module re-exports the public API from the internal C extension
 `_immutable`, keeping the programmer-facing surface in Python.
+
+Immutability comes in two depths.  A *shallow* frozen object cannot have
+its own state mutated, but the objects it references may still be
+mutable.  A *deeply* frozen object is shallow frozen and so is everything
+reachable from it; only deeply frozen objects can be shared between
+interpreters.
 """
 
 from __future__ import annotations
 
 import _immutable as _c
 
-freeze = _c.freeze
-is_frozen = _c.is_frozen
+shallow_freeze = _c.shallow_freeze
+deep_freeze = _c.deep_freeze
+is_shallow_frozen = _c.is_shallow_frozen
+is_deep_frozen = _c.is_deep_frozen
 set_freezable = _c.set_freezable
 get_freezable = _c.get_freezable
 unset_freezable = _c.unset_freezable
@@ -37,15 +45,16 @@ def unfreezable(cls):
 
 
 def explicitlyFreezable(cls):
-    """Class decorator: mark a class as freezable only when passed directly to freeze()."""
+    """Class decorator: mark a class as freezable only when passed directly
+    to shallow_freeze() or deep_freeze()."""
     set_freezable(cls, FREEZABLE_EXPLICIT)
     return cls
 
 
 def frozen(cls):
-    """Class decorator: make a class freezable, then freeze it."""
+    """Class decorator: make a class freezable, then deeply freeze it."""
     set_freezable(cls, FREEZABLE_YES)
-    freeze(cls)
+    deep_freeze(cls)
     return cls
 
 
@@ -105,7 +114,9 @@ class FreezabilityOverride:
 class require_mutable(FreezabilityOverride):
     """Context manager that ensures an object remains mutable (not freezable).
 
-    Raises TypeError if the object is already frozen.
+    Raises TypeError if the object is already frozen.  The check is on
+    shallow frozenness: once an object's own state is locked there is no
+    way to hand back a mutable view of it.
 
     Usage:
         with require_mutable(obj):
@@ -116,16 +127,20 @@ class require_mutable(FreezabilityOverride):
         super().__init__(obj, FREEZABLE_NO)
 
     def __enter__(self):
-        if is_frozen(self._obj):
+        if is_shallow_frozen(self._obj):
             raise TypeError(
                 "cannot require mutability: object is already frozen")
         return super().__enter__()
 
 
 __all__ = [
-    "freeze",
-    "is_frozen",
+    "shallow_freeze",
+    "deep_freeze",
+    "is_shallow_frozen",
+    "is_deep_frozen",
     "set_freezable",
+    "get_freezable",
+    "unset_freezable",
     "NotFreezableError",
     "ImmutableModule",
     "FREEZABLE_YES",
@@ -138,6 +153,8 @@ __all__ = [
     "unfreezable",
     "explicitlyFreezable",
     "frozen",
+    "FreezabilityOverride",
+    "require_mutable",
 ]
 
 __version__ = getattr(_c, "__version__", "1.0")

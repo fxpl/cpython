@@ -1,6 +1,6 @@
 import os
 import unittest
-from immutable import freeze, is_frozen, InterpreterLocal
+from immutable import deep_freeze, is_deep_frozen, InterpreterLocal
 from test.support import import_helper
 
 
@@ -66,50 +66,50 @@ class TestInterpreterLocalFreeze(unittest.TestCase):
 
         c = Container()
         c.field = InterpreterLocal(42)
-        freeze(c)
-        self.assertTrue(is_frozen(c))
+        deep_freeze(c)
+        self.assertTrue(is_deep_frozen(c))
 
-    def test_value_accessible_after_freeze(self):
+    def test_value_accessible_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = InterpreterLocal(42)
-        freeze(c)
+        deep_freeze(c)
         self.assertEqual(c.field.get(), 42)
 
-    def test_value_mutable_after_freeze(self):
+    def test_value_mutable_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = InterpreterLocal(42)
-        freeze(c)
+        deep_freeze(c)
         c.field.set(99)
         self.assertEqual(c.field.get(), 99)
 
-    def test_factory_works_after_freeze(self):
+    def test_factory_works_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = InterpreterLocal(lambda: {})
-        freeze(c)
+        deep_freeze(c)
         result = c.field.get()
         self.assertIsInstance(result, dict)
 
     def test_interpreterlocal_itself_frozen(self):
         field = InterpreterLocal(42)
-        freeze(field)
-        self.assertTrue(is_frozen(field))
+        deep_freeze(field)
+        self.assertTrue(is_deep_frozen(field))
 
-    def test_factory_result_mutable_after_freeze(self):
+    def test_factory_result_mutable_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = InterpreterLocal(lambda: [])
-        freeze(c)
+        deep_freeze(c)
         c.field.get().append("item")
         self.assertEqual(c.field.get(), ["item"])
 
@@ -184,7 +184,7 @@ class TestInterpreterLocalSubinterpreters(unittest.TestCase):
         self.assertEqual(field.get(), 999)
 
         # Freeze so it can be shared directly (immutable sharing)
-        freeze(field)
+        deep_freeze(field)
 
         output = self._run_in_subinterp(
             "print(field.get())\n",
@@ -195,7 +195,7 @@ class TestInterpreterLocalSubinterpreters(unittest.TestCase):
     def test_shared_frozen_object_set_independent(self):
         """Setting a value in the sub-interpreter should not affect main."""
         field = InterpreterLocal(0)
-        freeze(field)
+        deep_freeze(field)
 
         self._run_in_subinterp(
             "field.set(123)\n"
@@ -213,7 +213,7 @@ class TestInterpreterLocalSubinterpreters(unittest.TestCase):
 
         c = Container()
         c.counter = InterpreterLocal(lambda: [])
-        freeze(c)
+        deep_freeze(c)
 
         # Main interpreter uses the field
         c.counter.get().append("main")

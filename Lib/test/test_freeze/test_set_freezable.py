@@ -2,7 +2,7 @@ import gc
 import unittest
 import weakref
 from immutable import (
-    freeze, is_frozen, set_freezable,
+    deep_freeze, is_deep_frozen, set_freezable,
     FREEZABLE_YES, FREEZABLE_NO, FREEZABLE_EXPLICIT, FREEZABLE_PROXY,
 )
 
@@ -22,8 +22,8 @@ class TestSetFreezableYes(unittest.TestCase):
         C = make_freezable_class()
         obj = C()
         set_freezable(obj, FREEZABLE_YES)
-        freeze(obj)
-        self.assertTrue(is_frozen(obj))
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
 
     def test_freeze_as_child_succeeds(self):
         C = make_freezable_class()
@@ -31,8 +31,8 @@ class TestSetFreezableYes(unittest.TestCase):
         child = C()
         parent.child = child
         set_freezable(child, FREEZABLE_YES)
-        freeze(parent)
-        self.assertTrue(is_frozen(child))
+        deep_freeze(parent)
+        self.assertTrue(is_deep_frozen(child))
 
 
 class TestSetFreezableNo(unittest.TestCase):
@@ -43,8 +43,8 @@ class TestSetFreezableNo(unittest.TestCase):
         obj = C()
         set_freezable(obj, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(obj)
-        self.assertFalse(is_frozen(obj))
+            deep_freeze(obj)
+        self.assertFalse(is_deep_frozen(obj))
 
     def test_freeze_as_child_raises(self):
         C = make_freezable_class()
@@ -53,20 +53,20 @@ class TestSetFreezableNo(unittest.TestCase):
         parent.child = child
         set_freezable(child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(parent)
-        self.assertFalse(is_frozen(child))
-        self.assertFalse(is_frozen(parent))
+            deep_freeze(parent)
+        self.assertFalse(is_deep_frozen(child))
+        self.assertFalse(is_deep_frozen(parent))
 
 
 class TestSetFreezableExplicit(unittest.TestCase):
-    """FREEZABLE_EXPLICIT: freezable only when freeze() is called directly on it."""
+    """FREEZABLE_EXPLICIT: freezable only when deep_freeze() is called directly on it."""
 
     def test_direct_freeze_succeeds(self):
         C = make_freezable_class()
         obj = C()
         set_freezable(obj, FREEZABLE_EXPLICIT)
-        freeze(obj)
-        self.assertTrue(is_frozen(obj))
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
 
     def test_child_freeze_raises(self):
         C = make_freezable_class()
@@ -75,8 +75,8 @@ class TestSetFreezableExplicit(unittest.TestCase):
         parent.child = child
         set_freezable(child, FREEZABLE_EXPLICIT)
         with self.assertRaises(TypeError):
-            freeze(parent)
-        self.assertFalse(is_frozen(child))
+            deep_freeze(parent)
+        self.assertFalse(is_deep_frozen(child))
 
 
 class TestSetFreezableProxy(unittest.TestCase):
@@ -128,18 +128,18 @@ class TestSetFreezableEdgeCases(unittest.TestCase):
         obj = C()
         set_freezable(obj, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(obj)
+            deep_freeze(obj)
         # Override to YES
         set_freezable(obj, FREEZABLE_YES)
-        freeze(obj)
-        self.assertTrue(is_frozen(obj))
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
 
     def test_unset_object_uses_default(self):
         # An object with no set_freezable should use existing freeze logic.
         C = make_freezable_class()
         obj = C()
-        freeze(obj)
-        self.assertTrue(is_frozen(obj))
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
 
 
 class TestSetFreezableStorage(unittest.TestCase):
@@ -184,7 +184,7 @@ class TestSetFreezableStorage(unittest.TestCase):
         self.assertFalse(hasattr(obj, '__freezable__'))
         # But the status should still be queryable during freeze.
         with self.assertRaises(TypeError):
-            freeze(obj)
+            deep_freeze(obj)
 
     def test_manual_freezable_attr_respected(self):
         # Manually setting __freezable__ on an object should be respected.
@@ -192,7 +192,7 @@ class TestSetFreezableStorage(unittest.TestCase):
         obj = C()
         obj.__freezable__ = FREEZABLE_NO
         with self.assertRaises(TypeError):
-            freeze(obj)
+            deep_freeze(obj)
 
 
 class TestSetFreezableLifetime(unittest.TestCase):

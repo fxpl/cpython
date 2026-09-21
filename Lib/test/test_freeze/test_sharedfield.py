@@ -1,6 +1,6 @@
 import os
 import unittest
-from immutable import freeze, is_frozen, SharedField, set_freezable, FREEZABLE_NO
+from immutable import deep_freeze, is_deep_frozen, SharedField, set_freezable, FREEZABLE_NO
 from test.support import import_helper
 
 
@@ -31,9 +31,9 @@ class TestSharedFieldBasic(unittest.TestCase):
         with self.assertRaises(TypeError):
             sf.set([1, 2, 3])
 
-    def test_initial_value_is_frozen(self):
+    def test_initial_value_is_deep_frozen(self):
         sf = SharedField(42)
-        self.assertTrue(is_frozen(sf.get()))
+        self.assertTrue(is_deep_frozen(sf.get()))
 
     def test_get_consistent(self):
         sf = SharedField("hello")
@@ -93,62 +93,62 @@ class TestSharedFieldFreeze(unittest.TestCase):
 
         c = Container()
         c.field = SharedField(42)
-        freeze(c)
-        self.assertTrue(is_frozen(c))
+        deep_freeze(c)
+        self.assertTrue(is_deep_frozen(c))
 
-    def test_get_after_freeze(self):
+    def test_get_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = SharedField(42)
-        freeze(c)
+        deep_freeze(c)
         self.assertEqual(c.field.get(), 42)
 
-    def test_set_after_freeze(self):
+    def test_set_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = SharedField(42)
-        freeze(c)
+        deep_freeze(c)
         c.field.set(99)
         self.assertEqual(c.field.get(), 99)
 
-    def test_swap_after_freeze(self):
+    def test_swap_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = SharedField(42)
-        freeze(c)
+        deep_freeze(c)
         old = c.field.swap(99)
         self.assertEqual(old, 42)
         self.assertEqual(c.field.get(), 99)
 
-    def test_compare_and_swap_after_freeze(self):
+    def test_compare_and_swap_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = SharedField(42)
-        freeze(c)
+        deep_freeze(c)
         old = c.field.get()
         self.assertTrue(c.field.compare_and_swap(old, 99))
         self.assertEqual(c.field.get(), 99)
 
     def test_sharedfield_itself_frozen(self):
         sf = SharedField(42)
-        freeze(sf)
-        self.assertTrue(is_frozen(sf))
+        deep_freeze(sf)
+        self.assertTrue(is_deep_frozen(sf))
 
-    def test_set_rejects_mutable_after_freeze(self):
+    def test_set_rejects_mutable_after_deep_freeze(self):
         class Container:
             pass
 
         c = Container()
         c.field = SharedField(42)
-        freeze(c)
+        deep_freeze(c)
         with self.assertRaises(TypeError):
             c.field.set([1, 2, 3])
 
@@ -208,7 +208,7 @@ class TestSharedFieldSubinterpreters(unittest.TestCase):
         """A frozen SharedField shared to a sub-interpreter should
         be readable there."""
         sf = SharedField(42)
-        freeze(sf)
+        deep_freeze(sf)
 
         output = self._run_in_subinterp(
             "print(sf.get())\n",
@@ -220,7 +220,7 @@ class TestSharedFieldSubinterpreters(unittest.TestCase):
         """Setting a SharedField in a sub-interpreter should be
         visible in the main interpreter (shared state)."""
         sf = SharedField(0)
-        freeze(sf)
+        deep_freeze(sf)
 
         self._run_in_subinterp(
             "sf.set(42)\n",
@@ -237,7 +237,7 @@ class TestSharedFieldSubinterpreters(unittest.TestCase):
 
         c = Container()
         c.counter = SharedField(0)
-        freeze(c)
+        deep_freeze(c)
 
         self._run_in_subinterp(
             "c.counter.set(99)\n",

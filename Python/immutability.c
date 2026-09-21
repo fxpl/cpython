@@ -251,6 +251,10 @@ typedef struct shallow_freeze_state_t {
     // A PyList used to track what objects still need to be frozen
     PyObject *pending;
 
+    // Whether the frozen graph should use atomic reference counting.
+    // TODO(immutability): not honoured yet, only plumbed through.
+    int atomic;
+
     // A hashtable with all objects visited by this freeze.
     //
     // These are weakreferences, since we hold references to the root
@@ -294,6 +298,7 @@ static int init_shallow_freeze_state(shallow_freeze_state_t *state) {
     state->pending = NULL;
     state->visited = NULL;
     state->roots = NULL;
+    state->atomic = 0;
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
 #endif
@@ -325,43 +330,52 @@ error:
     return -1;
 }
 
+// Forwards to the real visitproc, noting whether tp_traverse visited the type.
+typedef struct {
+    visitproc visit;
+    void *state;
+    PyObject *type;
+    int type_visited;
+} type_visit_tracker_t;
+
+static int
+track_type_visit(PyObject *op, void *tracker_untyped)
+{
+    type_visit_tracker_t *tracker = (type_visit_tracker_t *)tracker_untyped;
+    if (op == tracker->type) {
+        tracker->type_visited = 1;
+    }
+    return tracker->visit(op, tracker->state);
+}
+
 // Wrapper around tp_traverse that also visits the type object.
 // tp_traverse does not visit the type for non-heap types, but
 // tp_reachable should visit all reachable objects including the type.
 static int
-traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *freeze_state_untyped)
+traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *state)
 {
     PyTypeObject *tp = Py_TYPE(obj);
-
-    // `tp_traverse` of heap types *should* include a
-    // `Py_VISIT(Py_TYPE(self));` since around Python 2.7 but
-    // there are still plenty of types that don't. LLMs currently
-    // also don't do this consistently. So, instead of visiting the
-    // type directly we throw it on to the DFS stack to check the
-    // correct behavior on back traversal.
-    //
-    // Only push the type if it's still mutable and not pending
-    if (!_Py_IsDeepImmutable(tp)) {
-        shallow_freeze_state_t *freeze_state = (shallow_freeze_state_t *)freeze_state_untyped;
-        SUCCEEDS(push(freeze_state->pending, _PyObject_CAST(tp)));
-    }
+    type_visit_tracker_t tracker = {visit, state, _PyObject_CAST(tp), 0};
 
     traverseproc traverse = tp->tp_traverse;
     if (traverse != NULL) {
-        int err = traverse(obj, visit, freeze_state_untyped);
+        int err = traverse(obj, track_type_visit, &tracker);
         if (err) {
             return err;
         }
     }
 
-    // Objects are supposed to visit their types, but most don't. We just
-    // visit it manually, there is no real downside.
-    return visit((PyObject *)Py_TYPE(obj), freeze_state_untyped);
-    // if (!(tp->tp_flags & Py_TPFLAGS_HEAPTYPE)) {
-    // }
-
-error:
-    return -1;
+    // `tp_traverse` of heap types *should* include a `Py_VISIT(Py_TYPE(self))`
+    // since around Python 2.7, but plenty of types still don't. As part of the
+    // visit we also track if the type was found and manually visit it, if not.
+    //
+    // This must go through `visit` rather than touching a worklist directly:
+    // every caller of get_reachable_proc() passes its own state type, and only
+    // its own visitproc knows how to interpret it.
+    if (!tracker.type_visited) {
+        return visit(_PyObject_CAST(tp), state);
+    }
+    return 0;
 }
 
 // Returns the appropriate traversal function for reaching all references
@@ -1724,16 +1738,43 @@ can_view_as_immutable_visit(PyObject *obj, void *arg)
     return 0;
 }
 
-int _PyImmutability_CanViewAsImmutable(PyObject *obj)
+int _PyImmutability_CanViewAsShallowImmutable(PyObject *obj)
 {
-    // Check if the object graph rooted at obj can be viewed as immutable.
-    // An object graph can be viewed as immutable if every reachable object
-    // is either already frozen, or is shallow immutable (its own state
-    // cannot be mutated, though it may reference other objects).
+    // Check if obj itself can be viewed as shallow immutable, that is whether
+    // its own state is immutable by construction. What it references is not
+    // inspected and may well be mutable.
     //
-    // If the graph can be viewed as immutable, it is frozen (to set up
-    // proper refcount management) and 1 is returned.
-    // Returns 0 if the graph cannot be viewed as immutable, -1 on error.
+    // If so, the object is marked shallow immutable and 1 is returned.
+    // Returns 0 if it cannot be viewed as shallow immutable, -1 on error.
+
+    // Already shallow immutable — trivially yes.
+    if (_Py_IsShallowImmutable(obj)) {
+        return 1;
+    }
+
+    struct _Py_immutability_state *imm_state = get_immutable_state();
+    if (imm_state == NULL) {
+        return -1;
+    }
+
+    if (is_immutable_by_construction(imm_state, obj)) {
+        _Py_SetShallowImmutable(obj);
+        return 1;
+    }
+
+    return 0;
+}
+
+int _PyImmutability_CanViewAsDeepImmutable(PyObject *obj)
+{
+    // Check if the object graph rooted at obj can be viewed as deeply
+    // immutable. It can if every reachable object is either already deeply
+    // frozen, or is immutable by construction (its own state cannot be
+    // mutated, though it may reference other objects).
+    //
+    // If the graph can be viewed as deeply immutable, it is deeply frozen
+    // (to set up proper refcount management) and 1 is returned.
+    // Returns 0 if the graph cannot be viewed as deeply immutable, -1 on error.
 
     // Already frozen — trivially yes.
     if (_Py_IsDeepImmutable(obj)) {
@@ -1960,7 +2001,7 @@ finally:
 }
 
 static int
-freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
+freeze_impl(PyObject *const *objs, Py_ssize_t nobjs, int atomic)
 {
     struct _Py_immutability_state* imm_state = NULL;
     imm_state = get_immutable_state();
@@ -1971,10 +2012,11 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
     int result = 0;
     PyObject *item = NULL;
     TRACE_MERMAID_START();
-    
+
     // Initialize the freeze state
     shallow_freeze_state_t state;
     SUCCEEDS(init_shallow_freeze_state(&state));
+    state.atomic = atomic;
 
     // Register all roots and push onto the DFS stack
     for (Py_ssize_t i = 0; i < nobjs; i++) {
@@ -2079,20 +2121,85 @@ finally:
     return result;
 }
 
-// Main entry point to freeze an object and everything it can reach.
-int _PyImmutability_Freeze(PyObject* obj)
+// Make the given objects shallow immutable, without touching what they
+// reference. A shallow immutable object may still reach mutable state, so it
+// gets neither the deep flag nor any SCC or atomic refcount setup.
+static int
+shallow_freeze_impl(PyObject *const *objs, Py_ssize_t nobjs)
+{
+    struct _Py_immutability_state *imm_state = get_immutable_state();
+    if (imm_state == NULL) {
+        return -1;
+    }
+
+    int result = 0;
+    shallow_freeze_state_t state;
+    SUCCEEDS(init_shallow_freeze_state(&state));
+
+    // Every object handed to shallow_freeze() is a root of this call, so
+    // EXPLICIT objects are freezable here.
+    for (Py_ssize_t i = 0; i < nobjs; i++) {
+        if (_Py_hashtable_set(state.roots, objs[i], objs[i]) < 0) {
+            PyErr_NoMemory();
+            goto error;
+        }
+    }
+
+    // Late-init: mark importlib mutable state as not freezable.
+    if (!imm_state->late_init_done) {
+        late_init(imm_state);
+    }
+
+    for (Py_ssize_t i = 0; i < nobjs; i++) {
+        if (_Py_IsShallowImmutable(objs[i])) {
+            continue;
+        }
+
+        SUCCEEDS(check_freezable(imm_state, objs[i], &state));
+        SUCCEEDS(check_pre_freeze_hook(imm_state, objs[i]));
+
+        _Py_SetShallowImmutable(objs[i]);
+    }
+
+    goto finally;
+error:
+    debug("Error during shallow freeze\n");
+    result = -1;
+finally:
+    dealloc_shallow_freeze_state(&state);
+    return result;
+}
+
+// Main entry point to make a single object shallow immutable.
+int _PyImmutability_ShallowFreeze(PyObject* obj)
+{
+    if (_Py_IsShallowImmutable(obj)) {
+        return 0;
+    }
+    return shallow_freeze_impl(&obj, 1);
+}
+
+// Make several objects shallow immutable.
+// All provided objects are treated as roots for EXPLICIT freezable checks.
+int _PyImmutability_ShallowFreezeMany(PyObject *const *objs, Py_ssize_t nobjs)
+{
+    return shallow_freeze_impl(objs, nobjs);
+}
+
+// Main entry point to deeply freeze an object and everything it can reach.
+int _PyImmutability_DeepFreeze(PyObject* obj, int atomic)
 {
     if(_Py_IsDeepImmutable(obj)){
         return 0;
     }
-    return freeze_impl(&obj, 1);
+    return freeze_impl(&obj, 1, atomic);
 }
 
-// Freeze multiple root objects and their reachable graphs together.
+// Deeply freeze multiple root objects and their reachable graphs together.
 // All provided objects are treated as roots for EXPLICIT freezable checks.
-int _PyImmutability_FreezeMany(PyObject *const *objs, Py_ssize_t nobjs)
+int _PyImmutability_DeepFreezeMany(PyObject *const *objs, Py_ssize_t nobjs, int atomic)
 {
-    return freeze_impl(objs, nobjs);
+    return freeze_impl(objs, nobjs, atomic);
 }
 
 // TODOs:

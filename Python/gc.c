@@ -19,9 +19,9 @@
 
 static inline Py_ALWAYS_INLINE int _Py_PyronaIgnoreObj(PyObject *op)
 {
-    // Some atomic RCed objects could probably be investigated but the GC,
-    // but for now this is a good enough heuristic.
-    return _Py_IsDeepImmutable(op) || _Py_NeedsAtomicRC(op);
+    // Deeply immutable objects are untracked by the freeze (see scc_init) and
+    // their lifetime is handed to SCC refcounting instead.
+    return _Py_IsDeepImmutable(op);
 }
 #define _Py_PyronaIgnoreObj(op) _Py_PyronaIgnoreObj(_PyObject_CAST(op))
 #else

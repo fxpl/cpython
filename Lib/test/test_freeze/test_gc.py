@@ -1,6 +1,6 @@
 from gc import collect
 import unittest
-from immutable import freeze
+from immutable import deep_freeze
 
 class GCInteropTest(unittest.TestCase):
   def test_collect(self):
@@ -9,6 +9,6 @@ class GCInteropTest(unittest.TestCase):
     # Change generation
     collect()
     # Freeze it
-    freeze(a)
+    deep_freeze(a)
     # f
     collect()

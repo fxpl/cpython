@@ -4,7 +4,7 @@ import gc
 import unittest
 import weakref
 from immutable import (
-    freeze, is_frozen, set_freezable,
+    deep_freeze, is_deep_frozen, set_freezable,
     FREEZABLE_NO, FREEZABLE_YES,
 )
 
@@ -27,9 +27,9 @@ class TestRollbackSingleRoot(unittest.TestCase):
         parent.child = child
         set_freezable(child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(parent)
-        self.assertFalse(is_frozen(parent))
-        self.assertFalse(is_frozen(child))
+            deep_freeze(parent)
+        self.assertFalse(is_deep_frozen(parent))
+        self.assertFalse(is_deep_frozen(child))
 
     def test_deep_chain_leaf_not_freezable(self):
         """a -> b -> c -> bad: all should be unfrozen."""
@@ -40,19 +40,19 @@ class TestRollbackSingleRoot(unittest.TestCase):
         c.child = bad
         set_freezable(bad, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(a)
-        self.assertFalse(is_frozen(a))
-        self.assertFalse(is_frozen(b))
-        self.assertFalse(is_frozen(c))
-        self.assertFalse(is_frozen(bad))
+            deep_freeze(a)
+        self.assertFalse(is_deep_frozen(a))
+        self.assertFalse(is_deep_frozen(b))
+        self.assertFalse(is_deep_frozen(c))
+        self.assertFalse(is_deep_frozen(bad))
 
     def test_not_freezable_root(self):
         C = make_freezable_class()
         obj = C()
         set_freezable(obj, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(obj)
-        self.assertFalse(is_frozen(obj))
+            deep_freeze(obj)
+        self.assertFalse(is_deep_frozen(obj))
 
 
 class TestRollbackCycle(unittest.TestCase):
@@ -67,10 +67,10 @@ class TestRollbackCycle(unittest.TestCase):
         b.bad = bad
         set_freezable(bad, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(a)
-        self.assertFalse(is_frozen(a))
-        self.assertFalse(is_frozen(b))
-        self.assertFalse(is_frozen(bad))
+            deep_freeze(a)
+        self.assertFalse(is_deep_frozen(a))
+        self.assertFalse(is_deep_frozen(b))
+        self.assertFalse(is_deep_frozen(bad))
 
     def test_three_cycle_with_not_freezable_child(self):
         """a -> b -> c -> a, c -> bad: all unfrozen."""
@@ -82,11 +82,11 @@ class TestRollbackCycle(unittest.TestCase):
         c.bad = bad
         set_freezable(bad, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(a)
-        self.assertFalse(is_frozen(a))
-        self.assertFalse(is_frozen(b))
-        self.assertFalse(is_frozen(c))
-        self.assertFalse(is_frozen(bad))
+            deep_freeze(a)
+        self.assertFalse(is_deep_frozen(a))
+        self.assertFalse(is_deep_frozen(b))
+        self.assertFalse(is_deep_frozen(c))
+        self.assertFalse(is_deep_frozen(bad))
 
 
 class TestRollbackPreservesExisting(unittest.TestCase):
@@ -95,18 +95,18 @@ class TestRollbackPreservesExisting(unittest.TestCase):
     def test_previously_frozen_unaffected(self):
         C = make_freezable_class()
         already = C()
-        freeze(already)
-        self.assertTrue(is_frozen(already))
+        deep_freeze(already)
+        self.assertTrue(is_deep_frozen(already))
 
         parent = C()
         child = C()
         parent.child = child
         set_freezable(child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(parent)
-        self.assertFalse(is_frozen(parent))
+            deep_freeze(parent)
+        self.assertFalse(is_deep_frozen(parent))
         # The previously-frozen object should still be frozen.
-        self.assertTrue(is_frozen(already))
+        self.assertTrue(is_deep_frozen(already))
 
 
 class TestRollbackNormalFreezeStillWorks(unittest.TestCase):
@@ -119,13 +119,13 @@ class TestRollbackNormalFreezeStillWorks(unittest.TestCase):
         parent = C()
         parent.child = bad
         with self.assertRaises(TypeError):
-            freeze(parent)
-        self.assertFalse(is_frozen(parent))
+            deep_freeze(parent)
+        self.assertFalse(is_deep_frozen(parent))
 
         # Now freeze something else successfully
         good = C()
-        freeze(good)
-        self.assertTrue(is_frozen(good))
+        deep_freeze(good)
+        self.assertTrue(is_deep_frozen(good))
 
     def test_refreeze_after_rollback(self):
         """Object that was rolled back can be frozen after removing the blocker."""
@@ -135,13 +135,13 @@ class TestRollbackNormalFreezeStillWorks(unittest.TestCase):
         parent.child = child
         set_freezable(child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(parent)
-        self.assertFalse(is_frozen(parent))
+            deep_freeze(parent)
+        self.assertFalse(is_deep_frozen(parent))
 
         # Remove the blocker and try again
         set_freezable(child, FREEZABLE_YES)
-        freeze(parent)
-        self.assertTrue(is_frozen(parent))
+        deep_freeze(parent)
+        self.assertTrue(is_deep_frozen(parent))
 
 
 class TestRollbackRefcounts(unittest.TestCase):
@@ -156,7 +156,7 @@ class TestRollbackRefcounts(unittest.TestCase):
         wr = weakref.ref(parent)
         set_freezable(child, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(parent)
+            deep_freeze(parent)
         del parent, child
         gc.collect()
         self.assertIsNone(wr())
@@ -173,7 +173,7 @@ class TestRollbackRefcounts(unittest.TestCase):
         wr_c = weakref.ref(c)
         set_freezable(bad, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(a)
+            deep_freeze(a)
         del a, b, c, bad
         gc.collect()
         self.assertIsNone(wr_a())
@@ -191,7 +191,7 @@ class TestRollbackRefcounts(unittest.TestCase):
         wr_b = weakref.ref(b)
         set_freezable(bad, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(a)
+            deep_freeze(a)
         del a, b, bad
         gc.collect()
         self.assertIsNone(wr_a())
@@ -210,7 +210,7 @@ class TestRollbackRefcounts(unittest.TestCase):
         wr_c = weakref.ref(c)
         set_freezable(bad, FREEZABLE_NO)
         with self.assertRaises(TypeError):
-            freeze(a)
+            deep_freeze(a)
         del a, b, c, bad
         gc.collect()
         self.assertIsNone(wr_a())
@@ -229,9 +229,9 @@ class TestRollbackRefcounts(unittest.TestCase):
         wr_holder = weakref.ref(holder)
         wr_target = weakref.ref(target)
         with self.assertRaises(TypeError):
-            freeze(holder)
-        self.assertFalse(is_frozen(holder))
-        self.assertFalse(is_frozen(target))
+            deep_freeze(holder)
+        self.assertFalse(is_deep_frozen(holder))
+        self.assertFalse(is_deep_frozen(target))
         del holder, target, bad
         gc.collect()
         self.assertIsNone(wr_holder())
