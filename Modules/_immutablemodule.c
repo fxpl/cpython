@@ -739,6 +739,18 @@ immutable_exec(PyObject *module) {
         return -1;
     }
 
+    // Deeply frozen objects are only shared between interpreters on builds
+    // that carry the SCC refcounting, which excludes free-threaded builds.
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    PyObject *cross_interpreter_sharing = Py_True;
+#else
+    PyObject *cross_interpreter_sharing = Py_False;
+#endif
+    if (PyModule_AddObjectRef(module, "_cross_interpreter_sharing",
+                              cross_interpreter_sharing) < 0) {
+        return -1;
+    }
+
     return 0;
 }
 

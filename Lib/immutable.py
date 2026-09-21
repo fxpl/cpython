@@ -30,6 +30,9 @@ FREEZABLE_PROXY = _c.FREEZABLE_PROXY
 InterpreterLocal = _c.InterpreterLocal
 SharedField = _c.SharedField
 
+# True when this build can share deeply frozen objects between interpreters.
+_cross_interpreter_sharing = _c._cross_interpreter_sharing
+
 
 # Artifact[Benchmarking]: The implementation of immutability related decorators
 def freezable(cls):
