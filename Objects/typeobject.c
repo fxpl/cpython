@@ -96,7 +96,7 @@ types_world_is_stopped(void)
 // PyType_FromMetaclass() to indicate that a newly initialized type might be
 // revealed.  We only have ob_flags on 64-bit platforms.
 #if SIZEOF_VOID_P > 4
-#define TYPE_IS_REVEALED(tp) ((((PyObject *)(tp))->ob_flags & _Py_TYPE_REVEALED_FLAG) != 0)
+#define TYPE_IS_REVEALED(tp) (( _Py_OB_FLAGS_LOAD(tp) & _Py_TYPE_REVEALED_FLAG) != 0)
 #else
 #define TYPE_IS_REVEALED(tp) 0
 #endif
@@ -4980,7 +4980,7 @@ type_new_impl(type_new_ctx *ctx)
     assert(_PyType_CheckConsistency(type));
 #if defined(Py_GIL_DISABLED) && defined(Py_DEBUG) && SIZEOF_VOID_P > 4
     // After this point, other threads can potentally use this type.
-    ((PyObject*)type)->ob_flags |= _Py_TYPE_REVEALED_FLAG;
+    _Py_OB_FLAG_ADD(type, _Py_TYPE_REVEALED_FLAG);
 #endif
 
     return (PyObject *)type;
@@ -5698,7 +5698,7 @@ PyType_FromMetaclass(
     assert(_PyType_CheckConsistency(type));
 #if defined(Py_GIL_DISABLED) && defined(Py_DEBUG) && SIZEOF_VOID_P > 4
     // After this point, other threads can potentally use this type.
-    ((PyObject*)type)->ob_flags |= _Py_TYPE_REVEALED_FLAG;
+    _Py_OB_FLAG_ADD(type, _Py_TYPE_REVEALED_FLAG);
 #endif
 
  finally:

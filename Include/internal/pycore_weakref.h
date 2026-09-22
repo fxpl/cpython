@@ -69,13 +69,12 @@ static inline int _is_dead(PyObject *obj)
     return shared == _Py_REF_SHARED(0, _Py_REF_MERGED);
 #else
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsImmutableRC(obj)) {
+        return _Py_IsDead_Immutable(obj);
+    }
     if (_Py_NeedsAtomicRC(obj)) {
-        if (_Py_NeedsImmutableRC(obj)) {
-            return _Py_IsDead_Immutable(obj);
-        } else {
-            Py_ssize_t rc = _Py_atomic_load_uint32(&obj->ob_refcnt);
-            return rc == 0;
-        }
+        Py_ssize_t rc = _Py_atomic_load_uint32(&obj->ob_refcnt);
+        return rc == 0;
     }
 #endif // _Py_PYRONA_INTERPRETER_SHARING
     return (Py_REFCNT(obj) == 0);
@@ -95,7 +94,7 @@ static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
     }
 #else
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
-    if (_Py_NeedsAtomicRC(obj)) {
+    if (_Py_NeedsAtomicRC(obj) || _Py_NeedsImmutableRC(obj)) {
         // Need to check again because the object could have been deallocated
         if (ref->wr_object == Py_None) {
             // clear_weakref() was called
@@ -108,10 +107,14 @@ static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
             } else {
                 return NULL;
             }
-        } else {
+        }
+
+        if (_Py_NeedsAtomicRC(obj)) {
             uint32_t old =  _Py_atomic_add_uint32(&obj->ob_refcnt, (PY_UINT32_T)1);
             if (old >= 0) {
-                _Py_Dealloc(obj);
+                return obj;
+            } else {
+                return NULL;
             }
         }
     }

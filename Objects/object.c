@@ -42,6 +42,16 @@
 /* Defined in tracemalloc.c */
 extern void _PyMem_DumpTraceback(int fd, const void *ptr);
 
+uint16_t _Py_LoadOpFlags(PyObject *op) {
+    return _Py_OB_FLAGS_LOAD(op);
+}
+
+void _Py_OpFlagsAdd(PyObject *op, uint16_t flag) {
+    _Py_OB_FLAG_ADD(op, flag);
+}
+void _Py_OpFlagsRmv(PyObject *op, uint16_t flag) {
+    _Py_OB_FLAG_REMOVE(op, flag);
+}
 
 int
 _PyObject_CheckConsistency(PyObject *op, int check_content)
@@ -2713,7 +2723,7 @@ _Py_SetImmortalUntracked(PyObject *op)
     _Py_atomic_or_uint8(&op->ob_gc_bits, _PyGC_BITS_DEFERRED);
 #elif SIZEOF_VOID_P > 4
     // Preserve existing flag
-    op->ob_flags |= _Py_IMMORTAL_FLAGS;
+    _Py_OB_FLAG_ADD(op, _Py_IMMORTAL_FLAGS);
     op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;
 #else
     op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;

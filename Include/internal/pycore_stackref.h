@@ -606,7 +606,7 @@ PyStackRef_FromPyObjectSteal(PyObject *obj)
 {
     assert(obj != NULL);
 #if SIZEOF_VOID_P > 4
-    unsigned int tag = obj->ob_flags & Py_TAG_REFCNT;
+    unsigned int tag = _Py_OB_FLAGS_LOAD(obj) & Py_TAG_REFCNT;
 #else
     unsigned int tag = _Py_IsImmortal(obj) ? Py_TAG_REFCNT : 0;
 #endif

@@ -412,12 +412,12 @@ get_reachable_proc(PyTypeObject *tp)
 static inline void _Py_SetShallowImmutable(PyObject *op)
 {
     if (op) {
-        op->ob_flags |= _Py_IMMUTABLE_FLAG;
+        _Py_OB_FLAG_ADD(op, _Py_IMMUTABLE_FLAG);
     }
 }
 static inline void _Py_SetDeepImmutable(PyObject *op)
 {
-    op->ob_flags |= _Py_IMMUTABLE_DEPTH_FLAG;
+    _Py_OB_FLAG_ADD(op, _Py_IMMUTABLE_DEPTH_FLAG);
 }
 
 static int freeze_visit(PyObject *obj, void *freeze_state_untyped)
@@ -534,11 +534,15 @@ int _PyImmutability_SetFreezable(PyObject *obj, _Py_freezable_status status)
     }
 
     // If the object doesn't support attribute setting, fall back to ob_flags.
-    uint16_t flags = obj->ob_flags;
-    flags &= ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
-    flags |= _Py_FREEZABLE_SET_FLAG |
-             ((status << _Py_FREEZABLE_STATUS_SHIFT) & _Py_FREEZABLE_STATUS_MASK);
-    obj->ob_flags = flags;
+    uint16_t old_flags = _Py_atomic_load_uint16(&obj->ob_flags);
+    while (true) {
+        uint16_t new_flags = (old_flags & ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK));
+        new_flags |= _Py_FREEZABLE_SET_FLAG |
+                 ((status << _Py_FREEZABLE_STATUS_SHIFT) & _Py_FREEZABLE_STATUS_MASK);
+        if (_Py_atomic_compare_exchange_uint16(&obj->ob_flags, &old_flags, new_flags)) {
+            break;
+        }
+    };
     return 0;
 }
 
@@ -563,11 +567,7 @@ int _PyImmutability_UnsetFreezable(PyObject *obj)
     }
 
 clear_flags:
-    {
-        uint16_t flags = obj->ob_flags;
-        flags &= ~(_Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
-        obj->ob_flags = flags;
-    }
+    _Py_OB_FLAG_REMOVE(obj, _Py_FREEZABLE_SET_FLAG | _Py_FREEZABLE_STATUS_MASK);
     return 0;
 }
 
@@ -577,7 +577,7 @@ clear_flags:
 static inline int
 _get_freezable_from_flags(PyObject *obj)
 {
-    uint16_t flags = obj->ob_flags;
+    uint16_t flags = _Py_OB_FLAGS_LOAD(obj);
     if (flags & _Py_FREEZABLE_SET_FLAG) {
         return (flags & _Py_FREEZABLE_STATUS_MASK) >> _Py_FREEZABLE_STATUS_SHIFT;
     }
@@ -966,12 +966,12 @@ static void scc_init_non_trivial(PyObject* obj)
     }
 
     // Mark this object as being part of an SCC
-    obj->ob_flags |= _Py_IMMUTABLE_SCC_FLAG;
+    _Py_OB_FLAG_ADD(obj, _Py_IMMUTABLE_SCC_FLAG);
 }
 
 static void scc_return_to_gc(PyObject* op)
 {
-    op->ob_flags &= ~_Py_IMMUTABLE_SCC_FLAG;
+    _Py_OB_FLAG_REMOVE(op, _Py_IMMUTABLE_SCC_FLAG);
     set_scc_next(op, NULL);
     scc_set_representative(op, NULL);
     _PyObject_GC_TRACK(op);
@@ -1151,7 +1151,7 @@ static void scc_complete(PyObject *obj, scc_build_state_t *state) {
     // Single object SCCs are tagged for normal atomic reference counting
     if (c == NULL) {
         debug_obj("Completing SCC %s (%p) with single member rc = %zd\n", obj, Py_REFCNT(obj));
-        obj->ob_flags |= _Py_ATOMIC_RC_FLAG;
+        _Py_OB_FLAG_ADD(obj, _Py_ATOMIC_RC_FLAG);
         scc_set_representative(obj, obj);
         return;
     }
@@ -1163,7 +1163,7 @@ static void scc_complete(PyObject *obj, scc_build_state_t *state) {
         debug("Adding %p to SCC %p\n", c, obj);
         rc += Py_REFCNT(c);
         // Mark this object as being RCed as part of an SCC
-        c->ob_flags |= (_Py_IMMUTABLE_SCC_FLAG | _Py_ATOMIC_RC_FLAG);
+        _Py_OB_FLAG_ADD(c, (_Py_IMMUTABLE_SCC_FLAG | _Py_ATOMIC_RC_FLAG));
         scc_set_representative(c, obj);
         c = get_scc_next(c);
         count++;
@@ -1171,7 +1171,7 @@ static void scc_complete(PyObject *obj, scc_build_state_t *state) {
     // We will have left an RC live for each element in the SCC, so
     // we need to remove that from the SCCs refcount.
     obj->ob_refcnt = rc - (count - 1);
-    c->ob_flags |= (_Py_IMMUTABLE_SCC_FLAG | _Py_ATOMIC_RC_FLAG);
+    _Py_OB_FLAG_ADD(c, (_Py_IMMUTABLE_SCC_FLAG | _Py_ATOMIC_RC_FLAG));
     scc_set_representative(obj, obj);
 
     debug_obj("Completed SCC %s (%p) with %zu members with rc %zu \n", obj, count, rc - (count - 1));
@@ -1303,7 +1303,7 @@ static int scc_build(_Py_hashtable_t *visited_set, PyObject *const *roots, int n
             scc_init(item);
             visited_state = SCC_VISITED_PENDING;
         } else {
-            item->ob_flags |= _Py_ATOMIC_RC_FLAG;
+            _Py_OB_FLAG_ADD(item, _Py_ATOMIC_RC_FLAG);
             visited_state = SCC_VISITED_DONE;
         }
 
@@ -1345,7 +1345,7 @@ static int _dissolve_scc_reconstruct_rcs_visit(PyObject *obj, void *scc_rep) {
     if (obj == NULL)
         return 0;
 
-    if ((obj->ob_flags & _Py_IMMUTABLE_SCC_FLAG) == 0)
+    if ((_Py_OB_FLAGS_LOAD(obj) & _Py_IMMUTABLE_SCC_FLAG) == 0)
         return 0;
 
     PyObject* rep = scc_get_representative(obj);
@@ -1359,7 +1359,7 @@ static int _dissolve_scc_reconstruct_rcs_visit(PyObject *obj, void *scc_rep) {
 }
 
 static void scc_reconstruct_rcs(PyObject *obj, scc_details_t *details) {
-    assert(obj->ob_flags & _Py_IMMUTABLE_SCC_FLAG);
+    assert(_Py_OB_FLAGS_LOAD(obj) & _Py_IMMUTABLE_SCC_FLAG);
     PyObject* scc_rep = scc_get_representative(obj);
 
     details->has_weakreferences = 0;
@@ -1484,7 +1484,7 @@ static void scc_unfreeze_and_finalize(PyObject *obj) {
 int _Py_DecRef_Immutable(PyObject *op)
 {
     assert(_Py_IsDeepImmutable(op));
-    if (op->ob_flags & _Py_IMMUTABLE_SCC_FLAG) {
+    if (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_SCC_FLAG) {
         op = scc_get_representative(op);
     }
     assert(_Py_IsDeepImmutable(op));
@@ -1495,7 +1495,7 @@ int _Py_DecRef_Immutable(PyObject *op)
         return 0;
     }
 
-    if (op->ob_flags & _Py_IMMUTABLE_SCC_FLAG) {
+    if (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_SCC_FLAG) {
         if (!weakref_handle_callbacks_scc(op)) {
             // Callbacks were scheduled, deallocation will be triggered again.
             return 0;
@@ -1525,7 +1525,7 @@ int _Py_DecRef_Immutable(PyObject *op)
 void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 {
     assert(_Py_IsDeepImmutable(op));
-    if (op->ob_flags & _Py_IMMUTABLE_SCC_FLAG) {
+    if (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_SCC_FLAG) {
         op = scc_get_representative(op);
     }
     assert(_Py_IsDeepImmutable(op));
@@ -1540,7 +1540,7 @@ void _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t increment)
 int _Py_TryIncref_Immutable(PyObject *op)
 {
     assert(_Py_IsDeepImmutable(op));
-    if (op->ob_flags & _Py_IMMUTABLE_SCC_FLAG) {
+    if (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_SCC_FLAG) {
         op = scc_get_representative(op);
     }
     assert(_Py_IsDeepImmutable(op));
@@ -1559,7 +1559,7 @@ int _Py_TryIncref_Immutable(PyObject *op)
 int _Py_IsDead_Immutable(PyObject *op)
 {
     assert(_Py_IsDeepImmutable(op));
-    if (op->ob_flags & _Py_IMMUTABLE_SCC_FLAG) {
+    if (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_SCC_FLAG) {
         op = scc_get_representative(op);
     }
     assert(_Py_IsDeepImmutable(op));
@@ -1886,14 +1886,14 @@ static int check_pre_freeze_hook(struct _Py_immutability_state *imm_state, PyObj
     }
 
     // Check if the pre-freeze hook already ran for this object
-    if ((obj->ob_flags & _Py_PREFREEZE_RAN_FLAG) != 0) {
+    if ((_Py_OB_FLAGS_LOAD(obj) & _Py_PREFREEZE_RAN_FLAG) != 0) {
         return 0;
     }
 
     // Mark pre-freeze hook as completed. This has to be set before calling
     // the pre-freeze hook in case the pre-freeze hook reenters to prevent
     // an infinite loop.
-    obj->ob_flags |= _Py_PREFREEZE_RAN_FLAG;
+    _Py_OB_FLAG_ADD(obj, _Py_PREFREEZE_RAN_FLAG);
 
     // Run the pre-freeze hook if it's present.
     return _run_pre_freeze_hook(imm_state, obj);

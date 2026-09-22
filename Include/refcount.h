@@ -175,35 +175,57 @@ PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
               (((refcnt) << _Py_REF_SHARED_SHIFT) + (flags))
 #endif  // Py_GIL_DISABLED
 
+PyAPI_FUNC(uint16_t) _Py_LoadOpFlags(PyObject *);
+PyAPI_FUNC(void) _Py_OpFlagsAdd(PyObject *, uint16_t);
+PyAPI_FUNC(void) _Py_OpFlagsRmv(PyObject *, uint16_t);
+
+#ifdef Py_LIMITED_API
+#define _Py_OB_FLAG_ADD(op, flag) _Py_OpFlagsAdd(_PyObject_CAST(op), flag);
+#define _Py_OB_FLAG_REMOVE(op, flag) _Py_OpFlagsRmv(_PyObject_CAST(op), flag);
+#define _Py_OB_FLAGS_LOAD(op) _Py_LoadOpFlags(_PyObject_CAST(op))
+#else // !Py_LIMITED_API
+#define _Py_OB_FLAGS_LOAD(op) _Py_atomic_load_uint16_relaxed(&(op)->ob_flags)
+
+#ifdef Py_GIL_DISABLED
+#define _Py_OB_FLAG_ADD(op, flag) _Py_atomic_or_uint16(&_PyObject_CAST(op)->ob_flags, (flag))
+#define _Py_OB_FLAG_REMOVE(op, flag) _Py_atomic_and_uint16(&_PyObject_CAST(op)->ob_flags, ~(flag))
+#else // !Py_GIL_DISABLED
+#define _Py_OB_FLAG_ADD(op, flag) _PyObject_CAST(op)->ob_flags |= (flag)
+#define _Py_OB_FLAG_REMOVE(op, flag) _PyObject_CAST(op)->ob_flags &= ~(flag)
+#endif // Py_GIL_DISABLED
+
+#endif // Py_LIMITED_API
+
+
 static inline Py_ALWAYS_INLINE int _Py_IsShallowImmutable(PyObject *op)
 {
-    return (op->ob_flags & _Py_IMMUTABLE_MASK) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_MASK) != 0;
 }
 #define _Py_IsShallowImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
 
 static inline Py_ALWAYS_INLINE int _Py_IsDeepImmutable(PyObject *op)
 {
-    return (op->ob_flags & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
 }
 #define _Py_IsDeepImmutable(op) _Py_IsDeepImmutable(_PyObject_CAST(op))
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 static inline Py_ALWAYS_INLINE int _Py_NeedsAtomicRC(PyObject *op)
 {
-    return (op->ob_flags & (_Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & (_Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
 }
 #define _Py_NeedsAtomicRC(op) _Py_NeedsAtomicRC(_PyObject_CAST(op))
 
 static inline Py_ALWAYS_INLINE int _Py_NeedsImmutableRC(PyObject *op)
 {
-    return (op->ob_flags & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
 }
 #define _Py_NeedsImmutableRC(op) _Py_NeedsImmutableRC(_PyObject_CAST(op))
 
 static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
 {
     // TODO(xFrednet): _Py_IMMUTABLE_MASK should be removed from this
-    return (op->ob_flags & (_Py_IMMORTAL_FLAGS | _Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & (_Py_IMMORTAL_FLAGS | _Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
 }
 #define _Py_NeedsSlowRcBranch(op) _Py_NeedsSlowRcBranch(_PyObject_CAST(op))
 
@@ -212,7 +234,7 @@ static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
 static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
 {
     // On Free-threading only immortal objects require a slow RC branch
-    return (op->ob_flags & _Py_IMMORTAL_FLAGS) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMORTAL_FLAGS) != 0;
 }
 #define _Py_NeedsSlowRcBranch(op) _Py_NeedsSlowRcBranch(_PyObject_CAST(op))
 
@@ -226,14 +248,14 @@ static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
 
 static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
 {
-    op->ob_flags &= ~_Py_IMMUTABLE_CLEAR_MASK;
+    _Py_OB_FLAG_REMOVE(op, _Py_IMMUTABLE_CLEAR_MASK);
 }
 
 // Only for objects that are being deallocated: also drops the freeze
 // bookkeeping so a recycled allocation starts from a clean slate.
 static inline Py_ALWAYS_INLINE void _Py_RESET_IMMUTABLE(PyObject *op)
 {
-    op->ob_flags &= ~_Py_IMMUTABLE_RESET_MASK;
+    _Py_OB_FLAG_REMOVE(op, _Py_IMMUTABLE_RESET_MASK);
 }
 
 // Py_REFCNT() implementation for the stable ABI
@@ -278,7 +300,7 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmortal(PyObject *op)
 static inline Py_ALWAYS_INLINE int _Py_IsStaticImmortal(PyObject *op)
 {
 #if defined(Py_GIL_DISABLED) || SIZEOF_VOID_P > 4
-    return (op->ob_flags & _Py_STATICALLY_ALLOCATED_FLAG) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_STATICALLY_ALLOCATED_FLAG) != 0;
 #else
     return op->ob_refcnt >= _Py_STATIC_IMMORTAL_MINIMUM_REFCNT;
 #endif
@@ -306,7 +328,7 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
             return;
         }
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
-        if (_Py_NeedsAtomicRC(ob)) {
+        if (_Py_NeedsImmutableRC(ob)) {
             // TODO This assertion is not valid as refcount overflows can trigger the
             // PyImmortalOrImmutable check to fire.
     
@@ -323,8 +345,9 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     
             // TODO(Immutable): Care should be taken to make the whole SCC mutable
             // again if needed.
-            assert(!_Py_NeedsImmutableRC(ob));
-
+            assert(0);
+        }
+        if (_Py_NeedsAtomicRC(ob)) {
 #ifndef Py_LIMITED_API
             _Py_atomic_store_uint32_relaxed(&ob->ob_refcnt, (PY_UINT32_T)refcnt);
 #else
@@ -464,12 +487,12 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 #ifndef Py_LIMITED_API
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
         // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
+        if (_Py_NeedsImmutableRC(op)) {
+            _Py_RefcntAdd_Immutable(op, 1);
+            return;
+        }
         if (_Py_NeedsAtomicRC(op)) {
-            if (_Py_NeedsImmutableRC(op)) {
-                _Py_RefcntAdd_Immutable(op, 1);
-            } else {
-                _Py_atomic_add_uint32(&op->ob_refcnt, 1);
-            }
+            _Py_atomic_add_uint32(&op->ob_refcnt, 1);
             return;
         }
 #endif
@@ -596,20 +619,18 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
             return;
         }
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
-        if (_Py_NeedsAtomicRC(op))
-        {
-            // Deallocating the SCC root also needs special handling.
-            if (_Py_NeedsImmutableRC(op)) {
-                if (_Py_DecRef_Immutable(op)) {
-                    _Py_Dealloc(op);
-                }
-            } else {
-                // A previous value of 1 means the new value is now 0
-                uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
-                assert(old > 0);
-                if (old == 1) {
-                    _Py_Dealloc(op);
-                }
+        if (_Py_NeedsImmutableRC(op)) {
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+            return;
+        }
+        if (_Py_NeedsAtomicRC(op)) {
+            // A previous value of 1 means the new value is now 0
+            uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+            assert(old > 0);
+            if (old == 1) {
+                _Py_Dealloc(op);
             }
             return;
         }
@@ -638,20 +659,19 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 #ifndef Py_LIMITED_API
         // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_DECREF
+        if (_Py_NeedsImmutableRC(op))
+        {
+            if (_Py_DecRef_Immutable(op)) {
+                _Py_Dealloc(op);
+            }
+            return;
+        }
         if (_Py_NeedsAtomicRC(op)) {
-            // Deallocating the SCC root also needs special handling.
-            if (_Py_NeedsImmutableRC(op))
-            {
-                if (_Py_DecRef_Immutable(op)) {
-                    _Py_Dealloc(op);
-                }
-            } else {
-                // A previous value of 1 means the new value is now 0
-                uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
-                assert(old > 0);
-                if (old == 1) {
-                    _Py_Dealloc(op);
-                }
+            // A previous value of 1 means the new value is now 0
+            uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+            assert(old > 0);
+            if (old == 1) {
+                _Py_Dealloc(op);
             }
             return;
         }

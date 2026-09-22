@@ -78,22 +78,22 @@
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 #define _Py_DECREF_PYRONA(arg, dealloc) \
+    if (_Py_NeedsImmutableRC(arg)) { \
+        if (_Py_DecRef_Immutable(arg)) { \
+            _Py_CLEAR_IMMUTABLE(arg); \
+            _PyReftracerTrack(arg, PyRefTracer_DESTROY); \
+            destructor d = (destructor)(dealloc); \
+            d(arg); \
+        } \
+        break; \
+    } \
     if (_Py_NeedsAtomicRC(arg)) { \
-        if (_Py_NeedsImmutableRC(arg)) { \
-            if (_Py_DecRef_Immutable(arg)) { \
-                _Py_CLEAR_IMMUTABLE(arg); \
-                _PyReftracerTrack(arg, PyRefTracer_DESTROY); \
-                destructor d = (destructor)(dealloc); \
-                d(arg); \
-            } \
-        } else { \
-            uint32_t old = _Py_atomic_add_uint32(&arg->ob_refcnt, -1); \
-            assert(old > 0); \
-            if (old == 1) { \
-                _PyReftracerTrack(arg, PyRefTracer_DESTROY); \
-                destructor d = (destructor)(dealloc); \
-                d(arg); \
-            } \
+        uint32_t old = _Py_atomic_add_uint32(&arg->ob_refcnt, -1); \
+        assert(old > 0); \
+        if (old == 1) { \
+            _PyReftracerTrack(arg, PyRefTracer_DESTROY); \
+            destructor d = (destructor)(dealloc); \
+            d(arg); \
         } \
         break; \
     }
