@@ -785,13 +785,15 @@ static void weakref_schedule_callbacks(int64_t ipid, pending_callbacks* pending)
     return;
 
 abort:
-    callback_progress* progress = pending->progress;
-    weakref_decref_weakrefs(pending->head);
-    PyMem_Free(pending);
-    // Give back the token taken by weakref_distribute_callbacks, or the
-    // object's deallocation is never re-triggered.
-    weakref_signal_handled(progress);
-    return;
+    {
+        callback_progress *progress = pending->progress;
+        weakref_decref_weakrefs(pending->head);
+        PyMem_Free(pending);
+        // Give back the token taken by weakref_distribute_callbacks, or the
+        // object's deallocation is never re-triggered.
+        weakref_signal_handled(progress);
+        return;
+    }
 }
 
 /* Remove callbacks with the given ipid from the list.
@@ -1095,6 +1097,11 @@ typedef struct {
     // Used to track SCC to handle cycles during traversal.
     // All references are weak
     PyObject *pending;
+    // During traversal we can't follow weakly referenced objects directly as
+    // that could form SCCs and keep objects incorrectly alive. To handle these
+    // objects we track them as new roots here.
+    // All references are weak
+    PyObject *new_roots;
     // All items which have been visited.
     // 1 -> Visited and done
     // 2 -> Visited and pending
@@ -1117,6 +1124,13 @@ static void dealloc_scc_build_state(scc_build_state_t *state) {
         Py_CLEAR(state->dfs);
     }
 
+    if (state->new_roots != NULL) {
+        while(PyList_Size(state->new_roots) > 0){
+            pop(state->new_roots);
+        }
+        Py_CLEAR(state->new_roots);
+    }
+
     if (state->visited != NULL) {
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
@@ -1135,6 +1149,11 @@ static int init_scc_build_state(scc_build_state_t *state) {
 
     state->pending = PyList_New(0);
     if (state->pending == NULL) {
+        goto error;
+    }
+
+    state->new_roots = PyList_New(0);
+    if (state->new_roots == NULL) {
         goto error;
     }
 
@@ -1257,8 +1276,24 @@ static int scc_build_traverse(PyObject *obj, scc_build_state_t *state) {
     traverseproc reachable = get_reachable_proc(Py_TYPE(obj));
     int result = reachable(obj, (visitproc)scc_build_visit, state);
 
-    // We ignore weak-references here. Throwing them on the pending stack would
-    // require special RC adjustments and may keep cycles alive that should die.
+    // We can't visit these weakly referenced objects directly, as that may
+    // build SCCs across weakreferences and keep objects alive when they
+    // should die. Instead we enqueue them as new roots to start traversing later.
+    if (PyWeakref_Check(obj)) {
+        PyObject* wr;
+        int res = PyWeakref_GetRef(obj, &wr);
+        if (res < 0) {
+            return -1;
+        }
+        // wr is only set when res == 1; a dead referent leaves it NULL.
+        if (res == 1) {
+            // The object will stay alive due to the GIL
+            Py_DECREF(wr);
+            if (push_weak(state->new_roots, wr)) {
+                return -1;
+            }
+        }
+    }
 
     return result;
 }
@@ -1275,8 +1310,11 @@ static int scc_build(_Py_hashtable_t *visited_set, PyObject *const *roots, int n
         }
     }
 
-    while (PyList_Size(state.dfs) != 0) {
+    while (PyList_Size(state.dfs) != 0 || PyList_Size(state.new_roots) != 0) {
         PyObject* item = pop(state.dfs);
+        if (item == NULL) {
+            item = pop(state.new_roots);
+        }
 
         // Complete SCCs
         if (item == SccPostOrderMarker) {
@@ -2005,9 +2043,9 @@ static int traverse_freeze(PyObject *obj, shallow_freeze_state_t *freeze_state)
         }
         // wr is only set when res == 1; a dead referent leaves it NULL.
         if (res == 1) {
-            int visited = freeze_visit(wr, freeze_state);
+            result = freeze_visit(wr, freeze_state);
             Py_DECREF(wr);
-            if (visited) {
+            if (result) {
                 goto error;
             }
         }

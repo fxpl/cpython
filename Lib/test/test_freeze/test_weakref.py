@@ -1,3 +1,4 @@
+import gc
 import sys
 import unittest
 import weakref
@@ -104,16 +105,106 @@ class TestGetWeakrefs(unittest.TestCase):
         self.assertFalse(is_deep_frozen(wr))
         self.assertEqual(weakref.getweakrefs(a), [wr])
 
-    # A test for a deeply frozen weakref belongs here too, but deep_freeze()
-    # on a graph containing a weakref currently leaves the referent deeply
-    # frozen *and* GC tracked, which aborts on the SCC_RANK_FLAG assertion in
-    # scc_get_representative().  Enabling it would abort the whole run.
+    def test_deep_frozen_weakref(self):
+        a = A()
+        wr = weakref.ref(a)
+        deep_freeze(wr)
+        self.assertTrue(is_deep_frozen(wr))
+        self.assertEqual(weakref.getweakrefs(a), [wr])
 
     def test_weakref_to_frozen_object(self):
         a = A()
         deep_freeze(a)
         wr = weakref.ref(a)
         self.assertEqual(weakref.getweakrefs(a), [wr])
+
+class TestFreezeThroughWeakref(unittest.TestCase):
+    """Referents are reached by the freeze, but as fresh SCC roots: they must
+    end up deeply frozen without the weakref turning into a strong edge that
+    keeps them alive."""
+
+    def test_referent_is_deep_frozen(self):
+        holder = A()
+        target = A()
+        holder.wr = weakref.ref(target)
+        deep_freeze(holder)
+        self.assertTrue(is_deep_frozen(target))
+
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+                         "only SCC refcounting untracks frozen objects")
+    def test_referent_is_untracked(self):
+        holder = A()
+        target = A()
+        holder.wr = weakref.ref(target)
+        deep_freeze(holder)
+        self.assertFalse(gc.is_tracked(target))
+
+    def test_referent_still_dies(self):
+        holder = A()
+        target = A()
+        holder.wr = weakref.ref(target)
+        deep_freeze(holder)
+        del target
+        gc.collect()
+        self.assertIsNone(holder.wr())
+
+    def test_frozen_weakref_root_referent_still_dies(self):
+        target = A()
+        wr = weakref.ref(target)
+        deep_freeze(wr)
+        del target
+        gc.collect()
+        self.assertIsNone(wr())
+
+    def test_cycle_across_weakref(self):
+        holder = A()
+        target = A()
+        holder.wr = weakref.ref(target)
+        target.holder = holder
+        deep_freeze(holder)
+        self.assertTrue(is_deep_frozen(target))
+
+    def test_referent_also_strongly_reachable(self):
+        root = A()
+        target = A()
+        root.strong = target
+        root.wr = weakref.ref(target)
+        deep_freeze(root)
+        self.assertTrue(is_deep_frozen(target))
+        self.assertIs(root.wr(), target)
+
+    def test_weakref_chain(self):
+        a, b, c = A(), A(), A()
+        a.wr = weakref.ref(b)
+        b.wr = weakref.ref(c)
+        deep_freeze(a)
+        self.assertTrue(is_deep_frozen(b))
+        self.assertTrue(is_deep_frozen(c))
+
+    def test_dead_referent(self):
+        target = A()
+        wr = weakref.ref(target)
+        del target
+        gc.collect()
+        deep_freeze(wr)
+        self.assertTrue(is_deep_frozen(wr))
+
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+                         "the assert it guards is SCC-only")
+    def test_survives_gc_churn(self):
+        """A deeply frozen but still tracked object trips an assert in
+        gc_collect_increment(), which only the incremental collector reaches."""
+        holder = A()
+        target = A()
+        holder.wr = weakref.ref(target)
+        deep_freeze(holder)
+        for _ in range(50):
+            junk = [A() for _ in range(500)]
+            for p, q in zip(junk, junk[1:]):
+                p.next = q
+            del junk
+            gc.collect(1)
+
 
 class TestCallbacks(unittest.TestCase):
     def setUp(self):
