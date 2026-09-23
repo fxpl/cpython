@@ -569,6 +569,7 @@ static inline void Py_DECREF_MORTAL(PyObject *op)
         if (_Py_DecRef_Immutable(op)) {
             _Py_Dealloc(op);
         }
+        return;
     }
     if (_Py_NeedsAtomicRC(op)) {
         uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);

@@ -146,6 +146,68 @@ class TestShallowFreezePreFreezeHook(unittest.TestCase):
         self.assertFalse(is_shallow_frozen(obj))
 
 
+class TestShallowThenDeepFreeze(unittest.TestCase):
+    """A shallow frozen object has already passed its freezability check and
+    run its pre-freeze hook, so deep_freeze() must not ask again."""
+
+    def test_upgrade_yes(self):
+        C = make_freezable_class()
+        obj = C(C())
+        shallow_freeze(obj)
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
+
+    def test_upgrade_reaches_referents(self):
+        C = make_freezable_class()
+        inner = C()
+        obj = C(inner)
+        shallow_freeze(obj)
+        self.assertFalse(is_shallow_frozen(inner))
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(inner))
+
+    def test_upgrade_explicit_root(self):
+        C = make_freezable_class()
+        obj = C()
+        set_freezable(obj, FREEZABLE_EXPLICIT)
+        shallow_freeze(obj)
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
+
+    def test_upgrade_explicit_referent(self):
+        """EXPLICIT no longer applies: shallow_freeze() already gave it up."""
+        C = make_freezable_class()
+        inner = C()
+        set_freezable(inner, FREEZABLE_EXPLICIT)
+        shallow_freeze(inner)
+        outer = C(inner)
+        deep_freeze(outer)
+        self.assertTrue(is_deep_frozen(inner))
+
+    def test_upgrade_does_not_rerun_pre_freeze_hook(self):
+        calls = []
+
+        class C:
+            def __pre_freeze__(self):
+                calls.append(self)
+        set_freezable(C, FREEZABLE_YES)
+
+        obj = C()
+        shallow_freeze(obj)
+        self.assertEqual(len(calls), 1)
+        deep_freeze(obj)
+        self.assertEqual(len(calls), 1)
+
+    def test_upgrade_ignores_later_freezable_change(self):
+        """set_freezable(NO) after shallow_freeze() cannot un-freeze."""
+        C = make_freezable_class()
+        obj = C()
+        shallow_freeze(obj)
+        set_freezable(obj, FREEZABLE_NO)
+        deep_freeze(obj)
+        self.assertTrue(is_deep_frozen(obj))
+
+
 class TestIsShallowFrozen(unittest.TestCase):
 
     def test_mutable_object(self):

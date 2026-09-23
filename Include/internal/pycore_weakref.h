@@ -110,12 +110,16 @@ static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
         }
 
         if (_Py_NeedsAtomicRC(obj)) {
-            uint32_t old =  _Py_atomic_add_uint32(&obj->ob_refcnt, (PY_UINT32_T)1);
-            if (old >= 0) {
-                return obj;
-            } else {
-                return NULL;
-            }
+            uint32_t current = 1; // Initial guess, the first loop will load the real value
+            while (true) {
+                uint32_t desired = current + 1;
+                if (_Py_atomic_compare_exchange_uint32(&obj->ob_refcnt, &current, desired)) {
+                    return obj;
+                }
+                if (current == 0) {
+                    return NULL;
+                }
+            };
         }
     }
 #endif // _Py_PYRONA_INTERPRETER_SHARING

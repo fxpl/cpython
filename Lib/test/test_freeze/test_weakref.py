@@ -3,7 +3,9 @@ import unittest
 import weakref
 
 import immutable
-from immutable import deep_freeze, is_deep_frozen
+from immutable import (
+    deep_freeze, shallow_freeze, is_deep_frozen, is_shallow_frozen,
+)
 
 
 class A:
@@ -87,6 +89,31 @@ class TestWeakrefList(unittest.TestCase):
         # The weakrefs should be the same, as they refer to the same object.
         self.assertTrue(wr1 is wr2)
 
+
+class TestGetWeakrefs(unittest.TestCase):
+    def test_mutable_weakref(self):
+        a = A()
+        wr = weakref.ref(a)
+        self.assertEqual(weakref.getweakrefs(a), [wr])
+
+    def test_shallow_frozen_weakref(self):
+        a = A()
+        wr = weakref.ref(a)
+        shallow_freeze(wr)
+        self.assertTrue(is_shallow_frozen(wr))
+        self.assertFalse(is_deep_frozen(wr))
+        self.assertEqual(weakref.getweakrefs(a), [wr])
+
+    # A test for a deeply frozen weakref belongs here too, but deep_freeze()
+    # on a graph containing a weakref currently leaves the referent deeply
+    # frozen *and* GC tracked, which aborts on the SCC_RANK_FLAG assertion in
+    # scc_get_representative().  Enabling it would abort the whole run.
+
+    def test_weakref_to_frozen_object(self):
+        a = A()
+        deep_freeze(a)
+        wr = weakref.ref(a)
+        self.assertEqual(weakref.getweakrefs(a), [wr])
 
 class TestCallbacks(unittest.TestCase):
     def setUp(self):

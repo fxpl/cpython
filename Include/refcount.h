@@ -104,7 +104,7 @@ Sub-Interpreter/GIL-enabled Specific flags:
 
 // ob_flags bits 4-9 are owned by the immutability system; see Include/object.h
 // for the flags upstream keeps in bits 0-3.
-#define _Py_IMM_FLAGS_SHIFT(x) (x + 3)
+#define _Py_IMM_FLAGS_SHIFT(x) ((x) + 3)
 // Immutability Flags:
 #define _Py_IMMUTABLE_FLAG (1 << _Py_IMM_FLAGS_SHIFT(1))
 #define _Py_IMMUTABLE_DEPTH_FLAG (1 << _Py_IMM_FLAGS_SHIFT(2))
@@ -184,7 +184,7 @@ PyAPI_FUNC(void) _Py_OpFlagsRmv(PyObject *, uint16_t);
 #define _Py_OB_FLAG_REMOVE(op, flag) _Py_OpFlagsRmv(_PyObject_CAST(op), flag);
 #define _Py_OB_FLAGS_LOAD(op) _Py_LoadOpFlags(_PyObject_CAST(op))
 #else // !Py_LIMITED_API
-#define _Py_OB_FLAGS_LOAD(op) _Py_atomic_load_uint16_relaxed(&(op)->ob_flags)
+#define _Py_OB_FLAGS_LOAD(op) _Py_atomic_load_uint16_relaxed(&_PyObject_CAST(op)->ob_flags)
 
 #ifdef Py_GIL_DISABLED
 #define _Py_OB_FLAG_ADD(op, flag) _Py_atomic_or_uint16(&_PyObject_CAST(op)->ob_flags, (flag))

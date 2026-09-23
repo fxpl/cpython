@@ -785,8 +785,12 @@ static void weakref_schedule_callbacks(int64_t ipid, pending_callbacks* pending)
     return;
 
 abort:
-    PyMem_Free(pending);
+    callback_progress* progress = pending->progress;
     weakref_decref_weakrefs(pending->head);
+    PyMem_Free(pending);
+    // Give back the token taken by weakref_distribute_callbacks, or the
+    // object's deallocation is never re-triggered.
+    weakref_signal_handled(progress);
     return;
 }
 
@@ -933,7 +937,9 @@ static int scc_is_root(PyObject* obj) {
 static void scc_set_rank(PyObject* obj, size_t rank)
 {
     // Use GC space for the rank.
-    _Py_AS_GC(obj)->_gc_prev = (rank << _PyGC_PREV_SHIFT) | SCC_RANK_FLAG;
+    PyGC_Head* gc = _Py_AS_GC(obj);
+    uintptr_t finalized_bit = gc->_gc_prev & _PyGC_PREV_MASK_FINALIZED;
+    gc->_gc_prev = finalized_bit | (rank << _PyGC_PREV_SHIFT) | SCC_RANK_FLAG;
 }
 
 static size_t scc_get_rank(PyObject* obj)
@@ -2094,16 +2100,20 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs, int atomic)
             continue;
         }
 
-        // New object, check if freezable
-        SUCCEEDS(check_freezable(imm_state, item, &state));
-
-        // Call the pre-freeze hook if one is present
-        SUCCEEDS(check_pre_freeze_hook(imm_state, item));
-
-        // If the pre-freeze hook turned the object immutable, we want to skip it.
-        if (_Py_IsDeepImmutable(item)) {
-            Py_CLEAR(item);
-            continue;
+        // We only check the freezability and pre-freeze hook if the object is mutable.
+        if (!_Py_IsShallowImmutable(item)) {
+            // New object, check if freezable
+            SUCCEEDS(check_freezable(imm_state, item, &state));
+    
+            // Call the pre-freeze hook if one is present
+            SUCCEEDS(check_pre_freeze_hook(imm_state, item));
+    
+            // If the pre-freeze hook turned the object immutable, we want to skip it.
+            if (_Py_IsDeepImmutable(item)) {
+                Py_CLEAR(item);
+                continue;
+            }
+            _Py_SetShallowImmutable(item);
         }
 
         // FIXME(immutability): For undoing freezes, we can just store a different value in
@@ -2114,7 +2124,6 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs, int atomic)
             PyErr_NoMemory();
             goto error;
         }
-        _Py_SetShallowImmutable(item);
 
         // Traverse the object
         SUCCEEDS(traverse_freeze(item, &state));
