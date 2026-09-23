@@ -18,6 +18,12 @@ PyDoc_STRVAR(_immutable_shallow_freeze__doc__,
 "are left untouched and may still be mutable. Every argument counts as a\n"
 "root of this call, so objects marked FREEZABLE_EXPLICIT are frozen.\n"
 "\n"
+"Freezing cannot be undone. Arguments are frozen in order, so if one of\n"
+"them cannot be frozen, the ones before it stay frozen.\n"
+"\n"
+"On failure a TypeError is raised with the object that could not be frozen\n"
+"attached to it, so you can inspect it as err.obj.\n"
+"\n"
 "Returns the first argument.");
 
 #define _IMMUTABLE_SHALLOW_FREEZE_METHODDEF    \
@@ -47,9 +53,19 @@ PyDoc_STRVAR(_immutable_deep_freeze__doc__,
 "\n"
 "Deeply freeze one or more objects and their graphs.\n"
 "\n"
-"The objects and everything reachable from them become immutable.\n"
-"Every argument counts as a root of this call, so objects marked\n"
-"FREEZABLE_EXPLICIT are frozen.\n"
+"The objects and everything reachable from them become immutable. Only\n"
+"deeply frozen objects can be shared between interpreters. Every argument\n"
+"counts as a root of this call, so objects marked FREEZABLE_EXPLICIT are\n"
+"frozen.\n"
+"\n"
+"Freezing is not atomic and cannot be undone. Objects are shallow frozen\n"
+"as the graph is walked, so if the call fails part way through, any subset\n"
+"of the reachable objects may be left shallow frozen, and they stay that\n"
+"way. Nothing is deep frozen unless the whole call succeeds.\n"
+"\n"
+"On failure a TypeError is raised with the object that could not be frozen\n"
+"attached to it, so you can inspect it as err.obj. Once that object is\n"
+"dealt with, calling deep_freeze again will finish the job.\n"
 "\n"
 "Returns the first argument.");
 
@@ -126,7 +142,8 @@ PyDoc_STRVAR(_immutable_is_shallow_frozen__doc__,
 "Check if an object is shallowly frozen.\n"
 "\n"
 "Says nothing about what the object references; use is_deep_frozen() for\n"
-"that.");
+"that. If the object is immutable by construction, it will be marked\n"
+"shallowly frozen as a side effect and True is returned.");
 
 #define _IMMUTABLE_IS_SHALLOW_FROZEN_METHODDEF    \
     {"is_shallow_frozen", (PyCFunction)_immutable_is_shallow_frozen, METH_O, _immutable_is_shallow_frozen__doc__},
@@ -135,7 +152,10 @@ PyDoc_STRVAR(_immutable_is_deep_frozen__doc__,
 "is_deep_frozen($module, obj, /)\n"
 "--\n"
 "\n"
-"Check if an object and everything it reaches is frozen.");
+"Check if an object and everything it reaches is frozen.\n"
+"\n"
+"If the object graph is immutable by construction, it will be deeply\n"
+"frozen as a side effect and True is returned.");
 
 #define _IMMUTABLE_IS_DEEP_FROZEN_METHODDEF    \
     {"is_deep_frozen", (PyCFunction)_immutable_is_deep_frozen, METH_O, _immutable_is_deep_frozen__doc__},
@@ -209,4 +229,4 @@ PyDoc_STRVAR(_immutable_unset_freezable__doc__,
 
 #define _IMMUTABLE_UNSET_FREEZABLE_METHODDEF    \
     {"unset_freezable", (PyCFunction)_immutable_unset_freezable, METH_O, _immutable_unset_freezable__doc__},
-/*[clinic end generated code: output=71cd1fb37071cb64 input=a9049054013a1b77]*/
+/*[clinic end generated code: output=955bb7f6a2d3b575 input=a9049054013a1b77]*/

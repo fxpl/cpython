@@ -7,6 +7,7 @@
 #include "pycore_gc.h"
 #include "pycore_object.h"
 #include "pycore_immutability.h"
+#include "pycore_ceval.h"
 #include "pycore_interp.h"
 #include "pycore_list.h"
 #include "pycore_weakref.h"
@@ -251,10 +252,6 @@ typedef struct shallow_freeze_state_t {
     // A PyList used to track what objects still need to be frozen
     PyObject *pending;
 
-    // Whether the frozen graph should use atomic reference counting.
-    // TODO(immutability): not honoured yet, only plumbed through.
-    int atomic;
-
     // A hashtable with all objects visited by this freeze.
     //
     // These are weakreferences, since we hold references to the root
@@ -298,7 +295,6 @@ static int init_shallow_freeze_state(shallow_freeze_state_t *state) {
     state->pending = NULL;
     state->visited = NULL;
     state->roots = NULL;
-    state->atomic = 0;
 #ifdef Py_DEBUG
     state->freeze_location = NULL;
 #endif
@@ -481,12 +477,39 @@ static int check_freezable(
 
 error:
     debug_obj("Not freezable  %s (%p)\n", obj);
-    // FIXME(immutable): If obj is a type, we should print the type name not the super type
-    PyObject* error_msg = PyUnicode_FromFormat(
-        "Cannot freeze instance of type %s",
-        (obj->ob_type->tp_name));
-    PyErr_SetObject(PyExc_TypeError, error_msg);
+    PyObject *error_msg;
+    if (PyType_Check(obj)) {
+        error_msg = PyUnicode_FromFormat("Cannot freeze type '%s'",
+                                         ((PyTypeObject *)obj)->tp_name);
+    }
+    else {
+        error_msg = PyUnicode_FromFormat("Cannot freeze %.100R of type '%s'",
+                                         obj, Py_TYPE(obj)->tp_name);
+        if (error_msg == NULL) {
+            // __repr__ raised. Name the object by address rather than losing
+            // the freezability error to whatever repr failed with.
+            PyErr_Clear();
+            error_msg = PyUnicode_FromFormat(
+                "Cannot freeze object of type '%s' at %p",
+                Py_TYPE(obj)->tp_name, (void *)obj);
+        }
+    }
+    if (error_msg == NULL) {
+        return -1;
+    }
+
+    PyObject *exc = PyObject_CallOneArg(PyExc_TypeError, error_msg);
     Py_DECREF(error_msg);
+    if (exc == NULL) {
+        return -1;
+    }
+    // Hand the caller the object itself, so it does not have to be recovered
+    // from the message.
+    if (PyObject_SetAttr(exc, &_Py_ID(obj), obj) < 0) {
+        Py_DECREF(exc);
+        return -1;
+    }
+    PyErr_SetRaisedException(exc);
     return -1;
 }
 
@@ -733,14 +756,14 @@ static void weakref_signal_handled(callback_progress* progress)
 }
 
 /* Call the pending callbacks.
- * This function can be executed asynchronously using Py_AddPendingCall.
+ * This function can be executed asynchronously as a pending call.
  */
 static int weakref_call_callbacks(void* arg)
 {
     pending_callbacks* pending = (pending_callbacks*)arg;
     PyWeakReference* head = pending->head;
-    debug("Interpreter %zd handling callbacks for dying object %p\n",
-        PyInterpreterState_GetID(PyInterpreterState_Get()),
+    debug("Interpreter %lld handling callbacks for dying object %p\n",
+        (long long)PyInterpreterState_GetID(PyInterpreterState_Get()),
         pending->progress->to_dealloc);
 
     while (head != NULL) {
@@ -758,7 +781,7 @@ static int weakref_call_callbacks(void* arg)
 
     weakref_signal_handled(pending->progress);
     PyMem_Free(pending);
-    // Report success as per Py_AddPendingCall contract
+    // Report success as per the pending call contract
     return 0;
 }
 
@@ -771,15 +794,9 @@ static void weakref_schedule_callbacks(int64_t ipid, pending_callbacks* pending)
         // Interpreter is already gone.
         goto abort;
     }
-    // We just need to get any thread state to schedule the call.
-    PyThreadState* tstate_target = PyInterpreterState_ThreadHead(target_is);
-    if (tstate_target == NULL) {
-        goto abort;
-    }
-    PyThreadState* tstate_old = PyThreadState_Swap(tstate_target);
-    int schedule_res = Py_AddPendingCall(weakref_call_callbacks, (void*)pending);
-    PyThreadState_Swap(tstate_old);
-    if (schedule_res != 0) {
+    // The callback must run on the interpreter that registered it.
+    if (_PyEval_AddPendingCall(target_is, weakref_call_callbacks,
+                               (void*)pending, 0) != _Py_ADD_PENDING_SUCCESS) {
         goto abort;
     }
     return;
@@ -1171,7 +1188,7 @@ error:
     return -1;
 }
 
-static void scc_complete(PyObject *obj, scc_build_state_t *state) {
+static void scc_complete(PyObject *obj) {
     PyObject* c = get_scc_next(obj);
     // Single object SCCs are tagged for normal atomic reference counting
     if (c == NULL) {
@@ -1218,7 +1235,7 @@ static void scc_finish_at_postorder(PyObject *item, scc_build_state_t *state) {
         scc_pop_pending(state);
         debug_obj("Representative: %s (%p)\n", item);
 
-        scc_complete(item, state);
+        scc_complete(item);
     }
 }
 
@@ -1298,7 +1315,7 @@ static int scc_build_traverse(PyObject *obj, scc_build_state_t *state) {
     return result;
 }
 
-static int scc_build(_Py_hashtable_t *visited_set, PyObject *const *roots, int nroots) {
+static int scc_build(PyObject *const *roots, int nroots) {
     int result = 0;
     scc_build_state_t state;
     SUCCEEDS(init_scc_build_state(&state));
@@ -1507,7 +1524,7 @@ static void scc_unfreeze_and_finalize(PyObject *obj) {
     // Legacy finalizers are delegated to Python's GC
     if (details.has_legacy_finalizers > 0) {
         debug("There are legacy finalizers in the SCC.  Let cycle detector handle this case.\n");
-        debug("Legacy finalizers: %d\n", scc_details.has_legacy_finalizers);
+        debug("Legacy finalizers: %d\n", details.has_legacy_finalizers);
         scc_dissolve_to_gc(obj);
         return;
     }
@@ -1629,7 +1646,7 @@ static int finish_deep_immutable_tree(_Py_hashtable_t *visited_set, PyObject *co
     // so marking first would make it walk nothing.
     //
     // The SCC construction will also remove the objects from the local GC list
-    SUCCEEDS(scc_build(visited_set, roots, nroots));
+    SUCCEEDS(scc_build(roots, nroots));
 #endif
 
     SUCCEEDS(_Py_hashtable_foreach(visited_set, _mark_deep_immutable_cb, NULL));
@@ -2061,6 +2078,15 @@ finally:
 static int
 freeze_impl(PyObject *const *objs, Py_ssize_t nobjs, int atomic)
 {
+    // FIXME(immutable): This flag is currently not supported. The idea
+    // is that this will rollback and be a full success of failure flag.
+    // The simple idea, is to only allow one atomic freeze to happen
+    // at a time using a RWLock. We then track which object's we've
+    // shallow frozen and unfreeze them on failure. We'll also need
+    // to handle nested freezes etc. This is all doable, but let's
+    // not implement this until the community asks for it.
+    (void)atomic;
+
     struct _Py_immutability_state* imm_state = NULL;
     imm_state = get_immutable_state();
     if (imm_state == NULL) {
@@ -2074,7 +2100,6 @@ freeze_impl(PyObject *const *objs, Py_ssize_t nobjs, int atomic)
     // Initialize the freeze state
     shallow_freeze_state_t state;
     SUCCEEDS(init_shallow_freeze_state(&state));
-    state.atomic = atomic;
 
     // Register all roots and push onto the DFS stack
     for (Py_ssize_t i = 0; i < nobjs; i++) {

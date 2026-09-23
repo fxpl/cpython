@@ -17,6 +17,16 @@ typedef enum {
  *            deeply immutable objects can be shared between interpreters.
  *
  * A deeply immutable object is always shallow immutable too.
+ *
+ * Freezing is not atomic and cannot be rolled back. A deep freeze marks each
+ * object shallow immutable as it walks the graph, so when it fails part-way
+ * any subset of the reachable objects may already be shallow immutable, and
+ * they stay that way. Nothing becomes deeply immutable unless the whole
+ * freeze succeeds.
+ *
+ * Retrying after removing the blocker completes the freeze: objects that are
+ * already shallow immutable are not re-checked for freezability and their
+ * pre-freeze hook does not run a second time.
  */
 
 /* Make `obj` shallow immutable. Referenced objects are left alone.
@@ -32,7 +42,9 @@ PyAPI_FUNC(int) _PyImmutability_ShallowFreezeMany(PyObject *const *, Py_ssize_t)
 /* Make `obj` and everything reachable from it deeply immutable.
  *
  * `obj` is a root of this freeze, so a FREEZABLE_EXPLICIT object is frozen.
- * Returns 0 on success, -1 with an exception set otherwise.
+ * Returns 0 on success, -1 with an exception set otherwise. On failure part
+ * of the graph is left shallow immutable; see the note above. The object
+ * that could not be frozen is attached to the exception as `obj`.
  */
 PyAPI_FUNC(int) _PyImmutability_DeepFreeze(PyObject*, int atomic);
 

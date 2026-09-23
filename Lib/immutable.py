@@ -8,6 +8,23 @@ its own state mutated, but the objects it references may still be
 mutable.  A *deeply* frozen object is shallow frozen and so is everything
 reachable from it; only deeply frozen objects can be shared between
 interpreters.
+
+Freezing is one-way: there is no unfreeze.  It is also not atomic.
+deep_freeze() shallow freezes objects as it walks the graph, so if it
+fails part way through, any subset of the objects it reached may be left
+shallow frozen, and they stay that way.  Nothing is deep frozen unless
+the whole call succeeds.
+
+On failure a TypeError is raised with the object that could not be frozen
+attached to it::
+
+    try:
+        deep_freeze(obj)
+    except TypeError as err:
+        print("could not freeze", err.obj)
+
+Once that object is dealt with, calling deep_freeze() again will finish
+the job.
 """
 
 from __future__ import annotations
@@ -21,7 +38,6 @@ is_deep_frozen = _c.is_deep_frozen
 set_freezable = _c.set_freezable
 get_freezable = _c.get_freezable
 unset_freezable = _c.unset_freezable
-NotFreezableError = _c.NotFreezableError
 ImmutableModule = _c.ImmutableModule
 FREEZABLE_YES = _c.FREEZABLE_YES
 FREEZABLE_NO = _c.FREEZABLE_NO
@@ -144,7 +160,6 @@ __all__ = [
     "set_freezable",
     "get_freezable",
     "unset_freezable",
-    "NotFreezableError",
     "ImmutableModule",
     "FREEZABLE_YES",
     "FREEZABLE_NO",

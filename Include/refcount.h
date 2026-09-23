@@ -134,12 +134,11 @@ Sub-Interpreter/GIL-enabled Specific flags:
 #define _Py_IMMUTABLE_RESET_MASK ( \
     _Py_IMMUTABLE_CLEAR_MASK | _Py_FREEZABLE_STATUS_MASK \
     | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
-#define _Py_IMMUTABLE_DIRECT (_Py_IMMUTABLE_FLAG)
-#define _Py_IMMUTABLE_INDIRECT (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
-#define _Py_IMMUTABLE_PENDING (_Py_IMMUTABLE_SCC_FLAG)
 
 PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
 PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
+// Declared again here because Python.h pulls in pyerrors.h after this header.
+PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
 
 #else // _Py_PYRONA_INTERPRETER_SHARING
 // FIXME(immutability): These should probably be removed.
@@ -185,15 +184,8 @@ PyAPI_FUNC(void) _Py_OpFlagsRmv(PyObject *, uint16_t);
 #define _Py_OB_FLAGS_LOAD(op) _Py_LoadOpFlags(_PyObject_CAST(op))
 #else // !Py_LIMITED_API
 #define _Py_OB_FLAGS_LOAD(op) _Py_atomic_load_uint16_relaxed(&_PyObject_CAST(op)->ob_flags)
-
-#ifdef Py_GIL_DISABLED
 #define _Py_OB_FLAG_ADD(op, flag) _Py_atomic_or_uint16(&_PyObject_CAST(op)->ob_flags, (flag))
 #define _Py_OB_FLAG_REMOVE(op, flag) _Py_atomic_and_uint16(&_PyObject_CAST(op)->ob_flags, ~(flag))
-#else // !Py_GIL_DISABLED
-#define _Py_OB_FLAG_ADD(op, flag) _PyObject_CAST(op)->ob_flags |= (flag)
-#define _Py_OB_FLAG_REMOVE(op, flag) _PyObject_CAST(op)->ob_flags &= ~(flag)
-#endif // Py_GIL_DISABLED
-
 #endif // Py_LIMITED_API
 
 
@@ -244,7 +236,8 @@ static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
 // Check whether an object is writeable.
 // This check will always succeed during runtime finalization.
 #define Py_CHECKWRITE(op) ((op) && (!_Py_IsShallowImmutable(op) || _PyImmModule_Check(op) || Py_IsFinalizing()))
-#define Py_REQUIREWRITE(op, msg) {if (Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); }}
+#define Py_REQUIREWRITE(op, msg) \
+    do { if (!Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); } } while (0)
 
 static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
 {
@@ -345,7 +338,11 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     
             // TODO(Immutable): Care should be taken to make the whole SCC mutable
             // again if needed.
-            assert(0);
+            //
+            // Until that is settled, refuse instead of silently corrupting the
+            // SCC's shared refcount. Has to fire on release builds too.
+            _Py_FatalErrorFunc(__func__,
+                "Py_SET_REFCNT() on a deeply immutable object");
         }
         if (_Py_NeedsAtomicRC(ob)) {
 #ifndef Py_LIMITED_API

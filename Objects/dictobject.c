@@ -6965,9 +6965,13 @@ _PyObject_MaterializeManagedDict_LockHeld(PyObject *obj)
     else {
         dict = (PyDictObject *)PyDict_New();
     }
-    if (_Py_IsDeepImmutable(obj)) {
+    if (dict != NULL && _Py_IsDeepImmutable(obj)) {
         // TODO(Immutable): For subinterpreters this will probably also need a lock!
-        _PyImmutability_DeepFreeze(_PyObject_CAST(dict), 0);
+        // A mutable dict here would break the deep immutability of `obj`.
+        if (_PyImmutability_DeepFreeze(_PyObject_CAST(dict), 0) < 0) {
+            Py_DECREF(dict);
+            return NULL;
+        }
     }
     FT_ATOMIC_STORE_PTR_RELEASE(_PyObject_ManagedDictPointer(obj)->dict,
                                 dict);
@@ -7681,9 +7685,12 @@ ensure_nonmanaged_dict(PyObject *obj, PyObject **dictptr)
         else {
             dict = PyDict_New();
         }
-        if (_Py_IsDeepImmutable(obj)) {
+        if (dict != NULL && _Py_IsDeepImmutable(obj)) {
             // TODO(Immutable): For subinterpreters this will probably also need a lock!
-            _PyImmutability_DeepFreeze(dict, 0);
+            // A mutable dict here would break the deep immutability of `obj`.
+            if (_PyImmutability_DeepFreeze(dict, 0) < 0) {
+                Py_CLEAR(dict);
+            }
         }
         FT_ATOMIC_STORE_PTR_RELEASE(*dictptr, dict);
 #ifdef Py_GIL_DISABLED

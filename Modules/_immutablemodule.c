@@ -20,7 +20,6 @@ module _immutable
 #include "clinic/_immutablemodule.c.h"
 
 typedef struct {
-    PyObject *not_freezable_error_obj;
     PyObject *interpreter_locals;  // dict: InterpreterLocal -> value
     PyObject *interpreterlocal_type;  // heap type object
     PyObject *sharedfield_type;  // heap type object
@@ -40,7 +39,6 @@ static int
 immutable_clear(PyObject *module)
 {
     immutable_state *module_state = PyModule_GetState(module);
-    Py_CLEAR(module_state->not_freezable_error_obj);
     Py_CLEAR(module_state->interpreter_locals);
     Py_CLEAR(module_state->interpreterlocal_type);
     Py_CLEAR(module_state->sharedfield_type);
@@ -51,7 +49,6 @@ static int
 immutable_traverse(PyObject *module, visitproc visit, void *arg)
 {
     immutable_state *module_state = PyModule_GetState(module);
-    Py_VISIT(module_state->not_freezable_error_obj);
     Py_VISIT(module_state->interpreter_locals);
     Py_VISIT(module_state->interpreterlocal_type);
     Py_VISIT(module_state->sharedfield_type);
@@ -74,13 +71,19 @@ Each object's own state becomes immutable, but the objects it references
 are left untouched and may still be mutable. Every argument counts as a
 root of this call, so objects marked FREEZABLE_EXPLICIT are frozen.
 
+Freezing cannot be undone. Arguments are frozen in order, so if one of
+them cannot be frozen, the ones before it stay frozen.
+
+On failure a TypeError is raised with the object that could not be frozen
+attached to it, so you can inspect it as err.obj.
+
 Returns the first argument.
 [clinic start generated code]*/
 
 static PyObject *
 _immutable_shallow_freeze_impl(PyObject *module, PyObject * const *args,
                                Py_ssize_t args_length)
-/*[clinic end generated code: output=0015d31fd4e61173 input=9cfbdc343e6f3280]*/
+/*[clinic end generated code: output=0015d31fd4e61173 input=3977f02fd5b15e0b]*/
 {
     if (args_length == 0) {
         PyErr_SetString(PyExc_TypeError,
@@ -107,13 +110,22 @@ deeply frozen objects can be shared between interpreters. Every argument
 counts as a root of this call, so objects marked FREEZABLE_EXPLICIT are
 frozen.
 
+Freezing is not atomic and cannot be undone. Objects are shallow frozen
+as the graph is walked, so if the call fails part way through, any subset
+of the reachable objects may be left shallow frozen, and they stay that
+way. Nothing is deep frozen unless the whole call succeeds.
+
+On failure a TypeError is raised with the object that could not be frozen
+attached to it, so you can inspect it as err.obj. Once that object is
+dealt with, calling deep_freeze again will finish the job.
+
 Returns the first argument.
 [clinic start generated code]*/
 
 static PyObject *
 _immutable_deep_freeze_impl(PyObject *module, PyObject * const *args,
                             Py_ssize_t args_length, int atomic)
-/*[clinic end generated code: output=5ca0554d7ac259b2 input=3ad7bce5782db0f7]*/
+/*[clinic end generated code: output=5ca0554d7ac259b2 input=1597b814810151b6]*/
 {
     if (args_length == 0) {
         PyErr_SetString(PyExc_TypeError,
@@ -616,16 +628,6 @@ static PyType_Spec sharedfield_spec = {
 };
 
 
-static PyType_Slot not_freezable_error_slots[] = {
-    {0, NULL},
-};
-
-PyType_Spec not_freezable_error_spec = {
-    .name = "_immutable.NotFreezableError",
-    .flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
-    .slots = not_freezable_error_slots,
-};
-
 /*
  * MODULE
  */
@@ -660,21 +662,6 @@ immutable_exec(PyObject *module) {
     /* Add version to the module. */
     if (PyModule_AddStringConstant(module, "__version__",
                                     MODULE_VERSION) == -1) {
-        return -1;
-    }
-
-    PyObject *bases = PyTuple_Pack(1, PyExc_TypeError);
-    if (bases == NULL) {
-        return -1;
-    }
-    module_state->not_freezable_error_obj = PyType_FromModuleAndSpec(module, &not_freezable_error_spec,
-                                                        bases);
-    Py_DECREF(bases);
-    if (module_state->not_freezable_error_obj == NULL) {
-        return -1;
-    }
-
-    if (PyModule_AddType(module, (PyTypeObject *)module_state->not_freezable_error_obj) != 0) {
         return -1;
     }
 
