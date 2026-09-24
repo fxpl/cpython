@@ -94,19 +94,10 @@
 static
 int init_state(struct _Py_immutability_state *state)
 {
-    state->warned_types = _Py_hashtable_new(
-        _Py_hashtable_hash_ptr,
-        _Py_hashtable_compare_direct);
-    if(state->warned_types == NULL){
-        return -1;
-    }
-
     state->immutable_by_construction_types = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
     if(state->immutable_by_construction_types == NULL){
-        _Py_hashtable_destroy(state->warned_types);
-        state->warned_types = NULL;
         return -1;
     }
 
@@ -324,85 +315,6 @@ static int init_shallow_freeze_state(shallow_freeze_state_t *state) {
 error:
     dealloc_shallow_freeze_state(state);
     return -1;
-}
-
-// Forwards to the real visitproc, noting whether tp_traverse visited the type.
-typedef struct {
-    visitproc visit;
-    void *state;
-    PyObject *type;
-    int type_visited;
-} type_visit_tracker_t;
-
-static int
-track_type_visit(PyObject *op, void *tracker_untyped)
-{
-    type_visit_tracker_t *tracker = (type_visit_tracker_t *)tracker_untyped;
-    if (op == tracker->type) {
-        tracker->type_visited = 1;
-    }
-    return tracker->visit(op, tracker->state);
-}
-
-// Wrapper around tp_traverse that also visits the type object.
-// tp_traverse does not visit the type for non-heap types, but
-// tp_reachable should visit all reachable objects including the type.
-static int
-traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *state)
-{
-    PyTypeObject *tp = Py_TYPE(obj);
-    type_visit_tracker_t tracker = {visit, state, _PyObject_CAST(tp), 0};
-
-    traverseproc traverse = tp->tp_traverse;
-    if (traverse != NULL) {
-        int err = traverse(obj, track_type_visit, &tracker);
-        if (err) {
-            return err;
-        }
-    }
-
-    // `tp_traverse` of heap types *should* include a `Py_VISIT(Py_TYPE(self))`
-    // since around Python 2.7, but plenty of types still don't. As part of the
-    // visit we also track if the type was found and manually visit it, if not.
-    //
-    // This must go through `visit` rather than touching a worklist directly:
-    // every caller of get_reachable_proc() passes its own state type, and only
-    // its own visitproc knows how to interpret it.
-    if (!tracker.type_visited) {
-        return visit(_PyObject_CAST(tp), state);
-    }
-    return 0;
-}
-
-// Returns the appropriate traversal function for reaching all references
-// from an object. Prefers tp_reachable, falls back to tp_traverse wrapped
-// to also visit the type. Emits a warning once per type on fallback.
-static traverseproc
-get_reachable_proc(PyTypeObject *tp)
-{
-    if (tp->tp_reachable != NULL) {
-        return tp->tp_reachable;
-    }
-
-    struct _Py_immutability_state *imm_state = get_immutable_state();
-    if (imm_state != NULL &&
-        _Py_hashtable_get(imm_state->warned_types, (void *)tp) == NULL)
-    {
-        _Py_hashtable_set(imm_state->warned_types, (void *)tp, (void *)1);
-        if (tp->tp_traverse != NULL) {
-            PySys_FormatStderr(
-                "freeze: type '%.100s' has tp_traverse but no tp_reachable\n",
-                tp->tp_name);
-        } else {
-            PySys_FormatStderr(
-                "freeze: type '%.100s' has no tp_traverse and no tp_reachable\n",
-                tp->tp_name);
-        }
-    }
-
-    // Always return the wrapper; even when tp_traverse is NULL, the wrapper
-    // will still visit the type object which tp_reachable is expected to do.
-    return traverse_via_tp_traverse;
 }
 
 static inline void _Py_SetShallowImmutable(PyObject *op)
@@ -1290,8 +1202,7 @@ static int scc_build_traverse(PyObject *obj, scc_build_state_t *state) {
     }
 
     // Traverse the object
-    traverseproc reachable = get_reachable_proc(Py_TYPE(obj));
-    int result = reachable(obj, (visitproc)scc_build_visit, state);
+    int result = _PyObject_VisitReachable(obj, (visitproc)scc_build_visit, state);
 
     // We can't visit these weakly referenced objects directly, as that may
     // build SCCs across weakreferences and keep objects alive when they
@@ -1433,8 +1344,7 @@ static void scc_reconstruct_rcs(PyObject *obj, scc_details_t *details) {
         PyObject* c = n;
         n = get_scc_next(c);
 
-        traverseproc traverse = get_reachable_proc(Py_TYPE(c));
-        traverse(c, (visitproc)_dissolve_scc_reconstruct_rcs_visit, scc_rep);
+        _PyObject_VisitReachable(c, (visitproc)_dissolve_scc_reconstruct_rcs_visit, scc_rep);
 
         if (Py_TYPE(c)->tp_del != NULL)
             details->has_legacy_finalizers++;
@@ -1871,8 +1781,7 @@ int _PyImmutability_CanViewAsDeepImmutable(PyObject *obj)
         PyObject *item = pop(state.pending);
 
         // Traverse the item
-        traverseproc reachable = get_reachable_proc(Py_TYPE(item));
-        result = reachable(item, can_view_as_immutable_visit, &state);
+        result = _PyObject_VisitReachable(item, can_view_as_immutable_visit, &state);
         Py_DECREF(item);
 
         // Stop on error.
@@ -2027,24 +1936,7 @@ static int traverse_freeze(PyObject *obj, shallow_freeze_state_t *freeze_state)
         return 0;
     }
 
-    traverseproc reachable = get_reachable_proc(Py_TYPE(obj));
-    if (PyType_Check(obj)) {
-        // tp_mro, tp_bases and tp_base are guarded by the interpreter-wide
-        // type lock, not by the type's own mutex (see TYPE_LOCK in
-        // typeobject.c). The GC gets away without it by only traversing with
-        // the world stopped; we traverse with other threads live, so we need
-        // both locks. Holding them across the whole traversal is also what
-        // keeps the borrowed references handed to freeze_visit alive.
-        Py_BEGIN_CRITICAL_SECTION2_MUTEX(&PyInterpreterState_Get()->types.mutex,
-                                         &obj->ob_mutex);
-        result = reachable(obj, (visitproc)freeze_visit, freeze_state);
-        Py_END_CRITICAL_SECTION2();
-    }
-    else {
-        Py_BEGIN_CRITICAL_SECTION(obj);
-        result = reachable(obj, (visitproc)freeze_visit, freeze_state);
-        Py_END_CRITICAL_SECTION();
-    }
+    result = _PyObject_VisitReachable(obj, (visitproc)freeze_visit, freeze_state);
     if (result != 0) {
         goto error;
     }

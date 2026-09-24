@@ -32,7 +32,7 @@ class TestReachableWarnings(unittest.TestCase):
             _immutable.deep_freeze(obj)
         """)
         self.assertIn(
-            "freeze: type '_test_reachable.HasTraverseNoReachable' "
+            "reachable: type '_test_reachable.HasTraverseNoReachable' "
             "has tp_traverse but no tp_reachable",
             stderr,
         )
@@ -45,7 +45,7 @@ class TestReachableWarnings(unittest.TestCase):
             _immutable.deep_freeze(obj)
         """)
         self.assertIn(
-            "freeze: type '_test_reachable.NoTraverseNoReachable' "
+            "reachable: type '_test_reachable.NoTraverseNoReachable' "
             "has no tp_traverse and no tp_reachable",
             stderr,
         )
@@ -59,7 +59,7 @@ class TestReachableWarnings(unittest.TestCase):
             _immutable.deep_freeze(_test_reachable.HasTraverseNoReachable(3))
         """)
         msg = (
-            "freeze: type '_test_reachable.HasTraverseNoReachable' "
+            "reachable: type '_test_reachable.HasTraverseNoReachable' "
             "has tp_traverse but no tp_reachable"
         )
         count = stderr.count(msg)

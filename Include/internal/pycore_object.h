@@ -1171,6 +1171,11 @@ PyAPI_FUNC(int) _PyObject_ReachableVisitType(PyObject *op, visitproc visit, void
  */
 PyAPI_FUNC(int) _PyObject_ReachableVisitTypeAndTraverse(PyObject *op, visitproc visit, void *arg);
 
+/* Visits everything reachable from op, including its type. Uses tp_reachable,
+ * falling back to tp_traverse (with a one-time warning per type). Takes the
+ * object's critical section, and the type lock if op is a type. */
+PyAPI_FUNC(int) _PyObject_VisitReachable(PyObject *op, visitproc visit, void *arg);
+
 #ifdef __cplusplus
 }
 #endif

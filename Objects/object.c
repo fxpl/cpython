@@ -3518,3 +3518,112 @@ _PyObject_ReachableVisitTypeAndTraverse(PyObject *op, visitproc visit, void *arg
     assert(Py_TYPE(op)->tp_traverse != _PyObject_VisitType);
     return Py_TYPE(op)->tp_traverse(op, visit, arg);
 }
+
+// Forwards to the real visitproc, noting whether tp_traverse visited the type.
+typedef struct {
+    visitproc visit;
+    void *arg;
+    PyObject *type;
+    int type_visited;
+} type_visit_tracker_t;
+
+static int
+track_type_visit(PyObject *op, void *tracker_untyped)
+{
+    type_visit_tracker_t *tracker = (type_visit_tracker_t *)tracker_untyped;
+    if (op == tracker->type) {
+        tracker->type_visited = 1;
+    }
+    return tracker->visit(op, tracker->arg);
+}
+
+// Wrapper around tp_traverse that also visits the type object.
+// tp_traverse does not visit the type for non-heap types, but
+// tp_reachable should visit all reachable objects including the type.
+static int
+traverse_via_tp_traverse(PyObject *op, visitproc visit, void *arg)
+{
+    PyTypeObject *tp = Py_TYPE(op);
+    type_visit_tracker_t tracker = {visit, arg, _PyObject_CAST(tp), 0};
+
+    traverseproc traverse = tp->tp_traverse;
+    if (traverse != NULL) {
+        int err = traverse(op, track_type_visit, &tracker);
+        if (err) {
+            return err;
+        }
+    }
+
+    // `tp_traverse` of heap types *should* include a `Py_VISIT(Py_TYPE(self))`
+    // since around Python 2.7, but plenty of types still don't. As part of the
+    // visit we also track if the type was found and manually visit it, if not.
+    //
+    // This must go through `visit`: only the caller's visitproc knows how to
+    // interpret `arg`.
+    if (!tracker.type_visited) {
+        return visit(_PyObject_CAST(tp), arg);
+    }
+    return 0;
+}
+
+static void
+warn_missing_tp_reachable(PyTypeObject *tp)
+{
+    struct _Py_immutability_state *state = &_PyInterpreterState_GET()->immutability;
+    if (state->warned_types == NULL) {
+        state->warned_types = _Py_hashtable_new(
+            _Py_hashtable_hash_ptr,
+            _Py_hashtable_compare_direct);
+        if (state->warned_types == NULL) {
+            return;
+        }
+    }
+    if (_Py_hashtable_get(state->warned_types, (void *)tp) != NULL) {
+        return;
+    }
+    _Py_hashtable_set(state->warned_types, (void *)tp, (void *)1);
+
+    if (tp->tp_traverse != NULL) {
+        PySys_FormatStderr(
+            "reachable: type '%.100s' has tp_traverse but no tp_reachable\n",
+            tp->tp_name);
+    }
+    else {
+        PySys_FormatStderr(
+            "reachable: type '%.100s' has no tp_traverse and no tp_reachable\n",
+            tp->tp_name);
+    }
+}
+
+int
+_PyObject_VisitReachable(PyObject *op, visitproc visit, void *arg)
+{
+    assert(op != NULL);
+    PyTypeObject *tp = Py_TYPE(op);
+    traverseproc reachable = tp->tp_reachable;
+    if (reachable == NULL) {
+        warn_missing_tp_reachable(tp);
+        // Even when tp_traverse is NULL, the wrapper still visits the type.
+        reachable = traverse_via_tp_traverse;
+    }
+
+    int result;
+    if (PyType_Check(op)) {
+        // tp_mro, tp_bases and tp_base are guarded by the interpreter-wide
+        // type lock, not by the type's own mutex (see TYPE_LOCK in
+        // typeobject.c). The GC gets away without it by only traversing with
+        // the world stopped; callers may traverse with other threads live, so
+        // we need both locks. Holding them across the whole traversal is also
+        // what keeps the borrowed references handed to visit alive.
+        Py_BEGIN_CRITICAL_SECTION2_MUTEX(&_PyInterpreterState_GET()->types.mutex,
+                                         &op->ob_mutex);
+        result = reachable(op, visit, arg);
+        Py_END_CRITICAL_SECTION2();
+    }
+    else {
+        Py_BEGIN_CRITICAL_SECTION(op);
+        result = reachable(op, visit, arg);
+        Py_END_CRITICAL_SECTION();
+    }
+    return result;
+}
