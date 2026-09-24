@@ -74,6 +74,12 @@ static inline int _PyObject_GC_IS_TRACKED(PyObject *op) {
 #ifdef Py_GIL_DISABLED
     return _PyObject_HAS_GC_BITS(op, _PyGC_BITS_TRACKED);
 #else
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    // The GC Header are used for SCC stuff
+    if (_Py_IsDeepImmutable(op)) {
+        return 0;
+    }
+#endif
     PyGC_Head *gc = _Py_AS_GC(op);
     return (gc->_gc_next != 0);
 #endif
@@ -205,6 +211,17 @@ static inline void _PyGC_CLEAR_FINALIZED(PyObject *op) {
 #endif
 }
 
+static inline void _PyGC_CLEAR_COLLECTING(PyObject *op) {
+#ifdef Py_GIL_DISABLED
+    // TODO(immutable): Does NoGil have a collecting flag? If so, how do we
+    // clear it?
+#else
+    assert(!_Py_IsDeepImmutable(op));
+    PyGC_Head *gc = _Py_AS_GC(op);
+    gc->_gc_prev &= ~_PyGC_PREV_MASK_COLLECTING;
+#endif
+}
+
 
 /* Tell the GC to track this object.
  *
@@ -232,6 +249,12 @@ static inline void _PyObject_GC_TRACK(
 #ifdef Py_GIL_DISABLED
     _PyObject_SET_GC_BITS(op, _PyGC_BITS_TRACKED);
 #else
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    // This object is handled by SCCs
+    if (_Py_IsDeepImmutable(op)) {
+        return;
+    }
+#endif
     PyGC_Head *gc = _Py_AS_GC(op);
     _PyObject_ASSERT_FROM(op,
                           (gc->_gc_prev & _PyGC_PREV_MASK_COLLECTING) == 0,
@@ -266,9 +289,19 @@ static inline void _PyObject_GC_UNTRACK(
 #endif
     PyObject *op)
 {
+    // The SCC algorithm for immutable object collection across interpreters
+    // captures if objects are tracked or not and recreates that status on
+    // dissolve. Some objects may attempt to change their tracked status during
+    // this time. We just allow untracking of untracked objects in SCC builds
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (!_PyObject_GC_IS_TRACKED(op)) {
+        return;
+    }
+#else
     _PyObject_ASSERT_FROM(op, _PyObject_GC_IS_TRACKED(op),
                           "object not tracked by the garbage collector",
                           filename, lineno, __func__);
+#endif
 
 #ifdef Py_GIL_DISABLED
     _PyObject_CLEAR_GC_BITS(op, _PyGC_BITS_TRACKED);

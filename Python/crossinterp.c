@@ -466,6 +466,17 @@ _check_xidata(PyThreadState *tstate, _PyXIData_t *xidata)
     return 0;
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+static PyObject* immutable_new_object(_PyXIData_t* data) {
+    assert(data->data == (void*) 0xdeadbeef);
+    assert(data->obj != NULL);
+    assert(_Py_IsDeepImmutable(data->obj));
+    Py_IncRef(data->obj);
+
+    return data->obj;
+}
+#endif // _Py_PYRONA_INTERPRETER_SHARING
+
 static int
 _get_xidata(PyThreadState *tstate,
             PyObject *obj, xidata_fallback_t fallback, _PyXIData_t *xidata)
@@ -478,6 +489,23 @@ _get_xidata(PyThreadState *tstate,
         _PyErr_SetString(tstate, PyExc_ValueError, "xidata not cleared");
         return -1;
     }
+
+    // Artifact[Implementation]: The branch that allows direct sharing for immutable object across sub-interpreters
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    int deep_immutable = _PyImmutability_CanViewAsDeepImmutable(obj);
+    if (deep_immutable < 0) {
+        return -1;
+    }
+    if (deep_immutable) {
+        // `data` is only a marker: the object itself is handed over, so there
+        // is nothing to free and `free` stays NULL. This still has to go
+        // through _PyXIData_Init() to record the owning interpreter, which
+        // _PyXIData_Clear() and _tuple_shared_free() check against.
+        _PyXIData_Init(xidata, interp, (void*) 0xdeadbeef, obj,
+                       (xid_newobjfunc) immutable_new_object);
+        return 0;
+    }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
     // Call the "getdata" func for the object.
     dlcontext_t ctx;

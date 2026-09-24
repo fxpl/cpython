@@ -165,7 +165,7 @@ class TestSendRecv(TestBase):
 
     def test_send_recv_main(self):
         r, s = channels.create()
-        orig = b'spam'
+        orig = [b'spam']
         s.send_nowait(orig)
         obj = r.recv()
 
@@ -177,7 +177,7 @@ class TestSendRecv(TestBase):
         interp.exec(dedent("""
             from test.support import channels
             r, s = channels.create()
-            orig = b'spam'
+            orig = [b'spam']
             s.send_nowait(orig)
             obj = r.recv()
             assert obj == orig, 'expected: obj == orig'
@@ -222,7 +222,7 @@ class TestSendRecv(TestBase):
         t = threading.Thread(target=f)
         t.start()
 
-        orig = b'spam'
+        orig = [b'spam']
         s.send(orig)
         obj = r.recv()
         t.join()
@@ -232,7 +232,7 @@ class TestSendRecv(TestBase):
 
     def test_send_recv_nowait_main(self):
         r, s = channels.create()
-        orig = b'spam'
+        orig = [b'spam']
         s.send_nowait(orig)
         obj = r.recv_nowait()
 
@@ -250,7 +250,7 @@ class TestSendRecv(TestBase):
         interp.exec(dedent("""
             from test.support import channels
             r, s = channels.create()
-            orig = b'spam'
+            orig = [b'spam']
             s.send_nowait(orig)
             obj = r.recv_nowait()
             assert obj == orig, 'expected: obj == orig'

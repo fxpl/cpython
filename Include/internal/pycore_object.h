@@ -133,9 +133,15 @@ extern PyAPI_FUNC(void) _Py_DecRefTotal(PyThreadState *);
 // Increment reference count by n
 static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
 {
-    if (_Py_IsImmortal(op)) {
-        _Py_INCREF_IMMORTAL_STAT_INC();
+    if (_Py_NeedsSlowRcBranch(op)) {
+        if (_Py_IsImmortal(op)) {
+            _Py_INCREF_IMMORTAL_STAT_INC();
+            return;
+        }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        _Py_SlowIncRef(op);
         return;
+#endif
     }
 #ifndef Py_GIL_DISABLED
     Py_ssize_t refcnt = _Py_REFCNT(op);
@@ -205,11 +211,15 @@ static inline void _Py_SetMortal(PyObject *op, short refcnt)
     if (op) {
         assert(_Py_IsImmortal(op));
 #ifdef Py_GIL_DISABLED
+        // TODO(Immutable): Do we need to do something here?
         op->ob_tid = _Py_UNOWNED_TID;
         op->ob_ref_local = 0;
         op->ob_ref_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED);
 #else
         op->ob_refcnt = refcnt;
+#if SIZEOF_VOID_P > 4
+        _Py_OB_FLAG_REMOVE(op, _Py_IMMORTAL_FLAGS);
+#endif
 #endif
     }
 }
@@ -232,21 +242,29 @@ static inline void _Py_ClearImmortal(PyObject *op)
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 {
-    if (_Py_IsImmortal(op)) {
-        _Py_DECREF_IMMORTAL_STAT_INC();
+    if (_Py_NeedsSlowRcBranch(op)) {
+        if (_Py_IsImmortal(op)) {
+            _Py_DECREF_IMMORTAL_STAT_INC();
+            return;
+        }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        _Py_SlowDecRefSpecialized(op, destruct);
         return;
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
     _Py_DEC_REFTOTAL(PyInterpreterState_Get());
 #endif
-    if (--op->ob_refcnt != 0) {
+    op->ob_refcnt -= 1;
+    if (op->ob_refcnt != 0) {
         assert(op->ob_refcnt > 0);
     }
     else {
 #ifdef Py_TRACE_REFS
         _Py_ForgetReference(op);
 #endif
+        _Py_CLEAR_IMMUTABLE(op);
         _PyReftracerTrack(op, PyRefTracer_DESTROY);
         destruct(op);
     }
@@ -255,9 +273,22 @@ _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
 static inline void
 _Py_DECREF_NO_DEALLOC(PyObject *op)
 {
-    if (_Py_IsImmortal(op)) {
-        _Py_DECREF_IMMORTAL_STAT_INC();
-        return;
+    if (_Py_NeedsSlowRcBranch(op)) {
+        if (_Py_IsImmortal(op)) {
+            _Py_DECREF_IMMORTAL_STAT_INC();
+            return;
+        }
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        if (_Py_NeedsImmutableRC(op)) {
+            _Py_DecRef_Immutable(op);
+            return;
+        }
+        if (_Py_NeedsAtomicRC(op)) {
+            _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+            return;
+        }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
 #ifdef Py_REF_DEBUG
@@ -272,6 +303,7 @@ _Py_DECREF_NO_DEALLOC(PyObject *op)
 }
 
 #else
+// TODO(Immutable): We need to do stuff in the NoGIL build
 // TODO: implement Py_DECREF specializations for Py_GIL_DISABLED build
 static inline void
 _Py_DECREF_SPECIALIZED(PyObject *op, const destructor destruct)
@@ -443,9 +475,16 @@ static inline void Py_DECREF_MORTAL(const char *filename, int lineno, PyObject *
     }
     _Py_DECREF_STAT_INC();
     assert(!_Py_IsStaticImmortal(op));
-    if (!_Py_IsImmortal(op)) {
-        _Py_DECREF_DecRefTotal();
+    if (_Py_NeedsSlowRcBranch(op)) {
+        if (_Py_IsImmortal(op)) {
+            return;
+        }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        _Py_SlowDecRef(op);
+        return;
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
+    _Py_DECREF_DecRefTotal();
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -462,13 +501,34 @@ static inline void _Py_DECREF_MORTAL_SPECIALIZED(const char *filename, int linen
     if (!_Py_IsImmortal(op)) {
         _Py_DECREF_DecRefTotal();
     }
-    if (--op->ob_refcnt == 0) {
-#ifdef Py_TRACE_REFS
-        _Py_ForgetReference(op);
-#endif
-        _PyReftracerTrack(op, PyRefTracer_DESTROY);
-        destruct(op);
+
+    // TODO(Immutable): Check this is okay, does it perform okay?
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsImmutableRC(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            goto destroy;
+        }
+        return;
     }
+    if (_Py_NeedsAtomicRC(op)) {
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+        if (old == 1) {
+            goto destroy;
+        }
+        return;
+    }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
+
+    if (--op->ob_refcnt != 0) {
+        return;
+    }
+
+destroy:
+#ifdef Py_TRACE_REFS
+    _Py_ForgetReference(op);
+#endif
+    _PyReftracerTrack(op, PyRefTracer_DESTROY);
+    destruct(op);
 }
 #define Py_DECREF_MORTAL_SPECIALIZED(op, destruct) _Py_DECREF_MORTAL_SPECIALIZED(__FILE__, __LINE__, op, destruct)
 
@@ -478,6 +538,12 @@ static inline void Py_DECREF_MORTAL(PyObject *op)
 {
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsSlowRcBranch(op)) {
+        _Py_SlowDecRef(op);
+        return;
+    }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     if (--op->ob_refcnt == 0) {
         _Py_Dealloc(op);
     }
@@ -488,10 +554,31 @@ static inline void Py_DECREF_MORTAL_SPECIALIZED(PyObject *op, destructor destruc
 {
     assert(!_Py_IsStaticImmortal(op));
     _Py_DECREF_STAT_INC();
-    if (--op->ob_refcnt == 0) {
-        _PyReftracerTrack(op, PyRefTracer_DESTROY);
-        destruct(op);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsSlowRcBranch(op)) {
+        if (_Py_NeedsImmutableRC(op)) {
+            if (_Py_DecRef_Immutable(op)) {
+                goto destroy;
+            }
+            return;
+        }
+        if (_Py_NeedsAtomicRC(op)) {
+            uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            if (old == 1) {
+                goto destroy;
+            }
+            return;
+        }
     }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
+
+    if (--op->ob_refcnt != 0) {
+        return;
+    }
+
+destroy:
+    _PyReftracerTrack(op, PyRefTracer_DESTROY);
+    destruct(op);
 }
 #define Py_DECREF_MORTAL_SPECIALIZED(op, destruct) Py_DECREF_MORTAL_SPECIALIZED(_PyObject_CAST(op), destruct)
 
@@ -759,6 +846,18 @@ _Py_TryIncref(PyObject *op)
 #ifdef Py_GIL_DISABLED
     return _Py_TryIncrefFast(op) || _Py_TryIncRefShared(op);
 #else
+    assert(!_Py_IsDeepImmutable(op) && "Use _Py_TryIncref_Immutable for immutable objects");
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsAtomicRC(op)) {
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)1);
+        // We shouldn't revive the object:
+        if (old == 0) {
+            _Py_atomic_add_uint32(&op->ob_refcnt, (PY_UINT32_T)-1);
+            return 0;
+        }
+        return 1;
+    }
+#endif
     if (Py_REFCNT(op) > 0) {
         Py_INCREF(op);
         return 1;
@@ -766,6 +865,9 @@ _Py_TryIncref(PyObject *op)
     return 0;
 #endif
 }
+
+int _Py_TryIncref_Immutable(PyObject *op);
+int _Py_IsDead_Immutable(PyObject *op);
 
 // Enqueue an object to be freed possibly after some delay
 #ifdef Py_GIL_DISABLED
@@ -1038,6 +1140,13 @@ extern int _PyObject_SetManagedDict(PyObject *obj, PyObject *new_dict);
 static inline Py_ALWAYS_INLINE void _Py_INCREF_MORTAL(PyObject *op)
 {
     assert(!_Py_IsStaticImmortal(op));
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_NeedsSlowRcBranch(op)) {
+        _Py_SlowIncRef(op);
+        return;
+    }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
+
     op->ob_refcnt++;
     _Py_INCREF_STAT_INC();
 #if defined(Py_REF_DEBUG) && !defined(Py_LIMITED_API)
@@ -1051,6 +1160,21 @@ static inline Py_ALWAYS_INLINE void _Py_INCREF_MORTAL(PyObject *op)
 /* Utility for the tp_traverse slot of mutable heap types that have no other
  * references. */
 PyAPI_FUNC(int) _PyObject_VisitType(PyObject *op, visitproc visit, void *arg);
+
+/**
+ * Visits the type without verifying that it's a heap type
+ */
+PyAPI_FUNC(int) _PyObject_ReachableVisitType(PyObject *op, visitproc visit, void *arg);
+
+/**
+ * Visits the type without verifying that it's a heap type
+ */
+PyAPI_FUNC(int) _PyObject_ReachableVisitTypeAndTraverse(PyObject *op, visitproc visit, void *arg);
+
+/* Visits everything reachable from op, including its type. Uses tp_reachable,
+ * falling back to tp_traverse (with a one-time warning per type). Takes the
+ * object's critical section, and the type lock if op is a type. */
+PyAPI_FUNC(int) _PyObject_VisitReachable(PyObject *op, visitproc visit, void *arg);
 
 #ifdef __cplusplus
 }

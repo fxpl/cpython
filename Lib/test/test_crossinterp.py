@@ -4,6 +4,7 @@ import sys
 import types
 import unittest
 import warnings
+import immutable
 
 from test.support import import_helper
 
@@ -505,6 +506,10 @@ class _GetXIDataTests(unittest.TestCase):
         mode = self._resolve_mode(mode)
         for obj in values:
             with self.subTest(repr(obj)):
+                if immutable._cross_interpreter_sharing and immutable.is_deep_frozen(obj):
+                    # No exception should be raised
+                    continue
+
                 with self.assertRaises(NotShareableError) as cm:
                     _testinternalcapi.get_crossinterp_data(obj, mode)
                 if exctype is not None:

@@ -390,7 +390,7 @@ class TestQueueOps(TestBase):
         for methname in ('get', 'get_nowait'):
             with self.subTest(f'{methname}()'):
                 interp.exec(dedent(f"""
-                    orig = b'spam'
+                    orig = [b'spam']
                     queue.put(orig)
                     obj = queue.{methname}()
                     assert obj == orig, 'expected: obj == orig'
@@ -405,7 +405,7 @@ class TestQueueOps(TestBase):
 
         for methname in ('get', 'get_nowait'):
             with self.subTest(f'{methname}()'):
-                obj1 = b'spam'
+                obj1 = [b'spam']
                 queue1.put(obj1)
 
                 out = _run_output(
@@ -417,10 +417,10 @@ class TestQueueOps(TestBase):
                         assert queue1.qsize() == 1, 'expected: queue1.qsize() == 1'
                         obj = queue1.{methname}()
                         assert queue1.qsize() == 0, 'expected: queue1.qsize() == 0'
-                        assert obj == b'spam', 'expected: obj == obj1'
+                        assert obj == [b'spam'], 'expected: obj == [spam]'
                         # When going to another interpreter we get a copy.
                         assert id(obj) != {id(obj1)}, 'expected: obj is not obj1'
-                        obj2 = b'eggs'
+                        obj2 = [b'eggs']
                         print(id(obj2))
                         assert queue2.qsize() == 0, 'expected: queue2.qsize() == 0'
                         queue2.put(obj2)
@@ -432,7 +432,7 @@ class TestQueueOps(TestBase):
 
                 get = getattr(queue2, methname)
                 obj2 = get()
-                self.assertEqual(obj2, b'eggs')
+                self.assertEqual(obj2, [b'eggs'])
                 self.assertNotEqual(id(obj2), int(out))
 
     def test_put_cleared_with_subinterpreter(self):
@@ -653,7 +653,7 @@ class TestQueueOps(TestBase):
         t = threading.Thread(target=f)
         t.start()
 
-        orig = b'spam'
+        orig = [b'spam']
         queue1.put(orig)
         obj = queue2.get()
         t.join()
