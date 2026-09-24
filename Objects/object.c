@@ -364,6 +364,7 @@ _Py_DecRef(PyObject *o)
     Py_DECREF(o);
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 void _Py_SlowIncRef(PyObject *op) {
     // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
     if (_Py_NeedsImmutableRC(op)) {
@@ -415,6 +416,7 @@ void _Py_SlowDecRefSpecialized(PyObject *op, const destructor destruct) {
         // assert(false);
     }
 }
+#endif // _Py_PYRONA_INTERPRETER_SHARING
 
 #ifdef Py_GIL_DISABLED
 # ifdef Py_REF_DEBUG

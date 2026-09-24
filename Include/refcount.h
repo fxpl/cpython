@@ -444,9 +444,11 @@ PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
 // Similar to Py_IncRef() and Py_DecRef() but the argument must be non-NULL.
 // Private functions used by Py_INCREF() and Py_DECREF().
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 PyAPI_FUNC(void) _Py_SlowIncRef(PyObject *);
 PyAPI_FUNC(void) _Py_SlowDecRef(PyObject *);
 PyAPI_FUNC(void) _Py_SlowDecRefSpecialized(PyObject *, const destructor);
+#endif
 
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
