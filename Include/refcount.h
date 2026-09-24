@@ -442,6 +442,12 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+// Similar to Py_IncRef() and Py_DecRef() but the argument must be non-NULL.
+// Private functions used by Py_INCREF() and Py_DECREF().
+PyAPI_FUNC(void) _Py_SlowIncRef(PyObject *);
+PyAPI_FUNC(void) _Py_SlowDecRef(PyObject *);
+PyAPI_FUNC(void) _Py_SlowDecRefSpecialized(PyObject *, const destructor);
+
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
 #if defined(Py_LIMITED_API) && (Py_LIMITED_API+0 >= 0x030c0000 || defined(Py_REF_DEBUG))
@@ -483,15 +489,8 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         }
 #ifndef Py_LIMITED_API
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
-        // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
-        if (_Py_NeedsImmutableRC(op)) {
-            _Py_RefcntAdd_Immutable(op, 1);
-            return;
-        }
-        if (_Py_NeedsAtomicRC(op)) {
-            _Py_atomic_add_uint32(&op->ob_refcnt, 1);
-            return;
-        }
+        _Py_SlowIncRef(op);
+        return;
 #endif
 #else
         // Immutable object in limited API: delegate to runtime function
@@ -616,21 +615,8 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
             return;
         }
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
-        if (_Py_NeedsImmutableRC(op)) {
-            if (_Py_DecRef_Immutable(op)) {
-                _Py_Dealloc(op);
-            }
-            return;
-        }
-        if (_Py_NeedsAtomicRC(op)) {
-            // A previous value of 1 means the new value is now 0
-            uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
-            assert(old > 0);
-            if (old == 1) {
-                _Py_Dealloc(op);
-            }
-            return;
-        }
+        _Py_SlowDecRef(op);
+        return;
 #endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
@@ -655,28 +641,12 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
         }
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 #ifndef Py_LIMITED_API
-        // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_DECREF
-        if (_Py_NeedsImmutableRC(op))
-        {
-            if (_Py_DecRef_Immutable(op)) {
-                _Py_Dealloc(op);
-            }
-            return;
-        }
-        if (_Py_NeedsAtomicRC(op)) {
-            // A previous value of 1 means the new value is now 0
-            uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
-            assert(old > 0);
-            if (old == 1) {
-                _Py_Dealloc(op);
-            }
-            return;
-        }
+        _Py_SlowDecRef(op);
 #else
         // Immutable object in limited API: delegate to runtime function
         Py_DecRef(op);
-        return;
 #endif
+        return;
 #endif
     }
     _Py_DECREF_STAT_INC();

@@ -364,6 +364,58 @@ _Py_DecRef(PyObject *o)
     Py_DECREF(o);
 }
 
+void _Py_SlowIncRef(PyObject *op) {
+    // Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF
+    if (_Py_NeedsImmutableRC(op)) {
+        _Py_RefcntAdd_Immutable(op, 1);
+    } else if (_Py_NeedsAtomicRC(op)) {
+        _Py_atomic_add_uint32(&op->ob_refcnt, 1);
+    } else {
+        Py_INCREF(op);
+        // assert(false);
+    }
+}
+void _Py_SlowDecRef(PyObject *op) {
+    if (_Py_NeedsImmutableRC(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+    } else if (_Py_NeedsAtomicRC(op)) {
+        // A previous value of 1 means the new value is now 0
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+        assert(old > 0);
+        if (old == 1) {
+            _Py_Dealloc(op);
+        }
+    } else {
+        // TODO: Why is this needed?
+        Py_DECREF(op);
+        // assert(false);
+    }
+}
+void _Py_SlowDecRefSpecialized(PyObject *op, const destructor destruct) {
+    if (_Py_NeedsImmutableRC(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_CLEAR_IMMUTABLE(op);
+            _PyReftracerTrack(op, PyRefTracer_DESTROY);
+            destruct(op);
+        }
+    } else if (_Py_NeedsAtomicRC(op)) {
+        // A previous value of 1 means the new value is now 0
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+        assert(old > 0);
+        if (old == 1) {
+            _Py_CLEAR_IMMUTABLE(op);
+            _PyReftracerTrack(op, PyRefTracer_DESTROY);
+            destruct(op);
+        }
+    } else {
+        // TODO: Why is this needed?
+        _Py_DECREF_SPECIALIZED(op, destruct);
+        // assert(false);
+    }
+}
+
 #ifdef Py_GIL_DISABLED
 # ifdef Py_REF_DEBUG
 static int
