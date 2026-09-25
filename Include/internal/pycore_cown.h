@@ -16,21 +16,22 @@ typedef struct _PyCownObject _PyCownObject;
 
 PyAPI_DATA(PyTypeObject) _PyCown_Type;
 
-typedef uint64_t _PyCown_ipid_t;
-typedef uint64_t _PyCown_thread_id_t;
+typedef uintptr_t _PyCown_owner_id_t;
 
-PyAPI_FUNC(_PyCown_ipid_t) _PyCown_ThisInterpreterId(void);
-PyAPI_FUNC(_PyCown_thread_id_t) _PyCown_ThisThreadId(void);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+// The interpreter id 0 is used. This value will be used to indicate that
+// no interpreter owns the cown.
+#define _Py_PYRONA_RELEASED_OWNER_ID ((_PyCown_owner_id_t)0xff00ff00ff00ff00LL)
+#else
+#define _Py_PYRONA_RELEASED_OWNER_ID _Py_UNOWNED_TID
+#endif
+
+
+PyAPI_FUNC(_PyCown_owner_id_t) _PyCown_ThisOwnerId(void);
 
 /* The interpreter currently owning the cown, or `_PyCown_ReleasedIpid()` when
  * no interpreter does. Safe to call from any interpreter. */
-PyAPI_FUNC(_PyCown_ipid_t) _PyCown_Owner(PyObject *cown);
-PyAPI_FUNC(_PyCown_ipid_t) _PyCown_ReleasedIpid(void);
-
-/* The thread that acquired the cown, or `_PyCown_UnsetThreadId()` when it was
- * acquired without the GIL. Not enforced, only reported. */
-PyAPI_FUNC(_PyCown_thread_id_t) _PyCown_LockingThread(PyObject *cown);
-PyAPI_FUNC(_PyCown_thread_id_t) _PyCown_UnsetThreadId(void);
+PyAPI_FUNC(_PyCown_owner_id_t) _PyCown_Owner(PyObject *cown);
 
 
 #ifdef __cplusplus
