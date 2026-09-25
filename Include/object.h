@@ -260,7 +260,7 @@ _Py_IsOwnedByCurrentThread(PyObject *ob)
 #ifdef _Py_THREAD_SANITIZER
     return _Py_atomic_load_uintptr_relaxed(&ob->ob_tid) == _Py_ThreadId();
 #else
-    return ob->ob_tid == _Py_ThreadId();
+    return _Py_atomic_load_uintptr_relaxed(&ob->ob_tid) == _Py_ThreadId();
 #endif
 }
 #endif
