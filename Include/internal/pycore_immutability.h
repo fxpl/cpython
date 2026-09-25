@@ -8,6 +8,8 @@ extern "C" {
 #  error "Py_BUILD_CORE must be defined to include this header"
 #endif
 
+#include "pycore_cown.h"
+
 struct _PyRegionRefMetadata;
 
 PyAPI_DATA(PyTypeObject) _PyTracingRegion_Type;
@@ -37,7 +39,7 @@ PyAPI_FUNC(void) _PyTracingRegion_SetMetaCown(PyObject* region, PyObject* cown);
 // FIXME: The deallocation will be fixed in a follow-up, then we can remove the
 // owner argument and assert that it's always local.
 PyAPI_FUNC(void) _PyTracingRegion_SetMetaOwner(
-    PyObject* region, uint64_t owner);
+    PyObject* region, _PyCown_owner_id_t owner);
 
 struct _Py_immutability_state {
     // FIXME(immutability): We probably need to lock any reads and writes. And

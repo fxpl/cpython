@@ -6,7 +6,7 @@
 #include "pycore_pyerrors.h"      // _PyErr_ChainExceptions1()
 #include "pycore_pystate.h"
 #include "pycore_weakref.h"       // _PyWeakref_GET_REF()
-#include "pycore_cown.h"          // _PyCown_ThisInterpreterId()
+#include "pycore_cown.h"          // _PyCown_ThisOwnerId()
 #include "pycore_immutability.h"  // _PyTracingRegion_Open()
 #include "pycore_interp.h"        // PyInterpreterState.immutability
 #include "pycore_regionref.h"
@@ -185,7 +185,7 @@ meta_new_local_lock_held(void)
 {
     _PyRegionRefMetadata *meta = meta_new_lock_held(_Py_REGION_REF_OPEN_IPID);
     if (meta != NULL) {
-        meta->value.ipid = _PyCown_ThisInterpreterId();
+        meta->value.ipid = _PyCown_ThisOwnerId();
     }
     return meta;
 }
@@ -224,7 +224,7 @@ meta_set_cown_lock_held(_PyRegionRefMetadata *meta, PyObject *cown)
 }
 
 static void
-meta_set_open_ipid_lock_held(_PyRegionRefMetadata *meta, _PyCown_ipid_t ipid)
+meta_set_open_ipid_lock_held(_PyRegionRefMetadata *meta, _PyCown_owner_id_t ipid)
 {
     meta_clear_parent_lock_held(meta);
     meta->kind = _Py_REGION_REF_OPEN_IPID;
@@ -232,7 +232,7 @@ meta_set_open_ipid_lock_held(_PyRegionRefMetadata *meta, _PyCown_ipid_t ipid)
 }
 
 static void
-meta_set_closed_ipid_lock_held(_PyRegionRefMetadata *meta, _PyCown_ipid_t ipid)
+meta_set_closed_ipid_lock_held(_PyRegionRefMetadata *meta, _PyCown_owner_id_t ipid)
 {
     meta_clear_parent_lock_held(meta);
     meta->kind = _Py_REGION_REF_CLOSED_IPID;
@@ -295,10 +295,10 @@ _PyRegionRef_MetaSetCown(_PyRegionRefMetadata *meta, PyObject *cown)
 }
 
 void
-_PyRegionRef_MetaSetIpid(_PyRegionRefMetadata *meta, _PyCown_ipid_t ipid)
+_PyRegionRef_MetaSetIpid(_PyRegionRefMetadata *meta, _PyCown_owner_id_t ipid)
 {
     LOCK_REGION_REF_META();
-    assert(ipid == _PyCown_ThisInterpreterId());
+    assert(ipid == _PyCown_ThisOwnerId());
     meta_set_closed_ipid_lock_held(meta, ipid);
     UNLOCK_REGION_REF_META();
 }
@@ -307,7 +307,7 @@ void
 _PyRegionRef_MetaSetReleased(_PyRegionRefMetadata *meta)
 {
     LOCK_REGION_REF_META();
-    meta_set_closed_ipid_lock_held(meta, _PyCown_ReleasedIpid());
+    meta_set_closed_ipid_lock_held(meta, _Py_PYRONA_RELEASED_OWNER_ID);
     UNLOCK_REGION_REF_META();
 }
 
@@ -318,7 +318,7 @@ _PyRegionRef_MetaRegionOpened(_PyRegionRefMetadata *meta)
     // FIXME(regions): The following assert fails since some metas have a parent meta IDK why
     // assert(meta->kind == _Py_REGION_REF_CLOSED_IPID || meta->kind == _Py_REGION_REF_COWN);
     meta->region = NULL;
-    meta_set_open_ipid_lock_held(meta, _PyCown_ThisInterpreterId());
+    meta_set_open_ipid_lock_held(meta, _PyCown_ThisOwnerId());
     UNLOCK_REGION_REF_META();
 }
 
@@ -327,7 +327,7 @@ _PyRegionRef_MetaResolveWip(_PyRegionRefMetadata *meta)
 {
     LOCK_REGION_REF_META();
     if (meta->kind == _Py_REGION_REF_WIP) {
-        meta_set_closed_ipid_lock_held(meta, _PyCown_ThisInterpreterId());
+        meta_set_closed_ipid_lock_held(meta, _PyCown_ThisOwnerId());
     }
     UNLOCK_REGION_REF_META();
 }
@@ -441,11 +441,9 @@ static int
 regionref_check_access(PyWeakReference *self, regionref_open_list_t *regions,
                        bool quiet)
 {
-    const _PyCown_ipid_t this_ip = _PyCown_ThisInterpreterId();
+    const _PyCown_owner_id_t this_ip = _PyCown_ThisOwnerId();
     regionref_verdict_t verdict = REGIONREF_ALLOWED;
-    _PyCown_ipid_t owner = 0;
-    _PyCown_thread_id_t locking_thread = 0;
-    bool wrong_thread = false;
+    _PyCown_owner_id_t owner = 0;
 
     // Nothing inside this section may raise or allocate through Python.
     LOCK_REGION_REF_META();
@@ -472,14 +470,6 @@ regionref_check_access(PyWeakReference *self, regionref_open_list_t *regions,
             if (owner != this_ip) {
                 verdict = REGIONREF_DENIED_COWN;
             }
-            else {
-                // FIXME(regions): For this to work, we also need to track the TID
-                // inside meta. This can also be used for `_Py_REGION_REF_OPEN_IPID`
-                //
-                // locking_thread = _PyCown_LockingThread(meta->value.cown);
-                // wrong_thread = locking_thread != _PyCown_UnsetThreadId()
-                //                && locking_thread != _PyCown_ThisThreadId();
-            }
             break;
         case _Py_REGION_REF_OPEN_IPID:
             owner = meta->value.ipid;
@@ -492,11 +482,6 @@ regionref_check_access(PyWeakReference *self, regionref_open_list_t *regions,
             if (owner != this_ip) {
                 verdict = REGIONREF_DENIED_COWN;
             }
-            else {
-                locking_thread = _PyCown_LockingThread(meta->value.cown);
-                wrong_thread = locking_thread != _PyCown_UnsetThreadId()
-                               && locking_thread != _PyCown_ThisThreadId();
-            }
             break;
         default:
             Py_UNREACHABLE();
@@ -505,17 +490,6 @@ regionref_check_access(PyWeakReference *self, regionref_open_list_t *regions,
     // A NULL node means the target was frozen, which makes it reachable from
     // everywhere. Every live region reference has a node from birth.
     UNLOCK_REGION_REF_META();
-
-    if (wrong_thread) {
-        // FIXME(regions): Thread ownership is not enforced, any thread of the
-        // owning interpreter may reach the data. Whether that should change is
-        // a question for once this has seen some use.
-        fprintf(stderr,
-                "RegionRef dereferenced from thread %llu, but the cown was "
-                "acquired by thread %llu\n",
-                (unsigned long long)_PyCown_ThisThreadId(),
-                (unsigned long long)locking_thread);
-    }
 
     if (verdict == REGIONREF_ALLOWED) {
         return 0;
@@ -539,7 +513,7 @@ regionref_check_access(PyWeakReference *self, regionref_open_list_t *regions,
             "the region holding this reference is currently being closed");
         return -1;
     case REGIONREF_DENIED_COWN:
-        if (owner == _PyCown_ReleasedIpid()) {
+        if (owner == _Py_PYRONA_RELEASED_OWNER_ID) {
             PyErr_Format(
                 PyExc_RuntimeError,
                 "interpreter %llu attempted to dereference a region reference "
@@ -549,7 +523,7 @@ regionref_check_access(PyWeakReference *self, regionref_open_list_t *regions,
         }
         _Py_FALLTHROUGH;
     case REGIONREF_DENIED_IPID:
-        if (owner == _PyCown_ReleasedIpid()) {
+        if (owner == _Py_PYRONA_RELEASED_OWNER_ID) {
             PyErr_Format(
                 PyExc_RuntimeError,
                 "interpreter %llu attempted to dereference a region reference "

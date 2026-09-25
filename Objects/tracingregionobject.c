@@ -1944,7 +1944,7 @@ void _PyTracingRegion_SetMetaCown(PyObject* region, PyObject* cown) {
     }
 }
 
-void _PyTracingRegion_SetMetaOwner(PyObject* region, _PyCown_ipid_t owner) {
+void _PyTracingRegion_SetMetaOwner(PyObject* region, _PyCown_owner_id_t owner) {
     TracingRegionObject *self = (TracingRegionObject*)region;
     if (self->meta != NULL) {
         _PyRegionRef_MetaSetIpid(self->meta, owner);

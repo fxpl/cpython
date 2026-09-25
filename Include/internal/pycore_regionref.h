@@ -52,7 +52,7 @@ typedef struct _PyRegionRefMetadata {
     union {
         struct _PyRegionRefMetadata *parent;  /* META */
         PyObject *cown;                       /* COWN, borrowed */
-        _PyCown_ipid_t ipid;                  /* IPID */
+        _PyCown_owner_id_t ipid;              /* IPID */
     } value;
 } _PyRegionRefMetadata;
 
@@ -70,7 +70,7 @@ extern void _PyRegionRef_MetaSetCown(_PyRegionRefMetadata *meta, PyObject *cown)
 /* Stamps an explicit owner, which need not be the current interpreter and may
  * be `_PyCown_ReleasedIpid()` to mean nobody owns the region. */
 extern void _PyRegionRef_MetaSetIpid(_PyRegionRefMetadata *meta,
-                                     _PyCown_ipid_t ipid);
+                                     _PyCown_owner_id_t ipid);
 extern void _PyRegionRef_MetaSetReleased(_PyRegionRefMetadata *meta);
 extern void _PyRegionRef_MetaRegionOpened(_PyRegionRefMetadata *meta);
 extern void _PyRegionRef_MetaResolveWip(_PyRegionRefMetadata *meta);
