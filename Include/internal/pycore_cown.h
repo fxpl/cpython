@@ -16,11 +16,10 @@ typedef struct _PyCownObject _PyCownObject;
 
 PyAPI_DATA(PyTypeObject) _PyCown_Type;
 
-typedef uint64_t _PyCown_ipid_t;
-typedef uint64_t _PyCown_thread_id_t;
+typedef uintptr_t _PyCown_owner_id_t;
 
-PyAPI_FUNC(_PyCown_ipid_t) _PyCown_ThisInterpreterId(void);
-PyAPI_FUNC(_PyCown_thread_id_t) _PyCown_ThisThreadId(void);
+
+PyAPI_FUNC(_PyCown_owner_id_t) _PyCown_ThisOwnerId(void);
 
 
 #ifdef __cplusplus
