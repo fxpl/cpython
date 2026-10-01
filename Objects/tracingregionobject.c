@@ -298,70 +298,6 @@ traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *state)
     return visit((PyObject *)tp, state);
 }
 
-/* Returns the appropriate traversal function for reaching all references from
- * an object. Prefers tp_reachable, falls back to tp_traverse wrapped to also
- * visit the type.
- *
- * Falling back means the trace can miss references that only tp_reachable
- * reports, so every type it happens for is recorded in `missing_reachable` and
- * reported by `report_missing_reachable()` once the trace is over. Warning here
- * would write to `sys.stderr` in the middle of the traversal, which can run
- * arbitrary Python code and invalidate the reference counts already sampled.
- *
- * `missing_reachable` may be NULL to skip the recording.
- */
-static traverseproc
-get_reachable_proc(PyTypeObject *tp, _Py_hashtable_t *missing_reachable)
-{
-    if (tp->tp_reachable != NULL) {
-        return tp->tp_reachable;
-    }
-
-    if (missing_reachable != NULL
-        && _Py_hashtable_get_entry(missing_reachable, tp) == NULL)
-    {
-        // Types are frozen rather than moved, so `_move_obj()` returns before it
-        // samples their reference count. Holding one here can therefore not
-        // disturb the LRC of any region.
-        if (_Py_hashtable_set(missing_reachable, Py_NewRef(tp),
-                              (void *)(Py_uintptr_t)(tp->tp_traverse != NULL)) < 0) {
-            Py_DECREF(tp);
-            // A failed warning must not fail the close.
-            PyErr_Clear();
-        }
-    }
-
-    // Always return the wrapper; even when tp_traverse is NULL, the wrapper
-    // will still visit the type object which tp_reachable is expected to do.
-    return traverse_via_tp_traverse;
-}
-
-static int
-report_missing_reachable_type(
-    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
-{
-    PyTypeObject *tp = (PyTypeObject *)key;
-    if (value) {
-        PySys_FormatStderr(
-            "regions: type '%.100s' has tp_traverse but no tp_reachable\n",
-            tp->tp_name);
-    }
-    else {
-        PySys_FormatStderr(
-            "regions: type '%.100s' has no tp_traverse and no tp_reachable\n",
-            tp->tp_name);
-    }
-    return 0;
-}
-
-static int
-release_missing_reachable_type(
-    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
-{
-    Py_DECREF((PyObject *)key);
-    return 0;
-}
-
 // ###################################################################
 // Tracing Impl
 // ###################################################################
@@ -588,10 +524,6 @@ typedef struct {
     // reach a fixed point, but if somebody wants to do dark magic, that's
     // really not our problem.
     _Py_hashtable_t *tracing_counts;
-    // The types that had to be traversed via tp_traverse because they have no
-    // tp_reachable. Used to report each of them once per trace, see
-    // `get_reachable_proc()`.
-    _Py_hashtable_t *missing_reachable;
     // The region hierarchy of this trace, child nodes map to their parents.
     _Py_hashtable_t *hierarchy;
 } tree_trace_state_t;
@@ -600,12 +532,6 @@ static void tree_trace_state_destroy(tree_trace_state_t* state) {
     if (state->tracing_counts) {
         _Py_hashtable_destroy(state->tracing_counts);
         state->tracing_counts = NULL;
-    }
-    if (state->missing_reachable) {
-        (void)_Py_hashtable_foreach(
-            state->missing_reachable, release_missing_reachable_type, NULL);
-        _Py_hashtable_destroy(state->missing_reachable);
-        state->missing_reachable = NULL;
     }
     if (state->hierarchy) {
         _Py_hashtable_destroy(state->hierarchy);
@@ -616,31 +542,10 @@ static void tree_trace_state_destroy(tree_trace_state_t* state) {
     }
 }
 
-/* Reports the types that `get_reachable_proc()` had to fall back for.
- *
- * This has to run after the traversal is over, since writing to `sys.stderr`
- * can execute arbitrary Python code.
- */
-static void report_missing_reachable(tree_trace_state_t* state) {
-    if (state->missing_reachable == NULL
-        || _Py_hashtable_len(state->missing_reachable) == 0)
-    {
-        return;
-    }
-
-    // Keep whatever the trace is raising; a failed warning is not worth
-    // replacing a region error with.
-    PyObject *exc = PyErr_GetRaisedException();
-    (void)_Py_hashtable_foreach(
-        state->missing_reachable, report_missing_reachable_type, NULL);
-    PyErr_SetRaisedException(exc);
-}
-
 static int tree_trace_state_init(tree_trace_state_t* state) {
     // Both fields have to be cleared up front, so that the error path below can
     // call `tree_trace_state_destroy()` before they have all been assigned.
     state->tracing_counts = NULL;
-    state->missing_reachable = NULL;
     state->pending = NULL;
     state->hierarchy = NULL;
 
@@ -648,14 +553,6 @@ static int tree_trace_state_init(tree_trace_state_t* state) {
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
     if (state->tracing_counts == NULL) {
-        PyErr_NoMemory();
-        goto error;
-    }
-
-    state->missing_reachable = _Py_hashtable_new(
-        _Py_hashtable_hash_ptr,
-        _Py_hashtable_compare_direct);
-    if (state->missing_reachable == NULL) {
         PyErr_NoMemory();
         goto error;
     }
@@ -1206,10 +1103,7 @@ mermaid_traverse(PyObject *obj, mermaid_dump_state_t *state)
         return mermaid_visit_sequence(obj, state);
     }
 
-    // The trace already reports the types without tp_reachable; the graph dump
-    // walks the same objects and would only repeat it.
-    traverseproc proc = get_reachable_proc(Py_TYPE(obj), NULL);
-    return proc(obj, (visitproc)mermaid_visit, (void *)state);
+    return _PyObject_VisitReachable(obj, (visitproc)mermaid_visit, (void *)state);
 }
 
 static void
@@ -1576,8 +1470,7 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         // Traverse item
         state.src = item;
         dbg("  - traversing %p", item);
-        traverseproc proc = get_reachable_proc(Py_TYPE(item), tree_trace_state->missing_reachable);
-        SUCCEEDS(proc(item, (visitproc)_trace_visit, (void*)&state));
+        SUCCEEDS(_PyObject_VisitReachable(item, (visitproc)_trace_visit, (void*)&state));
 
         if (PyWeakref_Check(item)) {
             PyWeakReference *wref = (PyWeakReference*)item;
@@ -1730,7 +1623,6 @@ error:
 finally:
     // `resolve_region_meta()` never fails, so the result can be ignored.
     (void)_Py_hashtable_foreach(state.tracing_counts, resolve_region_meta, NULL);
-    report_missing_reachable(&state);
     tree_trace_state_destroy(&state);
 
     return tree_trace_res;
