@@ -162,9 +162,9 @@ typedef enum {
     // The object is not movable, but the reference is allowed. The object
     // should be skipped
     Py_MOVABLE_COWN = 3,
-} movable_status;
+} movable_status_t;
 
-static movable_status get_movable_status(PyObject *obj) {
+static movable_status_t get_movable_status(PyObject *obj) {
     // FIXME(regions): xFrednet: Currently it's not possible to set
     // the movability per object. This instead returns the default
     // movability for objects. Note that some shallow immutable objects
@@ -421,9 +421,21 @@ static void detach_weak_refs(
     (void)_Py_hashtable_foreach(visited, detach_weak_refs_visit, &state);
 }
 
+typedef enum {
+    // The region is closed
+    Py_REGION_STATUS_CLOSED = 0,
+    // The region is open
+    Py_REGION_STATUS_OPEN = 1,
+    // A trace is in progress. Any access attempts should mark the trace as failed.
+    Py_REGION_STATUS_TRACING = 2,
+    // A trace was invalidated by a concurrent thread. The failing trace hasn't concluded yet.
+    Py_REGION_STATUS_TRACING_FAILED = 3,
+} region_state_t;
+
 typedef struct {
     PyObject_HEAD
     PyObject *dict;
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     // The GC list containing all objects while the region is closed. The bridge
     // object is not in this GC list but in the list of the owning region or in no
     // list if it's owned by a released cown.
@@ -436,15 +448,20 @@ typedef struct {
     // the region is open. This is the number of references subtracted from the rc.
     // These are readded in the constructor or when opening the region.
     Py_ssize_t internal_bridge_refs;
+#endif
+    // TODO(regions): Handle additional states for tracing and failed tracing.
+    int32_t state;
     // The node every region reference into this region resolves through, or
     // NULL when nothing points into it. Only closed regions can have a meta,
     // opening restamps it
     _PyRegionRefMetadata *meta;
-    // FIXME(regions): This can be inferred from the status of the gc_list
-    // or stored in the lower bits of the GC list. For now we keep it separate
-    // for the prototype
-    bool open;
 } TracingRegionObject;
+
+#define _PyTRegion_CAST(x) _Py_CAST(TracingRegionObject*, x)
+
+static bool region_is_open(TracingRegionObject *self) {
+    return _Py_atomic_load_int32(&self->state) >= Py_REGION_STATUS_OPEN;
+}
 
 /* Returns this region's node, allocating it if this is the first reference the
  * current close has found. Borrowed. The caller must hold `_PyWeakref_Lock`. */
@@ -463,12 +480,13 @@ region_meta_lock_held(TracingRegionObject *self)
 static void
 region_meta_release(TracingRegionObject *self)
 {
-    if (self->meta == NULL) {
-        return;
+    Py_BEGIN_CRITICAL_SECTION(self);
+    if (self->meta != NULL) {
+        _PyRegionRef_MetaRegionOpened(self->meta);
+        _PyRegionRef_MetaDecref(self->meta);
+        self->meta = NULL;
     }
-    _PyRegionRef_MetaRegionOpened(self->meta);
-    _PyRegionRef_MetaDecref(self->meta);
-    self->meta = NULL;
+    Py_END_CRITICAL_SECTION();
 }
 
 static void _region_close(
@@ -477,7 +495,7 @@ static void _region_close(
     _Py_hashtable_t *visited,
     bool has_weak_refs
 ) {
-    if (!self->open) {
+    if (!region_is_open(self)) {
         return;
     }
 
@@ -495,9 +513,16 @@ static void _region_close(
         assert(self->internal_bridge_refs == 0);
     }
 
-    self->open = false;
+    int expected = Py_REGION_STATUS_OPEN;
+    int res = _Py_atomic_compare_exchange_int32(
+        &self->state,
+        &expected,
+        Py_REGION_STATUS_CLOSED);
+    assert(res);
+    (void)res;
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 /* Re-adds the references to the bridge object that `_region_close()` subtracted.
  *
  * Note that this may resurrect the bridge object. Callers may need to handle this case.
@@ -510,22 +535,37 @@ static void _restore_internal_bridge_refs(TracingRegionObject *self) {
         self->internal_bridge_refs = 0;
     }
 }
+#endif
 
-static void _open_region(TracingRegionObject *self) {
-    if (self->open) {
+static void _open_region_lock_held(TracingRegionObject *self) {
+    int state = _Py_atomic_load_int32(&self->state);
+    if (state >= Py_REGION_STATUS_OPEN) {
+        assert(state == Py_REGION_STATUS_OPEN);
         return;
     }
 
     dbg("Opening region %p", self);
 
     region_meta_release(self);
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     _restore_internal_bridge_refs(self);
 
     // This only dissolves this region, all sub-regions remain closed.
     gc_list_dissolve(&self->gc_list);
     assert(gc_list_is_empty(&self->gc_list));
+#endif
 
-    self->open = true;
+    int expected = Py_REGION_STATUS_CLOSED;
+    int res = _Py_atomic_compare_exchange_int32(&self->state, &expected, Py_REGION_STATUS_OPEN);
+    assert(res);
+    (void)res;
+}
+
+static void _open_region(TracingRegionObject *self) {
+    Py_BEGIN_CRITICAL_SECTION(self);
+    _open_region_lock_held(self);
+    Py_END_CRITICAL_SECTION();
 }
 
 #define PER_REGION_TRACE_LIMIT 2
@@ -686,11 +726,11 @@ static void region_trace_state_destroy(region_trace_state_t* state) {
 static int region_trace_state_init(
     region_trace_state_t* state,
     PyObject* bridge,
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     PyGC_Head* gc_list,
+#endif
     tree_trace_state_t *tree_trace_state
 ) {
-    assert(gc_list == NULL || gc_list_is_empty(gc_list));
-
     state->pending = NULL;
     state->visited = NULL;
 
@@ -712,11 +752,15 @@ static int region_trace_state_init(
 
     state->external_rc = 0;
     state->bridge_rc = 0;
-    state->gc_list = gc_list;
     state->restart = false;
     // References are strong unless the trace explicitly follows a weak one.
     state->strong_ref = true;
     state->has_weak_refs = false;
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    assert(gc_list == NULL || gc_list_is_empty(gc_list));
+    state->gc_list = gc_list;
+#endif
 
     return 0;
 error:
@@ -931,7 +975,7 @@ static int
 mermaid_write_node(PyUnicodeWriter *writer, PyObject *obj)
 {
     if (Region_Check(obj)) {
-        bool open = ((TracingRegionObject *)obj)->open;
+        bool open = region_is_open(_PyTRegion_CAST(obj));
         const char *status = open ? "open" : "closed";
         return PyUnicodeWriter_Format(writer,
             "n%p[\\Region<br>%s<br>rc=%zd<br><sub><sup>%p</sup></sub>/]",
@@ -1313,7 +1357,7 @@ error:
 
 static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     // Check the movability of the object:
-    movable_status status = get_movable_status(obj);
+    movable_status_t status = get_movable_status(obj);
     switch (status) {
     case Py_MOVABLE_YES:
         break;
@@ -1492,7 +1536,7 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
 
 static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trace_state) {
     assert(Region_Check(region_obj));
-    TracingRegionObject* region = (TracingRegionObject*)region_obj;
+    TracingRegionObject* region = _PyTRegion_CAST(region_obj);
 
     // Finalized regions can't be closed since they're deletion would not call the
     // finalizer and therefore leak the owned nodes.
@@ -1506,7 +1550,14 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
 
     // Init trace state.
     region_trace_state_t state;
-    if (region_trace_state_init(&state, _PyObject_CAST(region), &region->gc_list, tree_trace_state)) {
+    if (region_trace_state_init(
+        &state,
+        _PyObject_CAST(region),
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        &region->gc_list,
+#endif
+        tree_trace_state)
+    ) {
         return TRACE_RES_ERR;
     }
     int region_trace_res = TRACE_RES_DONE;
@@ -1598,7 +1649,7 @@ resolve_region_meta(_Py_hashtable_t *ht, const void *key, const void *value,
         return 0;
     }
     // The region remains open, therefore we mark it as being local to the IP
-    if (region->open) {
+    if (region_is_open(region)) {
         region_meta_release(region);
         return 0;
     }
@@ -1632,7 +1683,7 @@ static int try_close_region_tree(PyObject *root) {
 
         // A closed region has nothing left to do. Regions can be queued more
         // than once, this handles all safe cases.
-        if (_PyTracingRegion_IsClosed(region)) {
+        if (!region_is_open(region)) {
             SUCCEEDS(PyList_SetSlice(state.pending, top, top + 1, NULL));
             continue;
         }
@@ -1691,21 +1742,24 @@ finally:
 
 static PyObject *
 TracingRegion_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
-    TracingRegionObject *self = (TracingRegionObject *)type->tp_alloc(type, 0);
+    TracingRegionObject *self = _PyTRegion_CAST(type->tp_alloc(type, 0));
     if (self == NULL) {
         return NULL;
     }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     // The region is set up here rather than in `tp_init()`, so that a region
     // can never be observed in an uninitialized state.
     gc_list_init(&self->gc_list);
+#endif
+
     self->meta = NULL;
     // We make the region open by default, this ensures that the first close
     // will handle the region type correctly. Alternatively, we could make them
     // closed in the beginning, but then handle the cases specifically.
-    self->open = true;
+    self->state = Py_REGION_STATUS_OPEN;
 
-    return (PyObject *)self;
+    return _PyObject_CAST(self);
 }
 
 static int
@@ -1735,10 +1789,11 @@ TracingRegion_init(TracingRegionObject *self, PyObject *args, PyObject *kwargs) 
  * This can resurrect the bridge object, so it has to run as a finalizer.
  */
 static void _region_delete_contents(TracingRegionObject *self) {
-    assert(!self->open);
+    assert(!region_is_open(self));
 
     dbg("Deleting the contents of region %p", self);
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     PyGC_Head members;
     PyGC_Head survivors;
     gc_list_init(&members);
@@ -1771,35 +1826,58 @@ static void _region_delete_contents(TracingRegionObject *self) {
     // Nothing may still point at these stack allocated list heads.
     assert(gc_list_is_empty(&members));
     assert(gc_list_is_empty(&survivors));
+#else
+    // TODO: Here we can do more than just opening the region, we could delete all objects
+    // and thereby delete cycles without the need of the GC.
+    // This requires us to keep a list of contained objects in some other way.
+    _open_region(self);
+
+    Py_BEGIN_CRITICAL_SECTION(self);
+    Py_CLEAR(self->dict);
+    Py_END_CRITICAL_SECTION();
+#endif
 }
 
 static int
 TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     // If the region is closed, we know that everything inside the region is reachable.
     // There is no advantage of opening the region to double check. This would also
     // mess with the GC list of this region.
-    if (self->open) {
+    if (region_is_open(self)) {
         Py_VISIT(self->dict);
     }
+#else
+    Py_VISIT(self->dict);
+#endif
     return 0;
 }
 
 static int
 TracingRegion_clear(TracingRegionObject *self) {
-    _open_region(self);
+    // tp_clear is usually called from the GC during a STW so we don't
+    // need to lock self
+    _open_region_lock_held(self);
     Py_CLEAR(self->dict);
     return 0;
 }
 
 static void
 TracingRegion_finalize(PyObject *op) {
-    TracingRegionObject *self = (TracingRegionObject *)op;
+    TracingRegionObject *self = _PyTRegion_CAST(op);
 
-    if (self->open) {
+    if (region_is_open(self)) {
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
         assert(gc_list_is_empty(&self->gc_list));
+#endif
+        PyObject *dict = NULL;
+        Py_BEGIN_CRITICAL_SECTION(self);
+        dict = self->dict;
+        self->dict = NULL;
+        Py_END_CRITICAL_SECTION();
         // An open region does not own its members. They live in the GC
         // generations and the usual reference counting disposes of them.
-        Py_CLEAR(self->dict);
+        Py_XDECREF(dict);
     } else {
         // Objects in a closed region have no incoming references besides the
         // one from the bridge. We can therefore delete all objects directly
@@ -1824,8 +1902,10 @@ TracingRegion_dealloc(TracingRegionObject *self) {
         return;
     }
 
+    Py_BEGIN_CRITICAL_SECTION(self);
     // Make sure any objects added after/during finalization are freed
     Py_CLEAR(self->dict);
+    Py_END_CRITICAL_SECTION();
 
     PyObject_GC_UnTrack(self);
     Py_TYPE(self)->tp_free(op);
@@ -1833,93 +1913,123 @@ TracingRegion_dealloc(TracingRegionObject *self) {
 
 static PyObject *
 TracingRegion_repr(PyObject *op) {
-    TracingRegionObject *self = (TracingRegionObject*)op;
+    TracingRegionObject *self = _PyTRegion_CAST(op);
+
+    bool is_open = false;
+    Py_BEGIN_CRITICAL_SECTION(self);
+    is_open = region_is_open(self);
+    Py_END_CRITICAL_SECTION();
 
     // Deliberately reads `open` instead of going through the attribute access
     // below, so that reporting on a region does not open it. Deliberately
     // address free as well, so that error messages are reproducible.
     return PyUnicode_FromFormat(
-        "<TracingRegion %s>", self->open ? "open" : "closed");
+        "<TracingRegion %s>", is_open ? "open" : "closed");
 }
 
 static PyObject *
 TracingRegion_getattro(PyObject *op, PyObject *name) {
     TracingRegionObject *self = (TracingRegionObject*)op;
-    _open_region(self);
+    PyObject *result = NULL;
 
-    return _PyObject_GenericGetAttrWithDict(op, name, self->dict, 0);
+    Py_BEGIN_CRITICAL_SECTION(self);
+    _open_region_lock_held(self);
+
+    result = _PyObject_GenericGetAttrWithDict(op, name, self->dict, 0);
+    Py_END_CRITICAL_SECTION();
+
+    return result;
 }
 
 static int
 TracingRegion_setattro(PyObject *op, PyObject *name, PyObject *value) {
     TracingRegionObject *self = (TracingRegionObject*)op;
-    _open_region(self);
+    int result = 0;
+
+    Py_BEGIN_CRITICAL_SECTION(self);
+    _open_region_lock_held(self);
 
     // Allocate lazily because the generic helper only stores into a provided dict.
     if (self->dict == NULL) {
         self->dict = PyDict_New();
-        if (self->dict == NULL) {
-            return -1;
-        }
     }
 
-    return _PyObject_GenericSetAttrWithDict(op, name, value, self->dict);
+    if (self->dict == NULL) {
+        result = -1;
+    } else {
+        result = _PyObject_GenericSetAttrWithDict(op, name, value, self->dict);
+    }
+    Py_END_CRITICAL_SECTION();
+
+    return result;
 }
 
 static PyObject *
 TracingRegion_get_dict(PyObject *op, void *Py_UNUSED(context)) {
     TracingRegionObject *self = (TracingRegionObject*)op;
-    _open_region(self);
+    PyObject *dict = NULL;
+
+    Py_BEGIN_CRITICAL_SECTION(self);
+    _open_region_lock_held(self);
 
     if (self->dict == NULL) {
         self->dict = PyDict_New();
-        if (self->dict == NULL) {
-            return NULL;
-        }
     }
-    return Py_NewRef(self->dict);
+    dict = Py_XNewRef(self->dict);
+    Py_END_CRITICAL_SECTION();
+
+    return dict;
 }
 
 static int
 TracingRegion_set_dict(PyObject *op, PyObject *value, void *Py_UNUSED(context)) {
     TracingRegionObject *self = (TracingRegionObject*)op;
-    _open_region(self);
+    int result = 0;
+
+    Py_BEGIN_CRITICAL_SECTION(self);
+    _open_region_lock_held(self);
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete __dict__");
-        return -1;
-    }
-    if (!PyDict_Check(value)) {
+        result = -1;
+    } else if (!PyDict_Check(value)) {
         PyErr_Format(PyExc_TypeError,
                      "__dict__ must be set to a dictionary, not a '%.200s'",
                      Py_TYPE(value)->tp_name);
-        return -1;
+        result = -1;
+    } else {
+        Py_XSETREF(self->dict, Py_NewRef(value));
     }
-    Py_XSETREF(self->dict, Py_NewRef(value));
-    return 0;
+    Py_END_CRITICAL_SECTION();
+
+    return result;
 }
 
 
 /* This method traces the region and closes it, if there are no references
  * pointing into the region. References to the bridge are allowed.
  *
- * This function requires the GIL to be held.
+ * This function requires the GIL to be held if _Py_PYRONA_INTERPRETER_SHARING
+ * is defined.
  *
  * Returns -1 if an exception was raised. 0 if the region could be closed.
  */
 int _PyTracingRegion_Close(PyObject* op) {
-    TracingRegionObject *self = (TracingRegionObject*)op;
-    if (!self->open) {
+    TracingRegionObject *self = _PyTRegion_CAST(op);
+    if (!region_is_open(self)) {
         return 0;
     }
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     assert(gc_list_is_empty(&self->gc_list));
+#endif
 
     return try_close_region_tree(op);
 }
 
 int _PyTracingRegion_IsClosed(PyObject* region) {
-    TracingRegionObject *self = (TracingRegionObject*)region;
-    return !self->open;
+    TracingRegionObject *self = _PyTRegion_CAST(region);
+    return !region_is_open(self);
 }
 
 /* Opens the region, so that a region reference can hand out a strong reference
@@ -1929,15 +2039,15 @@ int _PyTracingRegion_IsClosed(PyObject* region) {
  * that this interpreter owns the region.
  */
 void _PyTracingRegion_Open(PyObject* region) {
-    _open_region((TracingRegionObject*)region);
+    _open_region(_PyTRegion_CAST(region));
 }
 
 _PyRegionRefMetadata *_PyTracingRegion_MetaLockHeld(PyObject* region) {
-    return region_meta_lock_held((TracingRegionObject*)region);
+    return region_meta_lock_held(_PyTRegion_CAST(region));
 }
 
 void _PyTracingRegion_SetMetaCown(PyObject* region, PyObject* cown) {
-    TracingRegionObject *self = (TracingRegionObject*)region;
+    TracingRegionObject *self = _PyTRegion_CAST(region);
     // Meta is only set if the region is closed and has region references
     if (self->meta != NULL) {
         _PyRegionRef_MetaSetCown(self->meta, cown);
@@ -1945,7 +2055,7 @@ void _PyTracingRegion_SetMetaCown(PyObject* region, PyObject* cown) {
 }
 
 void _PyTracingRegion_SetMetaOwner(PyObject* region, _PyCown_owner_id_t owner) {
-    TracingRegionObject *self = (TracingRegionObject*)region;
+    TracingRegionObject *self = _PyTRegion_CAST(region);
     if (self->meta != NULL) {
         _PyRegionRef_MetaSetIpid(self->meta, owner);
     }
@@ -1992,16 +2102,39 @@ int _PyTracingRegion_DetachIgnoreRegionRefs(PyObject* region) {
     }
 
     // Make sure that the cown owns the only external reference to the bridge object.
-    if (Py_REFCNT(region) > 1) {
+    //
+    // This check is safe on NoGIL Python, since Cowns only permit the owning
+    // thread from accessing the contained value. An RC of 1 indicates that the
+    // cown holds the only reference and this thread is the only one that can
+    // access that reference.
+    TracingRegionObject *self = _PyTRegion_CAST(region);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    // We subtract the internal RCs for sub-interpreters
+    Py_ssize_t external_rc = Py_REFCNT(region);
+#else
+    Py_ssize_t external_rc = Py_REFCNT(region) - self->internal_bridge_refs;
+#endif
+    if (external_rc > 1) {
         PyErr_Format(
             PyExc_RuntimeError,
             "the region couldn't be detached, due to incoming references to the bridge");
         return -1;
     }
 
+    // Confirm that no other thread has opened the region again before the
+    // singe external reference check above.
+    if (region_is_open(self)) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "the region couldn't be detached due to a concurrent access");
+        return -1;
+    }
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     // The region is closed and this is the only owner of the bridge. We untrack
     // from the current GC list.
     PyObject_GC_UnTrack(region);
+#endif
 
     return 0;
 }
@@ -2010,7 +2143,7 @@ int _PyTracingRegion_DetachIgnoreRegionRefs(PyObject* region) {
 ///
 /// Raises an exception and returns -1 if it couldn't be detached.
 int _PyTracingRegion_Detach(PyObject* region) {
-    TracingRegionObject *self = (TracingRegionObject*)region;
+    TracingRegionObject *self = _PyTRegion_CAST(region);
 
     if (_PyTracingRegion_DetachIgnoreRegionRefs(region)) {
         return -1;
@@ -2027,22 +2160,25 @@ int _PyTracingRegion_Detach(PyObject* region) {
 
 int _PyTracingRegion_AttachIgnoreRegionRefs(PyObject* region) {
     assert(Region_Check(region));
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     assert(!PyObject_GC_IsTracked(region));
     PyObject_GC_Track(region);
+#endif
     return 0;
 }
 
-int _PyTracingRegion_Attach(PyObject* region, uint64_t ipid, uint64_t tid) {
-    TracingRegionObject *self = (TracingRegionObject*)region;
+int _PyTracingRegion_Attach(PyObject* region, _PyCown_owner_id_t owner) {
+    TracingRegionObject *self = _PyTRegion_CAST(region);
 
     if (_PyTracingRegion_AttachIgnoreRegionRefs(region)) {
         return -1;
     }
 
+    Py_BEGIN_CRITICAL_SECTION(self);
     if (self->meta != NULL) {
-        _PyRegionRef_MetaSetIpid(self->meta, ipid);
+        _PyRegionRef_MetaSetIpid(self->meta, owner);
     }
-    (void)tid;
+    Py_END_CRITICAL_SECTION();
 
     return 0;
 }
