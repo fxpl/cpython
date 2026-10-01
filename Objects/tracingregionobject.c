@@ -38,6 +38,7 @@
 // Copied from gc.c
 // ###################################################################
 
+#pragma region Copies from gc.c
 #ifndef Py_GIL_DISABLED
 #define GC_NEXT _PyGCHead_NEXT
 #define GC_PREV _PyGCHead_PREV
@@ -124,9 +125,8 @@ gc_clear_collecting(PyGC_Head *g)
     g->_gc_prev &= ~_PyGC_PREV_MASK_COLLECTING;
 }
 
-#else // Py_GIL_DISABLED
-#error "We need GIL"
 #endif
+#pragma endregion // Copies from gc.c
 
 // ###################################################################
 // Copied from regions-main
@@ -277,36 +277,17 @@ static void throw_region_error(
     PyErr_SetRaisedException(exc);
 }
 
-// Wrapper around tp_traverse that also visits the type object.
-static int
-traverse_via_tp_traverse(PyObject *obj, visitproc visit, void *state)
-{
-    PyTypeObject *tp = Py_TYPE(obj);
-
-    // Visit the type with traverse
-    traverseproc traverse = tp->tp_traverse;
-    if (traverse != NULL) {
-        int err = traverse(obj, visit, state);
-        if (err) {
-            return err;
-        }
-    }
-
-    // Most `tp_traverse` don't visit the type even though they should.
-    // Here it won't hurt to potentially visit it twice, since types
-    // are non-movable but will be frozen.
-    return visit((PyObject *)tp, state);
-}
-
 // ###################################################################
 // Tracing Impl
 // ###################################################################
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 static void
 gc_list_dissolve(PyGC_Head *list) {
     struct _gc_runtime_state* gc_state = get_gc_state();
     gc_list_merge(list, &(gc_state->old[0].head));
 }
+#endif
 
 typedef struct {
     // The weak references that live inside the region and therefore survive the
@@ -376,6 +357,7 @@ typedef struct {
     // object is not in this GC list but in the list of the owning region or in no
     // list if it's owned by a released cown.
     PyGC_Head gc_list;
+#endif
     // All objects that belong to a closed region are in the `gc_list` above. This
     // removes them from the local GC and allows this region to be moved between
     // sub-interpreters, but it would prevent the collection of closed regions with
@@ -384,7 +366,6 @@ typedef struct {
     // the region is open. This is the number of references subtracted from the rc.
     // These are readded in the constructor or when opening the region.
     Py_ssize_t internal_bridge_refs;
-#endif
     // TODO(regions): Handle additional states for tracing and failed tracing.
     int32_t state;
     // The node every region reference into this region resolves through, or
@@ -506,6 +487,11 @@ static void _open_region(TracingRegionObject *self) {
 
 #define PER_REGION_TRACE_LIMIT 2
 
+// ###################################################################
+// Tree Trace State
+// ###################################################################
+#pragma region Tree Trace State
+
 typedef struct {
     // This is the stack of regions that still need to be closed to close this
     // region tree. A region stays on the stack until it is closed, so anything
@@ -575,7 +561,12 @@ error:
     tree_trace_state_destroy(state);
     return -1;
 }
+#pragma endregion // Tree Trace State
 
+// ###################################################################
+// Region Trace State
+// ###################################################################
+#pragma region Region Trace State
 typedef struct {
     // List of pending objects that are not GC
     PyObject *pending;
@@ -610,11 +601,26 @@ typedef struct {
     bool has_weak_refs;
 } region_trace_state_t;
 
+#ifdef Py_GIL_DISABLED
+static int
+region_trace_state_decref_visited(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
+{
+    // Balances the `Py_INCREF(obj)` taken when the object was marked visited.
+    Py_DECREF((PyObject *)key);
+    return 0;
+}
+#endif
+
 static void region_trace_state_destroy(region_trace_state_t* state) {
     if (state->pending) {
         Py_CLEAR(state->pending);
     }
     if (state->visited) {
+#ifdef Py_GIL_DISABLED
+        (void)_Py_hashtable_foreach(
+            state->visited, region_trace_state_decref_visited, NULL);
+#endif
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
     }
@@ -673,6 +679,21 @@ static void region_trace_state_set_restart(region_trace_state_t* state) {
     state->gc_list = NULL;
 }
 
+enum {
+    TRACE_RES_ERR = -1,
+    TRACE_RES_DONE = 0,
+    // The trace itself succeeded, but it was based on information that changed
+    // while it ran, so the region is still open and needs another attempt.
+    TRACE_RES_RESTART = 1,
+};
+
+#pragma endregion // Region Trace State
+
+// ###################################################################
+// Error Reporting
+// ###################################################################
+#pragma region Error Reporting
+
 typedef struct {
     // Every object with incoming references, used to mark up the mermaid graph.
     _Py_hashtable_t *problem_objs;
@@ -707,14 +728,6 @@ typedef struct {
     PyObject *pending;
     PyObject *src;
 } mermaid_dump_state_t;
-
-enum {
-    TRACE_RES_ERR = -1,
-    TRACE_RES_DONE = 0,
-    // The trace itself succeeded, but it was based on information that changed
-    // while it ran, so the region is still open and needs another attempt.
-    TRACE_RES_RESTART = 1,
-};
 
 static int
 collect_close_error_obj(_Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
@@ -1248,7 +1261,12 @@ finally:
 error:
     goto finally;
 }
+#pragma endregion // Error Reporting
 
+// ###################################################################
+// Tracing Region Impl
+// ###################################################################
+#pragma region Region Tracing Impl
 static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     // Check the movability of the object:
     movable_status_t status = get_movable_status(obj);
@@ -1288,15 +1306,29 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
         // -1 for the reference we just followed
         lrc_change -= 1;
     }
+#ifndef _Py_PYRONA_INTERPRETER_SHARING
+    // On Sub-Interpreters we subtract the internal references from closed
+    // bridge. However, on free-threading we keep the reference count intact.
+    // We manually have to subtract it here.
+    if (Region_Check(obj)) {
+        lrc_change -= _PyTRegion_CAST(obj)->internal_bridge_refs;
+    }
+#endif
     dbg("    - moving %p; LRC += %zd", obj, lrc_change);
     state->external_rc += lrc_change;
 
+    // On Free-Threading we need to incref the object in case another thread kills
+    // all references. This ensures that obj is still allocated on cleanup
+#ifdef Py_GIL_DISABLED
+    Py_INCREF(obj);
+#endif
     // Mark the object as visited, this stores the lrc_change for better error reporting
     if (_Py_hashtable_set(state->visited, obj, (void*)lrc_change) == -1) {
         PyErr_NoMemory();
         return -1;
     }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     // This moves the object into the region list, if provided.
     if (state->gc_list && PyObject_IS_GC(obj) && PyObject_GC_IsTracked(obj)) {
         // This flag may be set if the region is constructed as part of
@@ -1308,6 +1340,7 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
         gc_set_old_space(_Py_AS_GC(obj), 0);
         gc_list_move(_Py_AS_GC(obj), state->gc_list);
     }
+#endif
 
     // Bridge objects of sub-regions are moved, but shouldn't be traversed.
     if (!Region_Check(obj)) {
@@ -1475,7 +1508,9 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         if (PyWeakref_Check(item)) {
             PyWeakReference *wref = (PyWeakReference*)item;
             state.strong_ref = false;
+            Py_BEGIN_CRITICAL_SECTION(wref);
             SUCCEEDS(_trace_visit(wref->wr_object, &state));
+            Py_END_CRITICAL_SECTION();
             state.strong_ref = true;
             state.has_weak_refs = true;
         }
@@ -1483,7 +1518,9 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
     Py_CLEAR(item);
 
     if (state.restart) {
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
         gc_list_dissolve(&region->gc_list);
+#endif
         region_trace_res = TRACE_RES_RESTART;
         goto finally;
     }
@@ -1491,7 +1528,9 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
     if (state.external_rc == 0) {
         _region_close(region, state.bridge_rc, state.visited, state.has_weak_refs);
     } else {
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
         gc_list_dissolve(&region->gc_list);
+#endif
 
         dbg("- Failed to close region %p, there are %zd incoming references", region, state.external_rc);
         close_error_info_t error_info = {0};
@@ -1530,6 +1569,7 @@ finally:
 
     return region_trace_res;
 }
+#pragma endregion
 
 /* Resolves the region reference meta of every region this trace touched.
  */
@@ -1576,7 +1616,7 @@ static int try_close_region_tree(PyObject *root) {
 
         // A closed region has nothing left to do. Regions can be queued more
         // than once, this handles all safe cases.
-        if (!region_is_open(region)) {
+        if (!region_is_open(_PyTRegion_CAST(region))) {
             SUCCEEDS(PyList_SetSlice(state.pending, top, top + 1, NULL));
             continue;
         }
@@ -1631,6 +1671,7 @@ finally:
 // ###################################################################
 // Region Object
 // ###################################################################
+#pragma region Region Object
 
 static PyObject *
 TracingRegion_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
@@ -1980,6 +2021,7 @@ PyTypeObject _PyTracingRegion_Type = {
     .tp_finalize = TracingRegion_finalize,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
+#pragma endregion
 
 /// This attempts to detach the region from the current interpreter and thread.
 ///

@@ -232,14 +232,14 @@ static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
     _Py_EnableAtomicRC(self);
     PyObject_GC_UnTrack(self);
 #endif
-    SUCCEEDS(_PyImmutability_CanViewAsDeepImmutable(Py_TYPE(self)));
+    SUCCEEDS(_PyImmutability_CanViewAsDeepImmutable(_PyObject_CAST(Py_TYPE(self))));
 
     return 0;
 error:
     return -1;
 }
 
-static int PyCown_traverse(_PyCownObject *self, visitproc _ignore1, void* _ignore2) {
+static int PyCown_traverse(_PyCownObject *self, visitproc visit, void *arg) {
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     // tp_traverse should never be called on cowns since they're not
     // tracked by the GC or in any other GC list. The cown type
@@ -247,6 +247,9 @@ static int PyCown_traverse(_PyCownObject *self, visitproc _ignore1, void* _ignor
     // accidentally called. Later we may want to simple remove it
     // from the type.
     assert(false);
+    (void)visit;
+    (void)arg;
+    (void)self;
     return -1;
 #else
     Py_VISIT(self->value);
