@@ -567,10 +567,32 @@ error:
 // Region Trace State
 // ###################################################################
 #pragma region Region Trace State
+
+typedef struct {
+    Py_ssize_t unaccounted_rc;
+    Py_ssize_t inital_rc;
+} region_visited_info_t;
+
+static region_visited_info_t* new_visit_info(Py_ssize_t unaccounted_rc, Py_ssize_t inital_rc) {
+    region_visited_info_t *info = PyMem_Calloc(1, sizeof(region_visited_info_t));
+    if (info == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    info->unaccounted_rc = unaccounted_rc;
+    info->inital_rc = inital_rc;
+
+    return info;
+}
+
+#define _VisitInfo_CAST(x) _Py_CAST(region_visited_info_t*, x)
+
 typedef struct {
     // List of pending objects that are not GC
     PyObject *pending;
-    // A list of all visited objects
+    // A list of all visited objects, mapping from the object to a
+    // `region_visited_info_t`
     _Py_hashtable_t *visited;
 
     // The trace state belonging to the region tree that this region
@@ -601,26 +623,32 @@ typedef struct {
     bool has_weak_refs;
 } region_trace_state_t;
 
-#ifdef Py_GIL_DISABLED
-static int
-region_trace_state_decref_visited(
+static int _region_trace_state_free_visited(
     _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
 {
+#ifdef Py_GIL_DISABLED
+    PyObject* obj = _PyObject_CAST(key);
+
+    // Clear the flag we set during traversal, this is needed for the error
+    // case if the validation code didn't clear the flag.
+    _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
+
     // Balances the `Py_INCREF(obj)` taken when the object was marked visited.
-    Py_DECREF((PyObject *)key);
+    Py_DECREF(obj);
+#endif
+
+    PyMem_Free(value);
+
     return 0;
 }
-#endif
 
 static void region_trace_state_destroy(region_trace_state_t* state) {
     if (state->pending) {
         Py_CLEAR(state->pending);
     }
     if (state->visited) {
-#ifdef Py_GIL_DISABLED
         (void)_Py_hashtable_foreach(
-            state->visited, region_trace_state_decref_visited, NULL);
-#endif
+            state->visited, _region_trace_state_free_visited, NULL);
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
     }
@@ -733,7 +761,7 @@ static int
 collect_close_error_obj(_Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
 {
     close_error_filter_t *filter = (close_error_filter_t *)user_data;
-    Py_ssize_t refs = (Py_ssize_t)value;
+    Py_ssize_t refs = _VisitInfo_CAST(value)->unaccounted_rc;
 
     // Objects whose every reference came from inside the region are not part of
     // the problem.
@@ -1301,7 +1329,8 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     assert(obj != state->bridge);
 
     // Update the LRC
-    Py_ssize_t lrc_change = Py_REFCNT(obj);
+    Py_ssize_t object_rc = Py_REFCNT(obj);
+    Py_ssize_t lrc_change = object_rc;
     if (state->strong_ref) {
         // -1 for the reference we just followed
         lrc_change -= 1;
@@ -1317,13 +1346,24 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     dbg("    - moving %p; LRC += %zd", obj, lrc_change);
     state->external_rc += lrc_change;
 
+    region_visited_info_t *visit_info = new_visit_info(lrc_change, object_rc);
+    if (visit_info == NULL) {
+        return -1;
+    }
+
+    // We have to set the flag after we read the RC. Otherwise, a concurrent
+    // thread may modify the RC without us observing it in either the flag
+    // or RC value.
+    // FIXME(regions): Can this actually happen?
+    _Py_OB_FLAG_ADD(obj, _Py_REGION_TRACE_FLAG);
+
     // On Free-Threading we need to incref the object in case another thread kills
     // all references. This ensures that obj is still allocated on cleanup
 #ifdef Py_GIL_DISABLED
     Py_INCREF(obj);
 #endif
     // Mark the object as visited, this stores the lrc_change for better error reporting
-    if (_Py_hashtable_set(state->visited, obj, (void*)lrc_change) == -1) {
+    if (_Py_hashtable_set(state->visited, obj, (void*)visit_info) == -1) {
         PyErr_NoMemory();
         return -1;
     }
@@ -1444,7 +1484,8 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
         assert(get_movable_status(obj) == Py_MOVABLE_YES);
         // state->external_rc only counts strong references
         if (state->strong_ref) {
-            entry->value = (void*)(((Py_ssize_t)entry->value) - 1);
+            region_visited_info_t *visit_info = _VisitInfo_CAST(entry->value);
+            visit_info->unaccounted_rc -= 1;
             dbg("    - Internal reference to %p; LRC -= 1", obj);
             state->external_rc -= 1;
         }
@@ -1460,6 +1501,55 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
     return _move_obj(obj, state);
 }
 
+#ifndef _Py_PYRONA_INTERPRETER_SHARING
+static int
+_validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *value,
+                    void *user_data)
+{
+    PyObject *obj = _PyObject_CAST(key);
+    region_visited_info_t *info = _VisitInfo_CAST(value);
+
+    // TODO(regions): Pause weaks until we can invalidate it
+
+    // ### Soundness:
+    // During tracing we set a flag on each object. Every RC operation
+    // first checks this flag and then clears it. If the flag has been
+    // cleared we abort since a concurrent thread has/had access to
+    // the traced objects.
+    if ((_Py_OB_FLAGS_LOAD(obj) & _Py_REGION_TRACE_FLAG) == 0) {
+        return -1;
+    }
+    _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
+
+    // ### Soundness:
+    // This catches RC updates that passed the flag but got paused before
+    // the RC update.
+    //
+    // The thread could remain stalled there, but then we would either observe
+    // the incoming reference and not make it this far, or if it's a lock-free
+    // read on a now killed reference the try-inc-ref will fail.
+    if (Py_REFCNT(obj) != info->inital_rc) {
+        return -1;
+        // TODO(regions): Set the flag after we observed the RC
+    }
+
+    return 0;
+}
+#endif
+
+static int _validate_region_closed(PyObject *region_obj, region_trace_state_t *state) {
+    // With the GIL we know that an isolated trace is valid, however on
+    // free-threaded Python we need to validate that no references were
+    // manipulated under foot.
+#ifndef _Py_PYRONA_INTERPRETER_SHARING
+    if (_Py_hashtable_foreach(
+        state->visited, _validate_region_closed_visit, NULL)
+    ) {
+        return -1;
+    }
+#endif
+    return 0;
+}
 
 static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trace_state) {
     assert(Region_Check(region_obj));
@@ -1525,9 +1615,8 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         goto finally;
     }
 
-    if (state.external_rc == 0) {
-        _region_close(region, state.bridge_rc, state.visited, state.has_weak_refs);
-    } else {
+    // Report an error, if the region couldn't be closed.
+    if (state.external_rc > 0) {
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
         gc_list_dissolve(&region->gc_list);
 #endif
@@ -1559,6 +1648,10 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         Py_DECREF(msg);
         goto error;
     }
+
+    SUCCEEDS(_validate_region_closed(region, &state));
+
+    _region_close(region, state.bridge_rc, state.visited, state.has_weak_refs);
 
     goto finally;
 error:

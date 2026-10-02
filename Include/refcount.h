@@ -140,7 +140,7 @@ PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
 // Declared again here because Python.h pulls in pyerrors.h after this header.
 PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
 
-#else // _Py_PYRONA_INTERPRETER_SHARING
+#else // !_Py_PYRONA_INTERPRETER_SHARING
 // FIXME(immutability): These should probably be removed.
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_CLEAR_MASK (_Py_IMMUTABLE_MASK | _Py_IMMUTABLE_DEPTH_FLAG)
@@ -148,6 +148,8 @@ PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
     _Py_IMMUTABLE_CLEAR_MASK | _Py_FREEZABLE_STATUS_MASK \
     | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
 #endif // _Py_PYRONA_INTERPRETER_SHARING
+
+#define _Py_REGION_TRACE_FLAG (1 << 10)
 
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
