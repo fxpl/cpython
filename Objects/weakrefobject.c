@@ -133,6 +133,7 @@ _PyWeakref_GetWeakrefCount(PyObject *obj)
 #endif
 
 static void clear_weakref_lock_held(PyWeakReference *self, PyObject **callback);
+static void clear_weakref_meta_held(PyWeakReference *self, PyObject **callback);
 
 static _PyRegionRefMetadata *
 meta_new_lock_held(uint8_t kind)
@@ -347,7 +348,7 @@ _PyRegionRef_CloseWeakRefs(PyObject *obj, _Py_hashtable_t *keep, PyObject *regio
             _PyRegionRefMetadata *meta = _PyTracingRegion_MetaLockHeld(region);
             if (meta == NULL) {
                 // Out of memory, we clear the reference and continue
-                clear_weakref_lock_held(ref, NULL);
+                clear_weakref_meta_held(ref, NULL);
                 continue;
             }
             set_region_ref_lock_held(ref, meta);
@@ -357,7 +358,7 @@ _PyRegionRef_CloseWeakRefs(PyObject *obj, _Py_hashtable_t *keep, PyObject *regio
             list = &ref->wr_next;
         }
         else {
-            clear_weakref_lock_held(ref, NULL);
+            clear_weakref_meta_held(ref, NULL);
         }
     }
     UNLOCK_META_UNDER_WEAKREFS();
@@ -612,9 +613,11 @@ init_weakref(PyWeakReference *self, PyObject *ob, PyObject *callback)
     self->region_ref = NULL;
 }
 
-// Clear the weakref and steal its callback into `callback`, if provided.
+// Unlinks the weakref from its referent's list and steals its callback into
+// `callback`, if provided. Leaves the region ref metadata untouched. The caller
+// must hold the weakref list lock.
 static void
-clear_weakref_lock_held(PyWeakReference *self, PyObject **callback)
+unlink_weakref_lock_held(PyWeakReference *self, PyObject **callback)
 {
     if (self->wr_object != Py_None) {
         PyWeakReference **list = GET_WEAKREFS_LISTPTR(self->wr_object);
@@ -638,7 +641,25 @@ clear_weakref_lock_held(PyWeakReference *self, PyObject **callback)
         *callback = self->wr_callback;
         self->wr_callback = NULL;
     }
+}
+
+// Clear the weakref and steal its callback into `callback`, if provided. The
+// caller holds the weakref list lock only; the meta lock is taken here.
+static void
+clear_weakref_lock_held(PyWeakReference *self, PyObject **callback)
+{
+    unlink_weakref_lock_held(self, callback);
     clear_region_ref_lock_held(self);
+}
+
+// Same, but the caller already holds the meta lock, so the region ref is dropped
+// directly. Re-locking via `clear_region_ref_lock_held()` would self-deadlock
+// under free-threading, where the list and meta locks differ.
+static void
+clear_weakref_meta_held(PyWeakReference *self, PyObject **callback)
+{
+    unlink_weakref_lock_held(self, callback);
+    set_region_ref_lock_held(self, NULL);
 }
 
 // Clear the weakref and its callback
@@ -674,11 +695,11 @@ _PyWeakref_ClearRef(PyWeakReference *self)
     assert(self != NULL);
     // Region references reuse this struct without being a weakref subtype.
     assert(_PyWeakrefOrRegionRef_Check(self));
-    // Callers here hold no lock, but `region_ref` needs one. Callers that
-    // already hold it use `clear_weakref_lock_held()` directly.
-    LOCK_REGION_REF_META();
+    // Hold the weakref list lock, like `clear_weakref()`; the nested
+    // `clear_region_ref_lock_held()` layers the distinct meta lock on top.
+    LOCK_WEAKREFS_FOR_WR(self);
     clear_weakref_lock_held(self, NULL);
-    UNLOCK_REGION_REF_META();
+    UNLOCK_WEAKREFS_FOR_WR(self);
 }
 
 static void
@@ -704,13 +725,11 @@ gc_clear(PyObject *op)
 {
     PyWeakReference *self = _PyWeakref_CAST(op);
     PyObject *callback;
-    // The world is stopped during GC in free-threaded builds. It's safe to
-    // call this without holding the list lock. `region_ref` still needs the
-    // metadata lock in the default build, where each interpreter has its own
-    // GIL and the collector is not alone.
-    LOCK_REGION_REF_META();
+    // Hold the weakref list lock; `clear_weakref_lock_held()` takes the meta
+    // lock itself via `clear_region_ref_lock_held()`.
+    LOCK_WEAKREFS_FOR_WR(self);
     clear_weakref_lock_held(self, &callback);
-    UNLOCK_REGION_REF_META();
+    UNLOCK_WEAKREFS_FOR_WR(self);
     Py_XDECREF(callback);
     return 0;
 }

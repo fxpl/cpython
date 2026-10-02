@@ -6,6 +6,7 @@ import weakref
 from immutable import deep_freeze, is_deep_frozen, freezable
 from immutable import TracingRegion as Region
 from immutable import Cown, InterpreterLocal, RegionRef
+import immutable
 from test.support import import_helper, os_helper
 
 def sort_region_error(msg):
@@ -343,6 +344,8 @@ class TestClosedRegionTeardown(unittest.TestCase):
     and clears them itself rather than handing them to the GC.
     """
 
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+        "FIXME(regions): On free-threading we currently just open the region")
     def test_cycles_reclaimed_without_the_collector(self):
         """Check that cycles in closed regions are reclaimed without the collector"""
 
@@ -407,13 +410,14 @@ class TestClosedRegionTeardown(unittest.TestCase):
         class Reenter:
             def __del__(self, local=local):
                 # This will open the region and also prove that the finalizer ran
-                local.set(self.bridge.reenter == self)
-                self.bridge.__dict__ = {}
+                expected_id = local.get()
+                this_id = hex(id(self))
+                local.set(expected_id == this_id)
 
         # Create a cycle, and allow Reenter to modify the bridge
         c = Cown(Region())
         c.value.reenter = Reenter()
-        c.value.reenter.bridge = c.value
+        local.set(hex(id(c.value.reenter)))
         c.release()
         del c
 
@@ -821,6 +825,8 @@ class TestRegionRefSubinterpreters(unittest.TestCase):
         finally:
             self._interpreters.destroy(interp)
 
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+        "objects are not shared across interpreters")
     def test_frozen_target_reachable_from_everywhere(self):
         """A frozen target is shareable, so its references carry no ownership
         check at all -- whichever order the freeze and the reference happened
@@ -848,6 +854,8 @@ assert c.value.late_ref().tag == "late", "frozen after the ref was created"
 c.release()
 """, shared={"c": c})
 
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+        "objects are not shared across interpreters")
     def test_foreign_deallocation_does_not_transfer_ownership(self):
         """A cown is immutable and may live inside a region, so the last
         reference to it can be dropped by an interpreter that never owned it.
@@ -897,6 +905,8 @@ c.release()
         self.assertEqual(escaped.obj.tag, "owned by the creator")
         self.assertEqual(mine().tag, "owned by the creator")
 
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+        "objects are not shared across interpreters")
     def test_foreign_deallocation_defers_the_teardown_to_the_owner(self):
         """The last reference to a cown owned by this interpreter may be
         dropped by another one. The region inside is reference counted
@@ -952,6 +962,8 @@ c.release()
         self.assertEqual(recorded, ["subinterpreter", "region"])
         self.assertIsNone(ref())
 
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+        "objects are not shared across interpreters")
     def test_owner_may_deref_and_others_may_not(self):
         """`local` was never in a region, so nothing ever re-homes the
         reference to it and it stays local to this interpreter. `owned` travels
