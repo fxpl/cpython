@@ -78,6 +78,17 @@ _Py_brc_queue_object(PyObject *ob)
         return;
     }
 
+    // If the owning thread is blocked, we attach outself and then merge the RC for it.
+    if (_PyThreadState_TrySuspendDetached(&tstate->base)) {
+        Py_ssize_t refcount = _Py_ExplicitMergeRefcount(ob, -1);
+        _PyThreadState_ResumeDetached(&tstate->base);
+        PyMutex_Unlock(&bucket->mutex);
+        if (refcount == 0) {
+            _Py_Dealloc(ob);
+        }
+        return;
+    }
+
     if (_PyObjectStack_Push(&tstate->brc.objects_to_merge, ob) < 0) {
         PyMutex_Unlock(&bucket->mutex);
 

@@ -8,6 +8,10 @@
 #include "pycore_weakref.h"
 #include "pycore_cown.h"
 #include "pycore_regionref.h"
+#ifdef Py_GIL_DISABLED
+#include "pycore_parking_lot.h"   // _PyParkingLot_Park()
+#include "pycore_time.h"          // _PyDeadline_Init()
+#endif
 
 #define ERROR_OBJECT_REPORT_COUNT 5
 #define ERROR_MERMAID_REPORT_LIMIT 50
@@ -152,6 +156,18 @@ static PyObject* list_pop(PyObject* s){
         return NULL;
     }
     return item;
+}
+
+// Removes slot i, discarding its item; swaps in the last element, so order is
+// not preserved. Caller must own the only reference to the list.
+static void list_remove(PyObject *list, Py_ssize_t i)
+{
+    Py_ssize_t last = PyList_GET_SIZE(list) - 1;
+    PyObject *removed = PyList_GET_ITEM(list, i);
+    PyList_SET_ITEM(list, i, PyList_GET_ITEM(list, last));
+    PyList_SET_ITEM(list, last, NULL);
+    Py_SET_SIZE(list, last);
+    Py_DECREF(removed);
 }
 
 typedef enum {
@@ -487,6 +503,12 @@ static void _open_region(TracingRegionObject *self) {
 
 #define PER_REGION_TRACE_LIMIT 2
 
+#ifdef Py_GIL_DISABLED
+// How long a tree close waits for another thread to merge the refcounts of a
+// non-local object before giving up.
+#define NON_LOCAL_MERGE_TIMEOUT_MS 1000
+#endif
+
 // ###################################################################
 // Tree Trace State
 // ###################################################################
@@ -512,6 +534,12 @@ typedef struct {
     _Py_hashtable_t *tracing_counts;
     // The region hierarchy of this trace, child nodes map to their parents.
     _Py_hashtable_t *hierarchy;
+
+#ifdef Py_GIL_DISABLED
+    // Objects which were owned by another thread, these need to be marked as shared
+    // before tracing can succeed.
+    PyObject *non_local_objs;
+#endif
 } tree_trace_state_t;
 
 static void tree_trace_state_destroy(tree_trace_state_t* state) {
@@ -526,6 +554,11 @@ static void tree_trace_state_destroy(tree_trace_state_t* state) {
     if (state->pending) {
         Py_CLEAR(state->pending);
     }
+#ifdef Py_GIL_DISABLED
+    if (state->non_local_objs) {
+        Py_CLEAR(state->non_local_objs);
+    }
+#endif
 }
 
 static int tree_trace_state_init(tree_trace_state_t* state) {
@@ -548,6 +581,13 @@ static int tree_trace_state_init(tree_trace_state_t* state) {
         goto error;
     }
 
+#ifdef Py_GIL_DISABLED
+    state->non_local_objs = PyList_New(0);
+    if (state->non_local_objs == NULL) {
+        goto error;
+    }
+#endif
+
     state->hierarchy = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
         _Py_hashtable_compare_direct);
@@ -561,6 +601,74 @@ error:
     tree_trace_state_destroy(state);
     return -1;
 }
+
+#ifdef Py_GIL_DISABLED
+// Back-off between merge-flag polls. Owners merge at their eval breaker, so the
+// first polls are cheap and quick; a blocked owner only merges during GC, so we
+// grow the interval up to a cap to avoid spinning while the timeout runs down.
+#define NON_LOCAL_POLL_MIN_NS (10 * 1000)
+#define NON_LOCAL_POLL_MAX_NS (1000 * 1000)
+
+// Wait until every object in `non_local_objs` has been merged into shared form
+// by its owning thread . An object is done once `_Py_REF_IS_MERGED` holds.
+// A negative value waits forever. Returns 0 once the list is empty, or -1 with
+// TimeoutError set if the deadline passes first (stragglers stay in the list).
+static int tree_trace_state_wait_non_local_objects(tree_trace_state_t* state, Py_ssize_t timeout) {
+    PyObject *objs = state->non_local_objs;
+
+    bool has_deadline = timeout >= 0;
+    PyTime_t deadline = has_deadline ? _PyDeadline_Init(timeout * 1000 * 1000) : 0;
+
+    // Stack address to park on; nobody unparks it, so each park is just a
+    // detached safe-point sleep.
+    uint8_t sleeper = 0;
+    uint8_t expected = 0;
+
+    PyTime_t backoff = NON_LOCAL_POLL_MIN_NS;
+
+    for (;;) {
+        // Swap-remove moves the last element into slot `i`, so scan back to
+        // front to leave the not-yet-scanned prefix untouched.
+        for (Py_ssize_t i = PyList_GET_SIZE(objs) - 1; i >= 0; i--) {
+            PyObject *obj = PyList_GET_ITEM(objs, i);
+            if (_Py_REF_IS_MERGED(_Py_atomic_load_ssize_acquire(&obj->ob_ref_shared))) {
+                list_remove(objs, i);
+            }
+        }
+
+        if (PyList_GET_SIZE(objs) == 0) {
+            return 0;
+        }
+
+        PyTime_t sleep_ns = backoff;
+        if (has_deadline) {
+            PyTime_t remaining = _PyDeadline_Get(deadline);
+            if (remaining <= 0) {
+                PyErr_Format(PyExc_TimeoutError,
+                    "timed out waiting for %zd non-local object(s) to become shared",
+                    PyList_GET_SIZE(objs));
+                return -1;
+            }
+            if (remaining < sleep_ns) {
+                sleep_ns = remaining;
+            }
+        }
+
+        // Park with detach=1 so a concurrent stop-the-world can proceed while
+        // we back off -- in particular the GC, which is what merges the queues
+        // of owners that are blocked or not running bytecode.
+        (void)_PyParkingLot_Park(&sleeper, &expected, sizeof(sleeper),
+                                 sleep_ns, NULL, /*detach=*/1);
+
+        if (backoff < NON_LOCAL_POLL_MAX_NS) {
+            backoff *= 2;
+            if (backoff > NON_LOCAL_POLL_MAX_NS) {
+                backoff = NON_LOCAL_POLL_MAX_NS;
+            }
+        }
+    }
+}
+#endif
 #pragma endregion // Tree Trace State
 
 // ###################################################################
@@ -637,7 +745,7 @@ static int _region_trace_state_free_visited(
     Py_DECREF(obj);
 #endif
 
-    PyMem_Free(value);
+    PyMem_Free((void*)value);
 
     return 0;
 }
@@ -1328,6 +1436,12 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     // bridge must never end up in `visited` or in the LRC below.
     assert(obj != state->bridge);
 
+#ifndef _Py_PYRONA_INTERPRETER_SHARING
+    // We get the owner first, just in case the actual owner is concurrently
+    // decref'ing and then setting the owner to shared.
+    uintptr_t owner = _Py_atomic_load_uintptr_relaxed(&obj->ob_tid);
+#endif
+
     // Update the LRC
     Py_ssize_t object_rc = Py_REFCNT(obj);
     Py_ssize_t lrc_change = object_rc;
@@ -1367,6 +1481,17 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
         PyErr_NoMemory();
         return -1;
     }
+
+#ifdef Py_GIL_DISABLED
+    if (owner != _Py_ThreadId() && owner != _Py_UNOWNED_TID) {
+        Py_INCREF(obj);
+        _Py_brc_queue_object(obj);
+        if (PyList_Append(state->tree_trace_state->non_local_objs, obj)) {
+            return -1;
+        }
+        region_trace_state_set_restart(state);
+    }
+#endif
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     // This moves the object into the region list, if provided.
@@ -1528,7 +1653,15 @@ _validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *
     // The thread could remain stalled there, but then we would either observe
     // the incoming reference and not make it this far, or if it's a lock-free
     // read on a now killed reference the try-inc-ref will fail.
-    if (Py_REFCNT(obj) != info->inital_rc) {
+    //
+    // `_move_obj()` took a protective reference after recording `inital_rc`, so
+    // the expected count is one above the traced value.
+#ifdef Py_GIL_DISABLED
+    Py_ssize_t expected_rc = info->inital_rc + 1;
+#else
+    Py_ssize_t expected_rc = info->inital_rc;
+#endif
+    if (Py_REFCNT(obj) != expected_rc) {
         return -1;
         // TODO(regions): Set the flag after we observed the RC
     }
@@ -1537,7 +1670,7 @@ _validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *
 }
 #endif
 
-static int _validate_region_closed(PyObject *region_obj, region_trace_state_t *state) {
+static int _validate_region_closed(TracingRegionObject *region_obj, region_trace_state_t *state) {
     // With the GIL we know that an isolated trace is valid, however on
     // free-threaded Python we need to validate that no references were
     // manipulated under foot.
@@ -1705,6 +1838,12 @@ static int try_close_region_tree(PyObject *root) {
 
     int tree_trace_res = TRACE_RES_DONE;
 
+#ifdef Py_GIL_DISABLED
+    // Pending-stack index of the region whose last attempt queued non-local
+    // objects, or -1 if none.
+    Py_ssize_t non_local_wait_idx = -1;
+#endif
+
     SUCCEEDS(PyList_Append(state.pending, root));
 
     while (PyList_GET_SIZE(state.pending) > 0) {
@@ -1749,6 +1888,17 @@ static int try_close_region_tree(PyObject *root) {
             goto error;
         }
 
+#ifdef Py_GIL_DISABLED
+        if (top == non_local_wait_idx) {
+            // This region's previous attempt queued non-local objects, wait until they're
+            // shared before attempting again
+            non_local_wait_idx = -1;
+            SUCCEEDS(tree_trace_state_wait_non_local_objects(
+                &state, NON_LOCAL_MERGE_TIMEOUT_MS));
+        }
+        Py_ssize_t non_local_before = PyList_GET_SIZE(state.non_local_objs);
+#endif
+
         dbg("- tracing region %p", region);
         int res = _try_close_region(region, &state);
         if (res == TRACE_RES_ERR) {
@@ -1758,6 +1908,14 @@ static int try_close_region_tree(PyObject *root) {
         // on the stack and is retried once the sub-regions that its trace pushed
         // on top of it have been closed.
         assert(res == TRACE_RES_RESTART || _PyTracingRegion_IsClosed(region));
+
+#ifdef Py_GIL_DISABLED
+        // A grown list means this attempt queued non-local objects.
+        if (PyList_GET_SIZE(state.non_local_objs) > non_local_before) {
+            assert(res == TRACE_RES_RESTART);
+            non_local_wait_idx = top;
+        }
+#endif
     }
 
     goto finally;

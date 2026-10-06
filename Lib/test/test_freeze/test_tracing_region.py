@@ -1,13 +1,15 @@
 import gc
 import re
 import sys
+import threading
 import unittest
 import weakref
 from immutable import deep_freeze, is_deep_frozen, freezable
 from immutable import TracingRegion as Region
 from immutable import Cown, InterpreterLocal, RegionRef
 import immutable
-from test.support import import_helper, os_helper
+from test import support
+from test.support import import_helper, os_helper, threading_helper
 
 def sort_region_error(msg):
     """Normalize a 'region could not be closed' message by masking the object
@@ -997,3 +999,84 @@ c.release()
 
         c.acquire()
         self.assertEqual(c.value.local_ref().tag, "local")
+
+
+@unittest.skipUnless(support.Py_GIL_DISABLED,
+                     "cross-thread object ownership only exists on free threading")
+class TestCrossThreadClose(unittest.TestCase):
+    """Closing a region containing objects owned by another, still-running
+    thread. Those objects start out non-local, so the close has to queue them
+    for the owning thread to merge their refcounts and wait until that happened
+    before it can account them."""
+
+    @threading_helper.reap_threads
+    def test_close_objects_owned_by_other_thread(self):
+        @freezable
+        class A:
+            pass
+
+        N = 128
+        handoff = []
+        allocated = threading.Event()
+        stop = threading.Event()
+
+        def allocate():
+            # Objects allocated here are biased-refcount owned by this thread.
+            handoff.append([A() for _ in range(N)])
+            allocated.set()
+            # Keep running bytecode so the eval breaker fires
+            while not stop.is_set():
+                pass
+
+        owner = threading.Thread(target=allocate)
+        owner.start()
+        try:
+            self.assertTrue(allocated.wait(support.SHORT_TIMEOUT))
+
+            c = Cown(Region())
+            # Move the owner thread's objects into the region and drop every
+            # reference this thread holds, so only the region reaches them.
+            objs = handoff.pop()
+            c.value.objs = objs
+            del objs
+
+            c.release()
+            self.assertTrue(c._is_closed())
+        finally:
+            stop.set()
+            owner.join()
+
+    @threading_helper.reap_threads
+    def test_close_objects_owned_by_blocked_thread(self):
+        @freezable
+        class A:
+            pass
+
+        N = 128
+        handoff = []
+        allocated = threading.Event()
+        release_owner = threading.Event()
+
+        def allocate():
+            handoff.append([A() for _ in range(N)])
+            allocated.set()
+            # Block without running bytecode. The owner is detached here, so it
+            # won't service its merge queue via an eval breaker; the close has to
+            # pin it and merge the refcounts directly instead of timing out.
+            release_owner.wait(support.LONG_TIMEOUT)
+
+        owner = threading.Thread(target=allocate)
+        owner.start()
+        try:
+            self.assertTrue(allocated.wait(support.SHORT_TIMEOUT))
+
+            c = Cown(Region())
+            objs = handoff.pop()
+            c.value.objs = objs
+            del objs
+
+            c.release()
+            self.assertTrue(c._is_closed())
+        finally:
+            release_owner.set()
+            owner.join()

@@ -2442,6 +2442,22 @@ start_the_world(struct _stoptheworld_state *stw)
         _PyRWMutex_RUnlock(&runtime->stoptheworld_mutex);
     }
 }
+
+int
+_PyThreadState_TrySuspendDetached(PyThreadState *tstate)
+{
+    int expected = _Py_THREAD_DETACHED;
+    return _Py_atomic_compare_exchange_int(&tstate->state, &expected,
+                                           _Py_THREAD_SUSPENDED);
+}
+
+void
+_PyThreadState_ResumeDetached(PyThreadState *tstate)
+{
+    assert(_Py_atomic_load_int_relaxed(&tstate->state) == _Py_THREAD_SUSPENDED);
+    _Py_atomic_store_int(&tstate->state, _Py_THREAD_DETACHED);
+    _PyParkingLot_UnparkAll(&tstate->state);
+}
 #endif  // Py_GIL_DISABLED
 
 void

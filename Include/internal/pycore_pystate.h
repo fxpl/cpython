@@ -150,6 +150,14 @@ extern void _PyThreadState_Detach(PyThreadState *tstate);
 // to the "detached" state.
 extern void _PyThreadState_Suspend(PyThreadState *tstate);
 
+// Pin another thread that is currently "detached" (blocked / not running
+// bytecode) by moving it to the "suspended" state. On success the thread cannot
+// resume until _PyThreadState_ResumeDetached() is called.
+//
+// Returns 1 on success, 0 if the thread was not detached .
+extern int _PyThreadState_TrySuspendDetached(PyThreadState *tstate);
+extern void _PyThreadState_ResumeDetached(PyThreadState *tstate);
+
 // Mark the thread state as "shutting down". This is used during interpreter
 // and runtime finalization. The thread may no longer attach to the
 // interpreter and will instead block via _PyThreadState_HangThread().
