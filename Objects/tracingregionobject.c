@@ -1598,6 +1598,16 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         if (PyWeakref_Check(item)) {
             PyWeakReference *wref = (PyWeakReference*)item;
             state.strong_ref = false;
+            // TODO(regions): This races with concurrent deallocation of the
+            // referent. `Py_BEGIN_CRITICAL_SECTION(wref)` locks the weakref's
+            // own `ob_mutex`, but `wr_object` is cleared under the referent's
+            // list lock (`WEAKREF_LIST_LOCK(wr_object)`), so this critical
+            // section does not exclude the clearing path. Another thread can
+            // free the referent between the load and the `Py_INCREF` in
+            // `_move_obj()`. The sound read is `get_ref_lock_held()`'s
+            // try-incref under `LOCK_WEAKREFS(referent)`, but pinning the
+            // referent inflates its `Py_REFCNT` and thus the weak-ref LRC,
+            // which still needs to be compensated for.
             Py_BEGIN_CRITICAL_SECTION(wref);
             SUCCEEDS(_trace_visit(wref->wr_object, &state));
             Py_END_CRITICAL_SECTION();
