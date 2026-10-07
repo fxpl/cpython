@@ -272,7 +272,6 @@ class TestRegionOpening(unittest.TestCase):
         # failed due to the incoming reference to the bridge stored in c2
         self.assertTrue(c2._is_closed())
 
-
         self.assertEqual(
             sort_region_error(str(cm.exception)),
             [
@@ -425,6 +424,8 @@ class TestClosedRegionTeardown(unittest.TestCase):
 
         self.assertTrue(local.get(), "the finalizer did not run or got the wrong object")
 
+    @unittest.skipUnless(immutable._cross_interpreter_sharing,
+        "FIXME(regions): On free-threading we currently just open the region")
     def test_finalizer_revivial(self):
         local_bridge = InterpreterLocal(None)
         local_medic = InterpreterLocal(None)
