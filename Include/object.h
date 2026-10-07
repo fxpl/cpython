@@ -254,14 +254,26 @@ _Py_ThreadId(void)
   return tid;
 }
 
+PyAPI_FUNC(void) _Py_CheckTracingFlag(PyObject *ob);
+
 static inline Py_ALWAYS_INLINE int
 _Py_IsOwnedByCurrentThread(PyObject *ob)
 {
 #ifdef _Py_THREAD_SANITIZER
-    return _Py_atomic_load_uintptr_relaxed(&ob->ob_tid) == _Py_ThreadId();
+    uintptr_t owner = _Py_atomic_load_uintptr_relaxed(&ob->ob_tid);
 #else
-    return ob->ob_tid == _Py_ThreadId();
+    uintptr_t owner = ob->ob_tid;
 #endif
+    if (owner == _Py_ThreadId()) {
+        return 1;
+    }
+
+    // Regions: Tracing can only succeed if all objects are shared or owned by
+    // the tracing thread. This means that any threads accessing the object during
+    // a trace will take this slow branch and clear the flag.
+    _Py_CheckTracingFlag(ob);
+
+    return 0;
 }
 #endif
 

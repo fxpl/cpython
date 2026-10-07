@@ -1465,15 +1465,14 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
         return -1;
     }
 
+#ifdef Py_GIL_DISABLED
     // We have to set the flag after we read the RC. Otherwise, a concurrent
     // thread may modify the RC without us observing it in either the flag
     // or RC value.
-    // FIXME(regions): Can this actually happen?
     _Py_OB_FLAG_ADD(obj, _Py_REGION_TRACE_FLAG);
 
     // On Free-Threading we need to incref the object in case another thread kills
     // all references. This ensures that obj is still allocated on cleanup
-#ifdef Py_GIL_DISABLED
     Py_INCREF(obj);
 #endif
     // Mark the object as visited, this stores the lrc_change for better error reporting
@@ -1642,7 +1641,7 @@ _validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *
     // cleared we abort since a concurrent thread has/had access to
     // the traced objects.
     if ((_Py_OB_FLAGS_LOAD(obj) & _Py_REGION_TRACE_FLAG) == 0) {
-        return -1;
+        goto error;
     }
     _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
 
@@ -1653,20 +1652,18 @@ _validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *
     // The thread could remain stalled there, but then we would either observe
     // the incoming reference and not make it this far, or if it's a lock-free
     // read on a now killed reference the try-inc-ref will fail.
-    //
-    // `_move_obj()` took a protective reference after recording `inital_rc`, so
-    // the expected count is one above the traced value.
-#ifdef Py_GIL_DISABLED
     Py_ssize_t expected_rc = info->inital_rc + 1;
-#else
-    Py_ssize_t expected_rc = info->inital_rc;
-#endif
     if (Py_REFCNT(obj) != expected_rc) {
-        return -1;
+        goto error;
         // TODO(regions): Set the flag after we observed the RC
     }
 
     return 0;
+error:
+    PyErr_Format(
+        PyExc_RuntimeError,
+        "the region cannot be closed since a concurrent thread accessed during tracing");
+    return -1;
 }
 #endif
 
