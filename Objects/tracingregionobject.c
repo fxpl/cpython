@@ -1709,6 +1709,20 @@ _validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *
         goto error;
     }
 
+    // ### Soundness:
+    // Closed Sub-regions are not traversed, which means we wouldn't detect the
+    // graph to not be isolated. During this validation check we just ensure that
+    // any sub-region remained closed until now.
+    if (Region_Check(obj)) {
+        if (region_is_open(_PyTRegion_CAST(obj))) {
+                PyErr_Format(
+                PyExc_RuntimeError,
+                "the sub-region %p was opend during tracing by a concurrent thread",
+                (void*)obj);
+            return -1;
+        }
+    }
+
     return 0;
 error:
     PyErr_Format(
