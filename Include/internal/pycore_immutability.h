@@ -26,6 +26,12 @@ PyAPI_FUNC(int) _PyTracingRegion_AttachIgnoreRegionRefs(PyObject* region);
  * and the validation, with the thread detached, so that other threads can
  * interfere with it. 0 disables the pause. */
 PyAPI_FUNC(void) _PyTracingRegion_SetTestPause(PyTime_t ns);
+
+/* Tests only: makes every close call `hook` on the closing thread right after
+ * its trace traversed `traversed`, so that a test can change the object graph
+ * between two traversals. NULL removes the hook. */
+typedef void (*_PyTracingRegion_TestTraceHook)(PyObject *traversed);
+PyAPI_FUNC(void) _PyTracingRegion_SetTestTraceHook(_PyTracingRegion_TestTraceHook hook);
 #endif
 
 /* Returns the region's metadata node, allocating it if this is the first

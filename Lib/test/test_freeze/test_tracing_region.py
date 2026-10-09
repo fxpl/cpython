@@ -1002,6 +1002,45 @@ c.release()
         self.assertEqual(c.value.local_ref().tag, "local")
 
 
+_testinternalcapi = import_helper.import_module("_testinternalcapi")
+
+@unittest.skipUnless(hasattr(_testinternalcapi, "region_set_trace_move"),
+                     "needs the trace hook of debug builds")
+class TestGraphChangedDuringTrace(unittest.TestCase):
+    """The object graph changes between two traversals of a close, as if a
+    thread holding references into the region changed it concurrently."""
+
+    def tearDown(self):
+        _testinternalcapi.region_set_trace_move(None, None, 0)
+
+    def test_moved_references_cannot_hide_incoming_references(self):
+        # `dst` is only reachable through `src`, so the trace traverses `src`
+        # first. Right after, the hook moves two items from `src` to `dst`
+        # without changing any refcount, so the trace counts each item's one
+        # reference twice. The hook holds a reference to `src` and to `dst`,
+        # which must keep the region open: two references too few on the
+        # items must not make up for two too many on the lists.
+        #
+        # A close that freezes the region type traces again, which would
+        # only see the graph after the move, so the type is frozen up front.
+        deep_freeze(Region)
+        r = Region()
+        dst = []
+        src = [dst, [], []]
+        r.src = src
+        _testinternalcapi.region_set_trace_move(src, dst, 2)
+        del src, dst
+
+        with self.assertRaises(RuntimeError):
+            _testinternalcapi.region_close(r)
+        self.assertFalse(_testinternalcapi.region_is_closed(r))
+
+        # Once the references are dropped, the region closes.
+        _testinternalcapi.region_set_trace_move(None, None, 0)
+        _testinternalcapi.region_close(r)
+        self.assertTrue(_testinternalcapi.region_is_closed(r))
+
+
 @unittest.skipUnless(support.Py_GIL_DISABLED,
                      "cross-thread object ownership only exists on free threading")
 class TestCrossThreadClose(unittest.TestCase):
