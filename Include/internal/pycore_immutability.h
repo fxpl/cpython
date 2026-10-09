@@ -21,6 +21,13 @@ PyAPI_FUNC(int) _PyTracingRegion_DetachIgnoreRegionRefs(PyObject* region);
 PyAPI_FUNC(int) _PyTracingRegion_Attach(PyObject* region, _PyCown_owner_id_t owner);
 PyAPI_FUNC(int) _PyTracingRegion_AttachIgnoreRegionRefs(PyObject* region);
 
+#ifdef Py_DEBUG
+/* Tests only: makes every close pause for `ns` nanoseconds between its trace
+ * and the validation, with the thread detached, so that other threads can
+ * interfere with it. 0 disables the pause. */
+PyAPI_FUNC(void) _PyTracingRegion_SetTestPause(PyTime_t ns);
+#endif
+
 /* Returns the region's metadata node, allocating it if this is the first
  * region reference the current close has found. Borrowed, and only valid while
  * the region stays closed. The caller must hold `_PyWeakref_Lock`. */
