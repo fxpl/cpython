@@ -777,6 +777,10 @@ typedef struct {
     // to restart to be valid
     bool restart;
 
+    // Set if some object was reached through more internal references than
+    // its RC allowed. Only reported if the trace does not restart.
+    bool overcounted;
+
     // Indicates if the given reference is a strong reference or a weak one.
     bool strong_ref;
 
@@ -844,6 +848,7 @@ static int region_trace_state_init(
     state->external_rc = 0;
     state->bridge_rc = 0;
     state->restart = false;
+    state->overcounted = false;
     // References are strong unless the trace explicitly follows a weak one.
     state->strong_ref = true;
     state->has_weak_refs = false;
@@ -1664,6 +1669,11 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
             visit_info->unaccounted_rc -= 1;
             dbg("    - Internal reference to %p; LRC -= 1", obj);
             state->external_rc -= 1;
+            // More internal edges than the RC recorded at discovery: an edge
+            // was counted twice, and the excess could hide an external ref.
+            if (visit_info->unaccounted_rc < 0) {
+                state->overcounted = true;
+            }
         }
         return 0;
     }
@@ -1733,6 +1743,12 @@ static int _validate_region_closed(TracingRegionObject *region_obj, region_trace
 }
 
 #ifdef Py_DEBUG
+static _PyTracingRegion_TestTraceHook region_test_trace_hook = NULL;
+
+void _PyTracingRegion_SetTestTraceHook(_PyTracingRegion_TestTraceHook hook) {
+    _Py_atomic_store_ptr_relaxed(&region_test_trace_hook, (void *)hook);
+}
+
 static PyTime_t region_test_pause_ns = 0;
 
 void _PyTracingRegion_SetTestPause(PyTime_t ns) {
@@ -1810,6 +1826,13 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         state.src = item;
         dbg("  - traversing %p", item);
         SUCCEEDS(_PyObject_VisitReachable(item, (visitproc)_trace_visit, (void*)&state));
+#ifdef Py_DEBUG
+        _PyTracingRegion_TestTraceHook hook = (_PyTracingRegion_TestTraceHook)
+            _Py_atomic_load_ptr_relaxed(&region_test_trace_hook);
+        if (hook != NULL) {
+            hook(item);
+        }
+#endif
 
         if (PyWeakref_Check(item)) {
             PyWeakReference *wref = (PyWeakReference*)item;
@@ -1840,6 +1863,17 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         region_trace_res = TRACE_RES_RESTART;
         region_clear_tracing_mark(region);
         goto finally;
+    }
+
+    // Checked after the restart, since code run by freezing may have moved
+    // references, which a fresh trace sees correctly.
+    if (state.overcounted) {
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        gc_list_dissolve(&region->gc_list);
+#endif
+        PyErr_SetString(PyExc_RuntimeError,
+            "the region cannot be closed since a concurrent thread accessed during tracing");
+        goto error;
     }
 
     // Report an error, if the region couldn't be closed.

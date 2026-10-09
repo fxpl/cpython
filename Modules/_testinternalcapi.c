@@ -2465,6 +2465,71 @@ region_set_close_pause(PyObject *self, PyObject *seconds)
     _PyTracingRegion_SetTestPause(ns);
     Py_RETURN_NONE;
 }
+
+/* Strong references, standing in for a thread that took them before a close
+ * started and holds them throughout. */
+static PyObject *trace_move_src = NULL;
+static PyObject *trace_move_dst = NULL;
+static Py_ssize_t trace_move_count = 0;
+
+/* Moves `trace_move_count` items from the end of `trace_move_src` to the end
+ * of `trace_move_dst`, right after the trace traversed the source. Each item
+ * ends up with the refcount it started with, as with `dst.append(src.pop())`
+ * done by a thread that does not take references of its own. Runs once. */
+static void
+trace_move_hook(PyObject *traversed)
+{
+    if (traversed != trace_move_src || trace_move_count == 0) {
+        return;
+    }
+    PyObject *src = trace_move_src;
+    PyObject *dst = trace_move_dst;
+    Py_BEGIN_CRITICAL_SECTION2(src, dst);
+    for (; trace_move_count > 0; trace_move_count--) {
+        Py_ssize_t size = PyList_GET_SIZE(src);
+        if (size == 0) {
+            break;
+        }
+        PyObject *item = Py_NewRef(PyList_GET_ITEM(src, size - 1));
+        if (PyList_SetSlice(src, size - 1, size, NULL) < 0
+            || PyList_Append(dst, item) < 0)
+        {
+            PyErr_FormatUnraisable("Exception ignored in the trace move hook");
+        }
+        Py_DECREF(item);
+    }
+    Py_END_CRITICAL_SECTION2();
+    trace_move_count = 0;
+}
+
+/* region_set_trace_move(src, dst, count): the next close that traverses the
+ * list `src` moves `count` items from it to the list `dst` right after, while
+ * this module holds a reference to each list. region_set_trace_move(None,
+ * None, 0) removes the hook and drops the references. */
+static PyObject *
+region_set_trace_move(PyObject *self, PyObject *args)
+{
+    PyObject *src, *dst;
+    Py_ssize_t count;
+    if (!PyArg_ParseTuple(args, "OOn", &src, &dst, &count)) {
+        return NULL;
+    }
+    if (src != Py_None && (!PyList_Check(src) || !PyList_Check(dst))) {
+        PyErr_SetString(PyExc_TypeError, "expected two lists or two Nones");
+        return NULL;
+    }
+    _PyTracingRegion_SetTestTraceHook(NULL);
+    Py_CLEAR(trace_move_src);
+    Py_CLEAR(trace_move_dst);
+    trace_move_count = 0;
+    if (src != Py_None) {
+        trace_move_src = Py_NewRef(src);
+        trace_move_dst = Py_NewRef(dst);
+        trace_move_count = count;
+        _PyTracingRegion_SetTestTraceHook(trace_move_hook);
+    }
+    Py_RETURN_NONE;
+}
 #endif
 
 static PyMethodDef module_functions[] = {
@@ -2472,6 +2537,7 @@ static PyMethodDef module_functions[] = {
     {"region_is_closed", region_is_closed, METH_O},
 #ifdef Py_DEBUG
     {"region_set_close_pause", region_set_close_pause, METH_O},
+    {"region_set_trace_move", region_set_trace_move, METH_VARARGS},
 #endif
     {"get_configs", get_configs, METH_NOARGS},
     {"get_recursion_depth", get_recursion_depth, METH_NOARGS},
