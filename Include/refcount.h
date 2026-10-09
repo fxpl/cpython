@@ -160,16 +160,18 @@ PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
 
 
 #ifdef Py_GIL_DISABLED
-   // The shared reference count uses the two least-significant bits to store
+   // The shared reference count uses the three least-significant bits to store
    // flags. The remaining bits are used to store the reference count.
-#  define _Py_REF_SHARED_SHIFT        2
-#  define _Py_REF_SHARED_FLAG_MASK    0x3
+#  define _Py_REF_SHARED_SHIFT            3
+#  define _Py_REF_SHARED_FLAG_MASK        0b111
+#  define _Py_REF_SHARED_BRC_FLAG_MASK    0b011
 
    // The shared flags are initialized to zero.
-#  define _Py_REF_SHARED_INIT         0x0
-#  define _Py_REF_MAYBE_WEAKREF       0x1
-#  define _Py_REF_QUEUED              0x2
-#  define _Py_REF_MERGED              0x3
+#  define _Py_REF_SHARED_INIT             0x0
+#  define _Py_REF_MAYBE_WEAKREF           0x1
+#  define _Py_REF_QUEUED                  0x2
+#  define _Py_REF_MERGED                  0x3
+#  define _Py_REF_BLOCK_TRYINC            0x4
 
    // Create a shared field from a refcnt and desired flags
 #  define _Py_REF_SHARED(refcnt, flags) \

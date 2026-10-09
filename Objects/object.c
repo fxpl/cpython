@@ -473,7 +473,9 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
 #endif
         _Py_brc_queue_object(o);
     }
-    else if (new_shared == _Py_REF_MERGED) {
+    else if ((new_shared >> _Py_REF_SHARED_SHIFT) == 0
+        && (new_shared & _Py_REF_SHARED_BRC_FLAG_MASK) == _Py_REF_MERGED
+    ) {
         // refcount is zero AND merged
         return 1;
     }
@@ -518,11 +520,11 @@ _Py_MergeZeroLocalRefcount(PyObject *op)
     // Slow-path: atomically set the flags (low two bits) to _Py_REF_MERGED.
     Py_ssize_t new_shared;
     do {
-        new_shared = (shared & ~_Py_REF_SHARED_FLAG_MASK) | _Py_REF_MERGED;
+        new_shared = (shared & ~_Py_REF_SHARED_BRC_FLAG_MASK) | _Py_REF_MERGED;
     } while (!_Py_atomic_compare_exchange_ssize(&op->ob_ref_shared,
                                                 &shared, new_shared));
 
-    if (new_shared == _Py_REF_MERGED) {
+    if ((new_shared >> _Py_REF_SHARED_SHIFT) == 0) {
         // TODO(Immutable):  Clear the immutable flag here.
         _Py_CLEAR_IMMUTABLE(op);
         // i.e., the shared refcount is zero (only the flags are set) so we

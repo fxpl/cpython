@@ -1678,14 +1678,39 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
 }
 
 #ifndef _Py_PYRONA_INTERPRETER_SHARING
+static void object_block_tryinc(PyObject *obj) {
+    Py_ssize_t shared = _Py_atomic_load_ssize(&obj->ob_ref_shared);
+    Py_ssize_t new_shared;
+    do {
+        new_shared = shared | _Py_REF_BLOCK_TRYINC;
+    } while (!_Py_atomic_compare_exchange_ssize(&obj->ob_ref_shared, &shared, new_shared));
+}
+
+static void object_allow_tryinc(PyObject *obj) {
+    Py_ssize_t shared = _Py_atomic_load_ssize(&obj->ob_ref_shared);
+    Py_ssize_t new_shared;
+    do {
+        new_shared = shared & ~_Py_REF_BLOCK_TRYINC;
+    } while (!_Py_atomic_compare_exchange_ssize(&obj->ob_ref_shared, &shared, new_shared));
+}
+
 static int
 _validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *value,
-                    void *user_data)
+                    void *wref_list_void)
 {
     PyObject *obj = _PyObject_CAST(key);
     region_visited_info_t *info = _VisitInfo_CAST(value);
 
-    // TODO(regions): Pause weaks until we can invalidate it
+    // ### Soundness
+    // We have to block weakrefs from dereferencing the object after we validated it
+    bool has_weakref = false;
+    if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
+        PyWeakReference **list = _PyObject_GET_WEAKREFS_LISTPTR(obj);
+        if ((*list != NULL)) {
+            has_weakref = true;
+            object_block_tryinc(obj);
+        }
+    }
 
     // ### Soundness:
     // During tracing we set a flag on each object. Every RC operation
@@ -1723,8 +1748,15 @@ _validate_region_closed_visit(_Py_hashtable_t *ht, const void *key, const void *
         }
     }
 
+    // TODO: After validation, insert the object into the wref_list that should survive. This has
+    // to be done last since this is an RC operation
+
     return 0;
 error:
+    if (has_weakref) {
+        object_allow_tryinc(obj);
+    }
+
     PyErr_Format(
         PyExc_RuntimeError,
         "the region cannot be closed since a concurrent thread accessed during tracing");

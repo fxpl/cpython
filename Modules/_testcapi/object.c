@@ -178,7 +178,7 @@ test_py_try_inc_ref(PyObject *self, PyObject *unused)
     // PyUnstable_EnableTryIncRef sets the shared flags to
     // `_Py_REF_MAYBE_WEAKREF` if the flags are currently zero to ensure that
     // the shared reference count is merged on deallocation.
-    assert((op->ob_ref_shared & _Py_REF_SHARED_FLAG_MASK) >= _Py_REF_MAYBE_WEAKREF);
+    assert((op->ob_ref_shared & _Py_REF_SHARED_BRC_FLAG_MASK) >= _Py_REF_MAYBE_WEAKREF);
 #endif
 
     if (!PyUnstable_TryIncRef(op)) {

@@ -23,9 +23,9 @@ extern "C" {
 // reference counting so that they are not immediately deallocated when the
 // non-deferred reference count drops to zero.
 //
-// The value is half the maximum shared refcount because the low two bits of
+// The value is half the maximum shared refcount because the low three bits of
 // `ob_ref_shared` are used for flags.
-#define _Py_REF_DEFERRED (PY_SSIZE_T_MAX / 8)
+#define _Py_REF_DEFERRED (PY_SSIZE_T_MAX / 16)
 
 /* For backwards compatibility -- Do not use this */
 #define _Py_IsImmortalLoose(op) _Py_IsImmortal
@@ -660,7 +660,7 @@ _Py_TryIncRefShared(PyObject *op)
     for (;;) {
         // If the shared refcount is zero and the object is either merged
         // or may not have weak references, then we cannot incref it.
-        if (shared == 0 || shared == _Py_REF_MERGED) {
+        if (shared == 0 || shared == _Py_REF_MERGED || (shared & _Py_REF_BLOCK_TRYINC) != 0) {
             return 0;
         }
 
@@ -741,7 +741,7 @@ _Py_NewRefWithLock(PyObject *op)
     for (;;) {
         Py_ssize_t shared = _Py_atomic_load_ssize_relaxed(&op->ob_ref_shared);
         Py_ssize_t new_shared = shared + (1 << _Py_REF_SHARED_SHIFT);
-        if ((shared & _Py_REF_SHARED_FLAG_MASK) == 0) {
+        if ((shared & _Py_REF_SHARED_BRC_FLAG_MASK) == 0) {
             new_shared |= _Py_REF_MAYBE_WEAKREF;
         }
         if (_Py_atomic_compare_exchange_ssize(
@@ -770,7 +770,7 @@ _PyObject_SetMaybeWeakref(PyObject *op)
     }
     for (;;) {
         Py_ssize_t shared = _Py_atomic_load_ssize_relaxed(&op->ob_ref_shared);
-        if ((shared & _Py_REF_SHARED_FLAG_MASK) != 0) {
+        if ((shared & _Py_REF_SHARED_BRC_FLAG_MASK) != 0) {
             // Nothing to do if it's in WEAKREFS, QUEUED, or MERGED states.
             return;
         }
