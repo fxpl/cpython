@@ -268,6 +268,10 @@ static int PyCown_reachable(_PyCownObject *self, visitproc visit, void *arg) {
 }
 
 static int PyCown_clear(_PyCownObject *self) {
+    // The GC may have cleared the cown already, before deallocating it.
+    if (self->value == NULL) {
+        return 0;
+    }
     if (_PyImmutability_CanViewAsDeepImmutable(self->value)) {
         Py_CLEAR(self->value);
         return 0;

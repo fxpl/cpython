@@ -8,7 +8,7 @@
 #include "pycore_weakref.h"
 #include "pycore_cown.h"
 #include "pycore_regionref.h"
-#ifdef Py_GIL_DISABLED
+#if defined(Py_GIL_DISABLED) || defined(Py_DEBUG)
 #include "pycore_parking_lot.h"   // _PyParkingLot_Park()
 #include "pycore_time.h"          // _PyDeadline_Init()
 #endif
@@ -1732,6 +1732,32 @@ static int _validate_region_closed(TracingRegionObject *region_obj, region_trace
     return 0;
 }
 
+#ifdef Py_DEBUG
+static PyTime_t region_test_pause_ns = 0;
+
+void _PyTracingRegion_SetTestPause(PyTime_t ns) {
+    _Py_atomic_store_int64_relaxed(&region_test_pause_ns, ns);
+}
+
+/* Sleeps for the pause set by `_PyTracingRegion_SetTestPause()`. The thread is
+ * detached meanwhile, which also releases the GIL. */
+static void region_test_pause(void) {
+    PyTime_t ns = _Py_atomic_load_int64_relaxed(&region_test_pause_ns);
+    if (ns <= 0) {
+        return;
+    }
+    PyTime_t deadline = _PyDeadline_Init(ns);
+    // Stack address to park on; nobody unparks it.
+    uint8_t sleeper = 0;
+    uint8_t expected = 0;
+    PyTime_t remaining;
+    while ((remaining = _PyDeadline_Get(deadline)) > 0) {
+        (void)_PyParkingLot_Park(&sleeper, &expected, sizeof(sleeper),
+                                 remaining, NULL, /*detach=*/1);
+    }
+}
+#endif
+
 static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trace_state) {
     assert(Region_Check(region_obj));
     TracingRegionObject* region = _PyTRegion_CAST(region_obj);
@@ -1850,6 +1876,10 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         goto error;
     }
 
+#ifdef Py_DEBUG
+    region_test_pause();
+#endif
+
     SUCCEEDS(_validate_region_closed(region, &state));
 
     SUCCEEDS(_region_close(region, state.bridge_rc, state.visited, state.has_weak_refs));
@@ -1857,6 +1887,11 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
     goto finally;
 error:
     region_trace_res = TRACE_RES_ERR;
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    // The trace may have moved objects into the region's GC list already.
+    // They must go back to the local GC, since the region remains open.
+    gc_list_dissolve(&region->gc_list);
+#endif
     region_clear_tracing_mark(region);
 finally:
     Py_CLEAR(item);
@@ -2271,7 +2306,8 @@ int _PyTracingRegion_Close(PyObject* op) {
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     TracingRegionObject *self = _PyTRegion_CAST(op);
 
-    assert(gc_list_is_empty(&self->gc_list));
+    // A closed region keeps its members in its GC list
+    assert(!region_is_open(self) || gc_list_is_empty(&self->gc_list));
 #endif
 
     return try_close_region_tree(op);

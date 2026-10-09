@@ -24,6 +24,7 @@
 #include "pycore_function.h"      // _PyFunction_GET_BUILTINS
 #include "pycore_gc.h"            // PyGC_Head
 #include "pycore_hashtable.h"     // _Py_hashtable_new()
+#include "pycore_immutability.h"  // _PyTracingRegion_Close()
 #include "pycore_import.h"        // _PyImport_ClearExtension()
 #include "pycore_initconfig.h"    // _Py_GetConfigsAsDict()
 #include "pycore_instruction_sequence.h"  // _PyInstructionSequence_New()
@@ -35,6 +36,7 @@
 #include "pycore_pylifecycle.h"   // _PyInterpreterConfig_InitFromDict()
 #include "pycore_pystate.h"       // _PyThreadState_GET()
 #include "pycore_runtime_structs.h" // _PY_NSMALLPOSINTS
+#include "pycore_time.h"          // _PyTime_FromSecondsObject()
 #include "pycore_unicodeobject.h" // _PyUnicode_TransformDecimalAndSpaceToASCII()
 
 #include "clinic/_testinternalcapi.c.h"
@@ -2418,7 +2420,59 @@ set_vectorcall_nop(PyObject *self, PyObject *func)
     Py_RETURN_NONE;
 }
 
+static int
+check_region(PyObject *obj)
+{
+    if (!Py_IS_TYPE(obj, &_PyTracingRegion_Type)) {
+        PyErr_Format(PyExc_TypeError, "expected a TracingRegion, not '%.200s'",
+                     Py_TYPE(obj)->tp_name);
+        return -1;
+    }
+    return 0;
+}
+
+/* Closes a region, without the cown's check that it holds the only reference
+ * to the bridge. Raises if the region could not be closed. */
+static PyObject *
+region_close(PyObject *self, PyObject *region)
+{
+    if (check_region(region) < 0) {
+        return NULL;
+    }
+    if (_PyTracingRegion_Close(region) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+region_is_closed(PyObject *self, PyObject *region)
+{
+    if (check_region(region) < 0) {
+        return NULL;
+    }
+    return PyBool_FromLong(_PyTracingRegion_IsClosed(region));
+}
+
+#ifdef Py_DEBUG
+static PyObject *
+region_set_close_pause(PyObject *self, PyObject *seconds)
+{
+    PyTime_t ns;
+    if (_PyTime_FromSecondsObject(&ns, seconds, _PyTime_ROUND_CEILING) < 0) {
+        return NULL;
+    }
+    _PyTracingRegion_SetTestPause(ns);
+    Py_RETURN_NONE;
+}
+#endif
+
 static PyMethodDef module_functions[] = {
+    {"region_close", region_close, METH_O},
+    {"region_is_closed", region_is_closed, METH_O},
+#ifdef Py_DEBUG
+    {"region_set_close_pause", region_set_close_pause, METH_O},
+#endif
     {"get_configs", get_configs, METH_NOARGS},
     {"get_recursion_depth", get_recursion_depth, METH_NOARGS},
     {"get_c_recursion_remaining", get_c_recursion_remaining, METH_NOARGS},
