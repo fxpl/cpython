@@ -737,9 +737,9 @@ typedef struct {
 static int _region_trace_state_free_visited(
     _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
 {
-#ifdef Py_GIL_DISABLED
     PyObject* obj = _PyObject_CAST(key);
 
+#ifdef Py_GIL_DISABLED
     // Clear the flag we set during traversal, this is needed for the error
     // case if the validation code didn't clear the flag.
     _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
@@ -1645,7 +1645,6 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
                     void *state_void)
 {
     PyObject *obj = _PyObject_CAST(key);
-    region_visited_info_t *info = _VisitInfo_CAST(value);
     prepare_region_close_state_t *state = _Py_CAST(prepare_region_close_state_t*, state_void);
 
     // ### Soundness
@@ -1664,6 +1663,8 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
     // free-threaded Python we need to validate that no references were
     // manipulated under foot.
 #ifdef Py_GIL_DISABLED
+    region_visited_info_t *info = _VisitInfo_CAST(value);
+
     // ### Soundness:
     // During tracing we set a flag on each object. Every RC operation
     // first checks this flag and then clears it. If the flag has been
@@ -1879,7 +1880,19 @@ resolve_region_meta(_Py_hashtable_t *ht, const void *key, const void *value,
     return 0;
 }
 
+/* This method traces the region and closes it, if there are no references
+ * pointing into the region. References to the bridge are allowed.
+ *
+ * This function requires the GIL to be held if _Py_PYRONA_INTERPRETER_SHARING
+ * is defined.
+ *
+ * Returns -1 if an exception was raised. 0 if the region could be closed.
+ */
 static int try_close_region_tree(PyObject *root) {
+    if (!region_is_open(_PyTRegion_CAST(root))) {
+        return 0;
+    }
+
     dbg("Starting region tree trace from %p", root);
 
     tree_trace_state_t state;
@@ -2251,24 +2264,6 @@ TracingRegion_set_dict(PyObject *op, PyObject *value, void *Py_UNUSED(context)) 
 }
 
 
-/* This method traces the region and closes it, if there are no references
- * pointing into the region. References to the bridge are allowed.
- *
- * This function requires the GIL to be held if _Py_PYRONA_INTERPRETER_SHARING
- * is defined.
- *
- * Returns -1 if an exception was raised. 0 if the region could be closed.
- */
-int _PyTracingRegion_Close(PyObject* op) {
-#ifdef _Py_PYRONA_INTERPRETER_SHARING
-    TracingRegionObject *self = _PyTRegion_CAST(op);
-
-    assert(gc_list_is_empty(&self->gc_list));
-#endif
-
-    return try_close_region_tree(op);
-}
-
 int _PyTracingRegion_IsClosed(PyObject* region) {
     TracingRegionObject *self = _PyTRegion_CAST(region);
     return !region_is_open(self);
@@ -2302,7 +2297,7 @@ TracingRegion_close(PyObject *Py_UNUSED(cls), PyObject *region)
         PyErr_SetString(PyExc_TypeError, "argument must be a tracing region");
         return NULL;
     }
-    if (_PyTracingRegion_Close(region) < 0) {
+    if (try_close_region_tree(region) < 0) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -2364,11 +2359,12 @@ PyTypeObject _PyTracingRegion_Type = {
 /// This attempts to detach the region from the current interpreter and thread.
 ///
 /// Raises an exception and returns -1 if it couldn't be detached.
-int _PyTracingRegion_DetachIgnoreRegionRefs(PyObject* region) {
+int _PyTracingRegion_Detach(PyObject* region) {
     assert(Region_Check(region));
+    TracingRegionObject *self = _PyTRegion_CAST(region);
 
     // Close the region
-    int closing_res = _PyTracingRegion_Close(region);
+    int closing_res = try_close_region_tree(region);
     if (closing_res < 0) {
         return -1;
     }
@@ -2380,7 +2376,6 @@ int _PyTracingRegion_DetachIgnoreRegionRefs(PyObject* region) {
     // thread from accessing the contained value. An RC of 1 indicates that the
     // cown holds the only reference and this thread is the only one that can
     // access that reference.
-    TracingRegionObject *self = _PyTRegion_CAST(region);
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     // We subtract the internal RCs for sub-interpreters
     Py_ssize_t external_rc = Py_REFCNT(region);
@@ -2409,19 +2404,6 @@ int _PyTracingRegion_DetachIgnoreRegionRefs(PyObject* region) {
     PyObject_GC_UnTrack(region);
 #endif
 
-    return 0;
-}
-
-/// This attempts to detach the region from the current interpreter and thread.
-///
-/// Raises an exception and returns -1 if it couldn't be detached.
-int _PyTracingRegion_Detach(PyObject* region) {
-    TracingRegionObject *self = _PyTRegion_CAST(region);
-
-    if (_PyTracingRegion_DetachIgnoreRegionRefs(region)) {
-        return -1;
-    }
-
     // This is safe, assuming the region references respect the thread ID,
     // as that one prevents other threads and IPs from opening the chain under foot.
     if (self->meta != NULL) {
@@ -2431,21 +2413,14 @@ int _PyTracingRegion_Detach(PyObject* region) {
     return 0;
 }
 
-int _PyTracingRegion_AttachIgnoreRegionRefs(PyObject* region) {
+int _PyTracingRegion_Attach(PyObject* region, _PyCown_owner_id_t owner) {
     assert(Region_Check(region));
+    TracingRegionObject *self = _PyTRegion_CAST(region);
+
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     assert(!PyObject_GC_IsTracked(region));
     PyObject_GC_Track(region);
 #endif
-    return 0;
-}
-
-int _PyTracingRegion_Attach(PyObject* region, _PyCown_owner_id_t owner) {
-    TracingRegionObject *self = _PyTRegion_CAST(region);
-
-    if (_PyTracingRegion_AttachIgnoreRegionRefs(region)) {
-        return -1;
-    }
 
     Py_BEGIN_CRITICAL_SECTION(self);
     if (self->meta != NULL) {
