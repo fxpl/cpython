@@ -2613,7 +2613,7 @@ _Py_GetThreadLocal_Addr(void)
 }
 
 void _Py_CheckTracingFlag(PyObject *ob) {
-    if ((_Py_OB_FLAGS_LOAD(ob) & _Py_REGION_TRACE_FLAG) == 0) {
+    if ((_Py_OB_FLAGS_LOAD(ob) & _Py_REGION_TRACE_FLAG) != 0) {
         _Py_OB_FLAG_REMOVE(ob, _Py_REGION_TRACE_FLAG);
     }
 }
