@@ -217,14 +217,6 @@ meta_set_parent_lock_held(_PyRegionRefMetadata *meta, _PyRegionRefMetadata *pare
 }
 
 static void
-meta_set_cown_lock_held(_PyRegionRefMetadata *meta, PyObject *cown)
-{
-    meta_clear_parent_lock_held(meta);
-    meta->kind = _Py_REGION_REF_COWN;
-    meta->value.cown = cown;
-}
-
-static void
 meta_set_open_ipid_lock_held(_PyRegionRefMetadata *meta, _PyCown_owner_id_t ipid)
 {
     meta_clear_parent_lock_held(meta);
@@ -288,14 +280,6 @@ _PyRegionRef_MetaSetParentLockHeld(_PyRegionRefMetadata *meta,
 }
 
 void
-_PyRegionRef_MetaSetCown(_PyRegionRefMetadata *meta, PyObject *cown)
-{
-    LOCK_REGION_REF_META();
-    meta_set_cown_lock_held(meta, cown);
-    UNLOCK_REGION_REF_META();
-}
-
-void
 _PyRegionRef_MetaSetIpid(_PyRegionRefMetadata *meta, _PyCown_owner_id_t ipid)
 {
     LOCK_REGION_REF_META();
@@ -317,7 +301,7 @@ _PyRegionRef_MetaRegionOpened(_PyRegionRefMetadata *meta)
 {
     LOCK_REGION_REF_META();
     // FIXME(regions): The following assert fails since some metas have a parent meta IDK why
-    // assert(meta->kind == _Py_REGION_REF_CLOSED_IPID || meta->kind == _Py_REGION_REF_COWN);
+    // assert(meta->kind == _Py_REGION_REF_CLOSED_IPID);
     meta->region = NULL;
     meta_set_open_ipid_lock_held(meta, _PyCown_ThisOwnerId());
     UNLOCK_REGION_REF_META();
@@ -476,12 +460,6 @@ regionref_check_access(PyWeakReference *self, regionref_open_list_t *regions,
             owner = meta->value.ipid;
             if (owner != this_ip) {
                 verdict = REGIONREF_DENIED_IPID;
-            }
-            break;
-        case _Py_REGION_REF_COWN:
-            owner = _PyCown_Owner(meta->value.cown);
-            if (owner != this_ip) {
-                verdict = REGIONREF_DENIED_COWN;
             }
             break;
         default:

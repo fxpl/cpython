@@ -219,6 +219,7 @@ static PyObject* pop(PyObject* s){
     return item;
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 // Returns a borrowed reference to the last item in the list.
 static PyObject* peek(PyObject* s){
     PyObject* item;
@@ -234,6 +235,7 @@ static PyObject* peek(PyObject* s){
 
     return item;
 }
+#endif
 
 static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);

@@ -31,10 +31,6 @@ typedef uintptr_t _PyCown_owner_id_t;
 
 PyAPI_FUNC(_PyCown_owner_id_t) _PyCown_ThisOwnerId(void);
 
-/* The interpreter currently owning the cown, or `_PyCown_ReleasedIpid()` when
- * no interpreter does. Safe to call from any interpreter. */
-PyAPI_FUNC(_PyCown_owner_id_t) _PyCown_Owner(PyObject *cown);
-
 
 #ifdef __cplusplus
 }

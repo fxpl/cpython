@@ -13,10 +13,10 @@ extern "C" {
 
 /* Every `RegionRef` points at a `_PyRegionRefMetadata` node, and those nodes
  * form a tree that mirrors the region hierarchy: a nested region's node
- * delegates to the node of its parent, and the outermost node names the owner,
- * either an interpreter or the cown holding the region. A cown node looks the
- * owner up on the cown, which is what makes acquiring and releasing free;
- * moving a closed region between owners restamps a single node.
+ * delegates to the node of its parent, and the outermost node names the
+ * interpreter owning the region. All references into one region share a single
+ * node, so moving a closed region between owners restamps just that node; a cown
+ * restamps it on every acquire and release.
  *
  * A reference to an object that is in no region at all owns its own node.
  */
@@ -28,9 +28,6 @@ typedef enum {
     _Py_REGION_REF_WIP,
     /* Delegates to `value.parent`, the node of the enclosing region. */
     _Py_REGION_REF_META,
-    /* Terminal. The region is held by `value.cown`, on which the owner is
-     * looked up dynamically. */
-    _Py_REGION_REF_COWN,
     /* Terminal, owned by one interpreter, but hasn't been opened.
        this can be restamped */
     _Py_REGION_REF_CLOSED_IPID,
@@ -51,7 +48,6 @@ typedef struct _PyRegionRefMetadata {
     PyObject *region;
     union {
         struct _PyRegionRefMetadata *parent;  /* META */
-        PyObject *cown;                       /* COWN, borrowed */
         _PyCown_owner_id_t ipid;              /* IPID */
     } value;
 } _PyRegionRefMetadata;
@@ -64,9 +60,6 @@ extern void _PyRegionRef_MetaDecref(_PyRegionRefMetadata *meta);
 // Ownership transitions.
 extern void _PyRegionRef_MetaSetParentLockHeld(_PyRegionRefMetadata *meta,
                                                _PyRegionRefMetadata *parent);
-/* Hands the node to `cown`, which is borrowed. The owner is from then on
- * whoever holds the cown. */
-extern void _PyRegionRef_MetaSetCown(_PyRegionRefMetadata *meta, PyObject *cown);
 /* Stamps an explicit owner, which need not be the current interpreter and may
  * be `_PyCown_ReleasedIpid()` to mean nobody owns the region. */
 extern void _PyRegionRef_MetaSetIpid(_PyRegionRefMetadata *meta,

@@ -54,10 +54,6 @@ static _PyCown_owner_id_t cown_get_owner(_PyCownObject *obj) {
     return _Py_atomic_load_uintptr_relaxed(&obj->owner_id);
 }
 
-_PyCown_owner_id_t _PyCown_Owner(PyObject *obj) {
-    return cown_get_owner(_PyCownObject_CAST(obj));
-}
-
 #define BAIL_UNLESS_OWNED_BY(o, tested_owner, result) \
     do {\
         _PyCown_owner_id_t owning_id = cown_get_owner(_PyCownObject_CAST(o)); \
@@ -78,23 +74,9 @@ static int cown_set_value_unchecked(_PyCownObject* self, PyObject* value) {
     assert(cown_get_owner(self) == RELEASED_OWNER_ID
            || cown_get_owner(self) == _PyCown_ThisOwnerId());
 
-    // The region is moving out of the cown, so its region references answer to
-    // the cown's owner from now on.
-    if (self->value != value && Region_Check(self->value)) {
-        // FIXME(regions): If the cown is released this sets the released owner,
-        // not what we want
-        _PyTracingRegion_SetMetaOwner(self->value, cown_get_owner(self));
-    }
-
     // This doesn't require a lock since only the owning thread can read and
     // write to self->value
     Py_XSETREF(self->value, Py_NewRef(value));
-
-    // The region is now owned by this cown, so its region references resolve
-    // through it and follow whoever holds it.
-    if (Region_Check(value)) {
-        _PyTracingRegion_SetMetaCown(value, _PyObject_CAST(self));
-    }
 
     return 0;
 }
@@ -183,14 +165,12 @@ static int cown_lock(_PyCownObject* self, PyTime_t timeout, _PyCown_owner_id_t o
         return COWN_ACQUIRE_ERROR;
     }
 
-    // Only untrack objects if we shared them across sub-interpreters
-#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    // Attach the region to the current concurrent unit
     if (self->value && Region_Check(self->value)) {
-       if (_PyTracingRegion_AttachIgnoreRegionRefs(self->value)) {
+        if (_PyTracingRegion_Attach(self->value, owner_id)) {
             return COWN_ACQUIRE_ERROR;
-       }
+        }
     }
-#endif
 
     return COWN_ACQUIRE_SUCCESS;
 }
@@ -486,15 +466,10 @@ static int cown_release(_PyCownObject *self, _PyCown_owner_id_t unlocking_owner)
     }
     assert(Region_Check(self->value));
 
-    // The contained region needs to be closed, to allow the cown to release
-    if (_PyTracingRegion_DetachIgnoreRegionRefs(self->value)) {
+    // The contained region needs to be closed, to allow the cown to release.
+    if (_PyTracingRegion_Detach(self->value)) {
         return -1;
     }
-
-    // The close leaves the region local to this interpreter. Rooting it here,
-    // after every check has passed, is what lets the next owner of the cown
-    // dereference the region references pointing into it.
-    _PyTracingRegion_SetMetaCown(self->value, _PyObject_CAST(self));
 
     // Region is closed, safe to release
     return cown_release_unchecked(self, unlocking_owner);

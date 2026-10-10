@@ -27,15 +27,11 @@ PyAPI_FUNC(int) _PyTracingRegion_AttachIgnoreRegionRefs(PyObject* region);
 PyAPI_FUNC(struct _PyRegionRefMetadata*)
     _PyTracingRegion_MetaLockHeld(PyObject* region);
 
-/* Hands a closed region's node to `cown`, used when a cown takes ownership of
- * the region. Does nothing for an open region. */
-PyAPI_FUNC(void) _PyTracingRegion_SetMetaCown(PyObject* region, PyObject* cown);
-
-/* Records who owns a closed region, used when it leaves the cown that owned it.
+/* Records who owns a closed region, used when ownership changes hands, e.g. when
+ * a cown acquires, releases, or stores the region. Does nothing for an open region.
  * The owner is NOT necessarily the calling interpreter: a cown is immutable and
  * may be deallocated by anyone holding a reference, including an interpreter
- * that never owned it. Pass `_PyCown_ReleasedIpid()` when nobody owns it.
- * Does nothing for an open region. */
+ * that never owned it. Pass `_PyCown_ReleasedIpid()` when nobody owns it. */
 // FIXME: The deallocation will be fixed in a follow-up, then we can remove the
 // owner argument and assert that it's always local.
 PyAPI_FUNC(void) _PyTracingRegion_SetMetaOwner(
