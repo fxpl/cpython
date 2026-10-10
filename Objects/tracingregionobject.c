@@ -2295,7 +2295,44 @@ void _PyTracingRegion_SetMetaOwner(PyObject* region, _PyCown_owner_id_t owner) {
     }
 }
 
+static PyObject *
+TracingRegion_close(PyObject *Py_UNUSED(cls), PyObject *region)
+{
+    if (!Region_Check(region)) {
+        PyErr_SetString(PyExc_TypeError, "argument must be a tracing region");
+        return NULL;
+    }
+    if (_PyTracingRegion_Close(region) < 0) {
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+PyDoc_STRVAR(TracingRegion_close_doc,
+"close(region, /)\n\
+--\n\
+\n\
+Attempt to close the given tracing region. Raises if it cannot be closed.");
+
+static PyObject *
+TracingRegion_is_closed(PyObject *Py_UNUSED(cls), PyObject *region)
+{
+    if (!Region_Check(region)) {
+        PyErr_SetString(PyExc_TypeError, "argument must be a tracing region");
+        return NULL;
+    }
+    return PyBool_FromLong(_PyTracingRegion_IsClosed(region));
+}
+
+PyDoc_STRVAR(TracingRegion_is_closed_doc,
+"is_closed(region, /)\n\
+--\n\
+\n\
+Return true if the given tracing region is closed.");
+
 static PyMethodDef TracingRegion_methods[] = {
+    {"close", TracingRegion_close, METH_O | METH_STATIC, TracingRegion_close_doc},
+    {"is_closed", TracingRegion_is_closed, METH_O | METH_STATIC, TracingRegion_is_closed_doc},
     {NULL,              NULL}           /* sentinel */
 };
 

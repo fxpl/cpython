@@ -24,12 +24,12 @@ class TestTracing(unittest.TestCase):
         x = [1]
         y = [2]
 
-        c = Cown(Region())
-        c.value.x = x
-        c.value.y = y
+        r = Region()
+        r.x = x
+        r.y = y
 
         with self.assertRaises(RuntimeError) as cm:
-            c.release()
+            Region.close(r)
 
         self.assertEqual(
             sort_region_error(str(cm.exception)),
@@ -45,14 +45,14 @@ class TestTracing(unittest.TestCase):
         # make testing stable.
         l = [[1], [1], [1], [1], [1], [1], [1], [1]]
 
-        c = Cown(Region())
-        c.value.x = []
+        r = Region()
+        r.x = []
 
         for i in range(len(l)):
-            c.value.x.append(l[i])
+            r.x.append(l[i])
 
         with self.assertRaises(RuntimeError) as cm:
-            c.release()
+            Region.close(r)
 
         self.assertEqual(
             sort_region_error(str(cm.exception)),
@@ -66,20 +66,20 @@ class TestTracing(unittest.TestCase):
                 "- 3 references to other objects",
             ])
 
-        # The cown should now be released
+        # The region should now close
         l = None
-        c.release()
+        Region.close(r)
 
     def test_release_error_in_subregion(self):
         x = [1]
 
-        c = Cown(Region())
+        r = Region()
         child = Region()
         child.x = x
-        c.value.child = child
+        r.child = child
 
         with self.assertRaises(RuntimeError) as cm:
-            c.release()
+            Region.close(r)
 
         self.assertEqual(
             sort_region_error(str(cm.exception)),
@@ -97,11 +97,8 @@ class TestTracing(unittest.TestCase):
         del r2
         del r3
 
-        c = Cown(r1)
-        del r1
-
         with self.assertRaises(RuntimeError) as cm:
-            c.release()
+            Region.close(r1)
 
         self.assertEqual(
             sort_region_error(str(cm.exception)),
@@ -119,14 +116,12 @@ class TestTracing(unittest.TestCase):
         r1.r2 = r2
         r2.r3 = r3
         r3.r1 = r1
-        c = Cown(r1)
 
-        del r1
         del r2
         del r3
 
         with self.assertRaises(RuntimeError) as cm:
-            c.release()
+            Region.close(r1)
 
         self.assertEqual(
             sort_region_error(str(cm.exception)),
@@ -144,16 +139,12 @@ class TestTracing(unittest.TestCase):
         r1.wref1 = weakref.ref(r1.obj)
         wref2 = weakref.ref(r1.obj)
 
-        c = Cown(r1)
-        del r1
-
-        # Releasing should clear all external weak references
-        c.release()
+        # Closing should clear all external weak references
+        Region.close(r1)
         self.assertIsNone(wref2());
 
         # All internal weak references should remain valid
-        c.acquire()
-        self.assertEqual(c.value.wref1(), c.value.obj);
+        self.assertEqual(r1.wref1(), r1.obj);
 
     def test_weak_ref_to_bridge(self):
         """
@@ -173,24 +164,24 @@ class TestRegionOpening(unittest.TestCase):
     def test_open_after_acquire(self):
         c = Cown(Region())
         c.value.x = []
-        self.assertFalse(c._is_closed())
+        self.assertFalse(Region.is_closed(c.value))
 
         c.release()
         c.acquire()
 
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
         c.value.x = None
-        self.assertFalse(c._is_closed())
+        self.assertFalse(Region.is_closed(c.value))
 
     def test_release_closed_region(self):
         c = Cown(Region())
         c.value.x = []
-        self.assertFalse(c._is_closed())
+        self.assertFalse(Region.is_closed(c.value))
 
         c.release()
         c.acquire()
 
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
 
         c.release()
 
@@ -198,13 +189,13 @@ class TestRegionOpening(unittest.TestCase):
         c = Cown(Region())
         c.release()
         c.acquire()
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
 
         # Adding new references to the bridge object should keep it closed.
         # only attribute accesses should open it.
         r1 = c.value
         r2 = c.value
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
 
         # However, these references should prevent the cown from being released
         with self.assertRaises(RuntimeError) as cm:
@@ -223,54 +214,48 @@ class TestRegionOpening(unittest.TestCase):
         @freezable
         class A:
             pass
-        c = Cown(Region())
-        c.value.a = A()
-        c.value.a.child = Region()
-        c.value.a.child.b = A()
+        r = Region()
+        r.a = A()
+        r.a.child = Region()
+        r.a.child.b = A()
 
-        c.release()
-        c.acquire()
+        Region.close(r)
 
-        r2 = c.value.a.child
-        c2 = Cown(r2)
-
-        self.assertTrue(c2._is_closed())
+        r2 = r.a.child
+        self.assertTrue(Region.is_closed(r2))
 
     def test_sub_region_multiple_refs(self):
         @freezable
         class A:
             pass
-        c = Cown(Region())
-        c.value.a = A()
+        r = Region()
+        r.a = A()
         sub = Region()
-        c.value.a.child_a = sub
-        c.value.a.child_b = sub
+        r.a.child_a = sub
+        r.a.child_b = sub
         # A reference to the bridge of a sub-region counts as an incoming
         # reference into the parent region, see
         # test_ref_to_sub_region_bridge_keeps_parent_open.
         del sub
 
-        c.release()
-        c.acquire()
+        Region.close(r)
 
-        r2 = c.value.a.child_a
-        c2 = Cown(r2)
-
-        self.assertTrue(c2._is_closed())
+        r2 = r.a.child_a
+        self.assertTrue(Region.is_closed(r2))
 
     def test_ref_to_sub_region_bridge_keeps_parent_open(self):
         c1 = Cown(Region())
         c2 = Cown(Region())
         c1.value.child = c2.value
 
-        self.assertFalse(c2._is_closed())
+        self.assertFalse(Region.is_closed(c2.value))
 
         with self.assertRaises(RuntimeError) as cm:
             c1.release()
 
         # Attempting to close the region c1 should have closed c2 and then
         # failed due to the incoming reference to the bridge stored in c2
-        self.assertTrue(c2._is_closed())
+        self.assertTrue(Region.is_closed(c2.value))
 
         self.assertEqual(
             sort_region_error(str(cm.exception)),
@@ -286,55 +271,50 @@ class TestImplicitFreeze(unittest.TestCase):
         @freezable
         def some_func():
             pass
-        c = Cown(Region())
+        r = Region()
 
-        c.value.obj = some_func
-        self.assertFalse(is_deep_frozen(c.value.obj))
-        c.release()
-        c.acquire()
-        self.assertTrue(is_deep_frozen(c.value.obj))
+        r.obj = some_func
+        self.assertFalse(is_deep_frozen(r.obj))
+        Region.close(r)
+        self.assertTrue(is_deep_frozen(r.obj))
 
     def test_implicit_freeze_type(self):
         @freezable
         class A:
             pass
-        c = Cown(Region())
+        r = Region()
 
-        c.value.obj = A
-        self.assertFalse(is_deep_frozen(c.value.obj))
-        c.release()
-        c.acquire()
-        self.assertTrue(is_deep_frozen(c.value.obj))
+        r.obj = A
+        self.assertFalse(is_deep_frozen(r.obj))
+        Region.close(r)
+        self.assertTrue(is_deep_frozen(r.obj))
 
     def test_implicit_freeze_module(self):
         import csv;
-        c = Cown(Region())
+        r = Region()
 
-        c.value.obj = csv
-        self.assertFalse(is_deep_frozen(c.value.obj))
-        c.release()
-        c.acquire()
-        self.assertTrue(is_deep_frozen(c.value.obj))
+        r.obj = csv
+        self.assertFalse(is_deep_frozen(r.obj))
+        Region.close(r)
+        self.assertTrue(is_deep_frozen(r.obj))
 
         # Unimport module
         sys.modules.pop("random", None)
         sys.mut_modules.pop("random", None)
 
     def test_implicit_freeze_str(self):
-        c = Cown(Region())
+        r = Region()
 
-        c.value.obj = "Ducks are cool"
-        c.release()
-        c.acquire()
-        self.assertTrue(is_deep_frozen(c.value.obj))
+        r.obj = "Ducks are cool"
+        Region.close(r)
+        self.assertTrue(is_deep_frozen(r.obj))
 
     def test_implicit_freeze_int(self):
-        c = Cown(Region())
+        r = Region()
 
-        c.value.obj = 17
-        c.release()
-        c.acquire()
-        self.assertTrue(is_deep_frozen(c.value.obj))
+        r.obj = 17
+        Region.close(r)
+        self.assertTrue(is_deep_frozen(r.obj))
 
 
 class TestClosedRegionTeardown(unittest.TestCase):
@@ -511,9 +491,9 @@ class TestRegionRef(unittest.TestCase):
         c.release()
         c.acquire()
 
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
         obj = rr()
-        self.assertFalse(c._is_closed())
+        self.assertFalse(Region.is_closed(c.value))
         self.assertIs(obj, c.value.obj)
 
     def test_deref_opens_the_whole_chain(self):
@@ -531,9 +511,9 @@ class TestRegionRef(unittest.TestCase):
         c.release()
         c.acquire()
 
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
         self.assertEqual(rr().tag, 5)
-        self.assertFalse(c._is_closed())
+        self.assertFalse(Region.is_closed(c.value))
         self.assertEqual(c.value.child.obj.tag, 5)
 
     def test_release_after_acquire_without_opening(self):
@@ -627,9 +607,9 @@ class TestRegionRef(unittest.TestCase):
         self.assertIn("unavailable", repr(rr))
 
         c.acquire()
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
         self.assertIn("to '", repr(rr))
-        self.assertTrue(c._is_closed())
+        self.assertTrue(Region.is_closed(c.value))
 
     def test_no_callback_argument(self):
         # FIXME(regions): Callbacks are not supported yet.
@@ -1042,7 +1022,8 @@ class TestCrossThreadClose(unittest.TestCase):
             del objs
 
             c.release()
-            self.assertTrue(c._is_closed())
+            c.acquire()
+            self.assertTrue(Region.is_closed(c.value))
         finally:
             stop.set()
             owner.join()
@@ -1077,7 +1058,8 @@ class TestCrossThreadClose(unittest.TestCase):
             del objs
 
             c.release()
-            self.assertTrue(c._is_closed())
+            c.acquire()
+            self.assertTrue(Region.is_closed(c.value))
         finally:
             release_owner.set()
             owner.join()

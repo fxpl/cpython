@@ -515,32 +515,12 @@ PyDoc_STRVAR(CownObject_owned_doc,
 \n\
 Return true if the cown is currently acquired by this thread, false otherwise.");
 
-// FIXME(regions): This should be a function on the Region type.
-static PyObject *
-CownObject_is_closed(_PyCownObject *self, PyObject *Py_UNUSED(dummy))
-{
-    if (!Region_Check(self->value)) {
-        PyErr_SetString(PyExc_TypeError, "cown value is not a tracing region");
-        return NULL;
-    }
-
-    return PyBool_FromLong(_PyTracingRegion_IsClosed(self->value));
-}
-
-PyDoc_STRVAR(CownObject_is_closed_doc,
-"_is_closed($self, /)\n\
---\n\
-\n\
-Return true if the cown's tracing region value is closed.");
-
-
 // Define the CownType with methods
 static PyMethodDef PyCown_methods[] = {
     {"acquire", _PyCFunction_CAST(CownObject_acquire), METH_VARARGS | METH_KEYWORDS, CownObject_acquire_doc},
     {"release", _PyCFunction_CAST(CownObject_release), METH_NOARGS, CownObject_release_doc},
     {"locked", _PyCFunction_CAST(CownObject_locked), METH_NOARGS, CownObject_locked_doc},
     {"owned", _PyCFunction_CAST(CownObject_owned), METH_NOARGS, CownObject_owned_doc},
-    {"_is_closed", _PyCFunction_CAST(CownObject_is_closed), METH_NOARGS, CownObject_is_closed_doc},
     {NULL}  // Sentinel
 };
 
