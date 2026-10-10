@@ -263,6 +263,13 @@ static movable_status_t get_movable_status(PyObject *obj) {
     // Regions are theoretically only movable, if they're closed. The traversal
     // checks this manually.
 
+    // Dicts with per-thread RC are not safe to be moved. We could merge
+    // the RC back together, but it's very likely that this shouldn't be in a
+    // region to begin with. The dicts of module objects are a good example fo this.
+    if (PyDict_Check(obj) && _PyDict_UsesPerThreadRefcounting(obj)) {
+        return Py_MOVABLE_NO;
+    }
+
     // For now, we define all other objects as movable by default. (Surely
     // this will not backfire)
     return Py_MOVABLE_YES;
@@ -2445,3 +2452,6 @@ int _PyTracingRegion_Attach(PyObject* region, _PyCown_owner_id_t owner) {
 
     return 0;
 }
+
+// TODO(regions): Change thread-owner after close to be "Free"
+//

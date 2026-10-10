@@ -160,6 +160,52 @@ class TestTracing(unittest.TestCase):
         self.assertEqual(str(err.exception), "cannot create weak reference to 'TracingRegion' object")
 
 
+class TestRegionCloseAPI(unittest.TestCase):
+    """`TracingRegion.close`/`is_closed` are static methods taking a region."""
+
+    def test_is_closed_reflects_state(self):
+        r = Region()
+        self.assertFalse(Region.is_closed(r))
+        Region.close(r)
+        self.assertTrue(Region.is_closed(r))
+
+    def test_close_is_idempotent(self):
+        r = Region()
+        Region.close(r)
+        Region.close(r)
+        self.assertTrue(Region.is_closed(r))
+
+    def test_reject_non_region(self):
+        for bad in (42, [1], {}, None, object()):
+            with self.assertRaises(TypeError):
+                Region.close(bad)
+            with self.assertRaises(TypeError):
+                Region.is_closed(bad)
+
+
+class TestMovability(unittest.TestCase):
+    """Which objects a close may move into a region."""
+
+    @unittest.skipUnless(support.Py_GIL_DISABLED,
+                         "per-thread refcounting only exists on free threading")
+    def test_per_thread_refcounted_dict_is_not_movable(self):
+        # Module dicts enable per-thread refcounting (see
+        # _PyDict_EnablePerThreadRefcounting). The trace can't read a sound
+        # refcount off such a dict, so closing a region holding one must fail.
+        import csv
+        r = Region()
+        r.d = csv.__dict__
+        with self.assertRaises(RuntimeError) as cm:
+            Region.close(r)
+        self.assertIn("not movable", str(cm.exception))
+
+    def test_plain_dict_is_movable(self):
+        r = Region()
+        r.d = {"a": 1}
+        Region.close(r)
+        self.assertTrue(Region.is_closed(r))
+
+
 class TestRegionOpening(unittest.TestCase):
     def test_open_after_acquire(self):
         c = Cown(Region())

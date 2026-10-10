@@ -358,11 +358,26 @@ PyDictObject *_PyObject_MaterializeManagedDict_LockHeld(PyObject *);
 #  define _Py_DECREF_DICT Py_DECREF
 #  define _Py_INCREF_BUILTINS Py_INCREF
 #  define _Py_DECREF_BUILTINS Py_DECREF
+static inline int
+_PyDict_UsesPerThreadRefcounting(PyObject *op)
+{
+    assert(PyDict_Check(op));
+    return 0;
+}
 #else
 static inline Py_ssize_t
 _PyDict_UniqueId(PyDictObject *mp)
 {
     return (Py_ssize_t)(mp->_ma_watcher_tag >> DICT_UNIQUE_ID_SHIFT);
+}
+
+// Whether per-thread reference counting is enabled for this dict, see
+// `_PyDict_EnablePerThreadRefcounting`.
+static inline int
+_PyDict_UsesPerThreadRefcounting(PyObject *op)
+{
+    assert(PyDict_Check(op));
+    return _PyDict_UniqueId((PyDictObject *)op) != 0;
 }
 
 static inline void
