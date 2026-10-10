@@ -1687,6 +1687,20 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
         goto error;
     }
 
+    // ### Soundness
+    // This catches concurent reference moves inside our region that didn't
+    // affect the RC.
+    //
+    // Another thread having access to a not-yet-visited object(B) could move a
+    // reference to object (C) from a visited object(A) to (B). Traversing (B)
+    // would then find a reference to an internal object (C) and subtract it again
+    // from `external_rc`. This would cause `info->unaccounted_rc` to be negative.
+    //
+    // After the trace, we must have accounted for all references.
+    if (info->unaccounted_rc != 0) {
+        goto error;
+    }
+
     // ### Soundness:
     // Closed Sub-regions are not traversed, which means we wouldn't detect the
     // graph to not be isolated. During this validation check we just ensure that
@@ -1705,7 +1719,8 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
 error:
     PyErr_Format(
         PyExc_RuntimeError,
-        "the region cannot be closed since a concurrent thread accessed during tracing");
+        "the region cannot be closed due to a concurrent access to the object at %p",
+        key);
     return -1;
 
 #else // !Py_GIL_DISABLED
