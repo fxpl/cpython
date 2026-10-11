@@ -61,11 +61,94 @@ immortality, but the execution would still be correct.
 Reference count increases and decreases will first go through an immortality
 check by comparing the reference count field to the minimum immortality refcount.
 */
-#define _Py_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(5L << 28))
-#define _Py_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(1L << 30))
-#define _Py_STATIC_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(7L << 28))
-#define _Py_STATIC_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(6L << 28))
+#define _Py_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(5L << 26))
+#define _Py_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(1L << 28))
+#define _Py_STATIC_IMMORTAL_INITIAL_REFCNT ((Py_ssize_t)(7L << 26))
+#define _Py_STATIC_IMMORTAL_MINIMUM_REFCNT ((Py_ssize_t)(6L << 26))
 #endif
+
+/*
+Immutability:
+    The immutability status of an object lives in ob_flags, which only has spare
+    bits on 64 bit builds. There is no 32 bit fallback.
+Immutability Flags:
+    1. Mutability:
+       - 0: The object is mutable
+       - 1: The object is immutable
+    2. Depth:
+       - 0: The object is shallow immutable, but it could be deeply immutable
+       - 1: The object is deeply immutable
+Immutability Convenience Flags:
+    These are flags that we store in the object for convenience, but they could
+    be stored somewhere else to regain these bits.
+    3 & 4: The freezability of this specific object.
+        - See _Py_freezable_status for values
+    5: Has the freezability been explicitly set
+        - 0: Not explicitly set
+        - 1: Explicitly set
+    6: Pre-Freeze Hook
+        - 0: The pre-freeze hook did not run yet
+        - 1: The pre-freeze hook did run
+Sub-Interpreter/GIL-enabled Specific flags:
+    7. SCC
+        - 0 -> Direct: The object is immutable and it has the reference count
+        - 1 -> Indirect: The object is immutable and is part of an SCC, and another
+            object in the SCC carries the reference count.
+    8. Atomic RC:
+        - 0: The object is normally reference counted
+        - 1: The object uses atomic reference counting (Or maybe SCC reference counting)
+ */
+#if SIZEOF_VOID_P <= 4
+#  error "Immutability currently only works on 64bit platforms"
+#endif
+
+// ob_flags bits 4-9 are owned by the immutability system; see Include/object.h
+// for the flags upstream keeps in bits 0-3.
+#define _Py_IMM_FLAGS_SHIFT(x) ((x) + 3)
+// Immutability Flags:
+#define _Py_IMMUTABLE_FLAG (1 << _Py_IMM_FLAGS_SHIFT(1))
+#define _Py_IMMUTABLE_DEPTH_FLAG (1 << _Py_IMM_FLAGS_SHIFT(2))
+
+// Immutability Convenience Flags:
+#define _Py_FREEZABLE_STATUS_SHIFT _Py_IMM_FLAGS_SHIFT(3)
+#define _Py_FREEZABLE_STATUS_MASK (0x3 << _Py_FREEZABLE_STATUS_SHIFT)
+#define _Py_FREEZABLE_SET_FLAG (1 << _Py_IMM_FLAGS_SHIFT(5))
+#define _Py_PREFREEZE_RAN_FLAG (1 << _Py_IMM_FLAGS_SHIFT(6))
+
+// Sub-Interpreter/GIL-enabled Specific flags:
+#ifndef Py_GIL_DISABLED
+#define _Py_PYRONA_INTERPRETER_SHARING
+#endif
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+#define _Py_IMMUTABLE_SCC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(7))
+#define _Py_ATOMIC_RC_FLAG (1 << _Py_IMM_FLAGS_SHIFT(8))
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG | _Py_IMMUTABLE_SCC_FLAG)
+// The immutability state proper. Cleared whenever an object stops being
+// immutable, including when a partial freeze is rolled back.
+#define _Py_IMMUTABLE_CLEAR_MASK \
+    (_Py_IMMUTABLE_MASK | _Py_IMMUTABLE_DEPTH_FLAG | _Py_ATOMIC_RC_FLAG)
+// Additionally drops the per-object freeze bookkeeping. Only valid once the
+// object is dead; a rollback has to keep those bits, or the pre-freeze hook
+// runs a second time on the next freeze attempt.
+#define _Py_IMMUTABLE_RESET_MASK ( \
+    _Py_IMMUTABLE_CLEAR_MASK | _Py_FREEZABLE_STATUS_MASK \
+    | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
+
+PyAPI_FUNC(int) _Py_DecRef_Immutable(PyObject *op);
+PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
+// Declared again here because Python.h pulls in pyerrors.h after this header.
+PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
+
+#else // _Py_PYRONA_INTERPRETER_SHARING
+// FIXME(immutability): These should probably be removed.
+#define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG)
+#define _Py_IMMUTABLE_CLEAR_MASK (_Py_IMMUTABLE_MASK | _Py_IMMUTABLE_DEPTH_FLAG)
+#define _Py_IMMUTABLE_RESET_MASK ( \
+    _Py_IMMUTABLE_CLEAR_MASK | _Py_FREEZABLE_STATUS_MASK \
+    | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
+#endif // _Py_PYRONA_INTERPRETER_SHARING
+
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
 // always 32-bits.
@@ -91,6 +174,82 @@ check by comparing the reference count field to the minimum immortality refcount
               (((refcnt) << _Py_REF_SHARED_SHIFT) + (flags))
 #endif  // Py_GIL_DISABLED
 
+PyAPI_FUNC(uint16_t) _Py_LoadOpFlags(PyObject *);
+PyAPI_FUNC(void) _Py_OpFlagsAdd(PyObject *, uint16_t);
+PyAPI_FUNC(void) _Py_OpFlagsRmv(PyObject *, uint16_t);
+
+#ifdef Py_LIMITED_API
+#define _Py_OB_FLAG_ADD(op, flag) _Py_OpFlagsAdd(_PyObject_CAST(op), flag);
+#define _Py_OB_FLAG_REMOVE(op, flag) _Py_OpFlagsRmv(_PyObject_CAST(op), flag);
+#define _Py_OB_FLAGS_LOAD(op) _Py_LoadOpFlags(_PyObject_CAST(op))
+#else // !Py_LIMITED_API
+#define _Py_OB_FLAGS_LOAD(op) _Py_atomic_load_uint16_relaxed(&_PyObject_CAST(op)->ob_flags)
+#define _Py_OB_FLAG_ADD(op, flag) _Py_atomic_or_uint16(&_PyObject_CAST(op)->ob_flags, (flag))
+#define _Py_OB_FLAG_REMOVE(op, flag) _Py_atomic_and_uint16(&_PyObject_CAST(op)->ob_flags, ~(flag))
+#endif // Py_LIMITED_API
+
+
+static inline Py_ALWAYS_INLINE int _Py_IsShallowImmutable(PyObject *op)
+{
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_MASK) != 0;
+}
+#define _Py_IsShallowImmutable(op) _Py_IsShallowImmutable(_PyObject_CAST(op))
+
+static inline Py_ALWAYS_INLINE int _Py_IsDeepImmutable(PyObject *op)
+{
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
+}
+#define _Py_IsDeepImmutable(op) _Py_IsDeepImmutable(_PyObject_CAST(op))
+
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+static inline Py_ALWAYS_INLINE int _Py_NeedsAtomicRC(PyObject *op)
+{
+    return (_Py_OB_FLAGS_LOAD(op) & (_Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
+}
+#define _Py_NeedsAtomicRC(op) _Py_NeedsAtomicRC(_PyObject_CAST(op))
+
+static inline Py_ALWAYS_INLINE int _Py_NeedsImmutableRC(PyObject *op)
+{
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_DEPTH_FLAG) != 0;
+}
+#define _Py_NeedsImmutableRC(op) _Py_NeedsImmutableRC(_PyObject_CAST(op))
+
+static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
+{
+    // TODO(xFrednet): _Py_IMMUTABLE_MASK should be removed from this
+    return (_Py_OB_FLAGS_LOAD(op) & (_Py_IMMORTAL_FLAGS | _Py_ATOMIC_RC_FLAG | _Py_IMMUTABLE_DEPTH_FLAG)) != 0;
+}
+#define _Py_NeedsSlowRcBranch(op) _Py_NeedsSlowRcBranch(_PyObject_CAST(op))
+
+#else // _Py_PYRONA_INTERPRETER_SHARING
+
+static inline Py_ALWAYS_INLINE int _Py_NeedsSlowRcBranch(PyObject *op)
+{
+    // On Free-threading only immortal objects require a slow RC branch
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_IMMORTAL_FLAGS) != 0;
+}
+#define _Py_NeedsSlowRcBranch(op) _Py_NeedsSlowRcBranch(_PyObject_CAST(op))
+
+#endif // _Py_PYRONA_INTERPRETER_SHARING
+
+// Artifact[Implementation]: The definition of the `Py_CHECKWRITE` macro
+// Check whether an object is writeable.
+// This check will always succeed during runtime finalization.
+#define Py_CHECKWRITE(op) ((op) && (!_Py_IsShallowImmutable(op) || _PyImmModule_Check(op) || Py_IsFinalizing()))
+#define Py_REQUIREWRITE(op, msg) \
+    do { if (!Py_CHECKWRITE(op)) { _PyObject_ASSERT_FAILED_MSG(op, msg); } } while (0)
+
+static inline Py_ALWAYS_INLINE void _Py_CLEAR_IMMUTABLE(PyObject *op)
+{
+    _Py_OB_FLAG_REMOVE(op, _Py_IMMUTABLE_CLEAR_MASK);
+}
+
+// Only for objects that are being deallocated: also drops the freeze
+// bookkeeping so a recycled allocation starts from a clean slate.
+static inline Py_ALWAYS_INLINE void _Py_RESET_IMMUTABLE(PyObject *op)
+{
+    _Py_OB_FLAG_REMOVE(op, _Py_IMMUTABLE_RESET_MASK);
+}
 
 // Py_REFCNT() implementation for the stable ABI
 PyAPI_FUNC(Py_ssize_t) Py_REFCNT(PyObject *ob);
@@ -131,11 +290,10 @@ static inline Py_ALWAYS_INLINE int _Py_IsImmortal(PyObject *op)
 }
 #define _Py_IsImmortal(op) _Py_IsImmortal(_PyObject_CAST(op))
 
-
 static inline Py_ALWAYS_INLINE int _Py_IsStaticImmortal(PyObject *op)
 {
 #if defined(Py_GIL_DISABLED) || SIZEOF_VOID_P > 4
-    return (op->ob_flags & _Py_STATICALLY_ALLOCATED_FLAG) != 0;
+    return (_Py_OB_FLAGS_LOAD(op) & _Py_STATICALLY_ALLOCATED_FLAG) != 0;
 #else
     return op->ob_refcnt >= _Py_STATIC_IMMORTAL_MINIMUM_REFCNT;
 #endif
@@ -157,8 +315,46 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     // The runtime tracks these objects and we should avoid as much
     // as possible having extensions inadvertently change the refcnt
     // of an immortalized object.
-    if (_Py_IsImmortal(ob)) {
-        return;
+    if (_Py_NeedsSlowRcBranch(ob))
+    {
+        if (_Py_IsImmortal(ob)) {
+            return;
+        }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        if (_Py_NeedsImmutableRC(ob)) {
+            // TODO This assertion is not valid as refcount overflows can trigger the
+            // PyImmortalOrImmutable check to fire.
+    
+            // TODO(Immutable): It is dangerous to set the reference count of an
+            // immutable object. The majority of calls appear to be where the rc
+            // has reached 0 and a finalizer is running. This seems a reasonable
+            // place to allow the refcnt to be set to 1, and clear the immutable flag.
+    
+            // TODO(Immutable): This assert does not hold should it.
+            // assert(ob->ob_refcnt == 0);
+    
+            // TODO(Immutable): Do we need to clear the immutability state here?
+            // TODO(Immutable): Is here even reachable?
+    
+            // TODO(Immutable): Care should be taken to make the whole SCC mutable
+            // again if needed.
+            //
+            // Until that is settled, refuse instead of silently corrupting the
+            // SCC's shared refcount. Has to fire on release builds too.
+            _Py_FatalErrorFunc(__func__,
+                "Py_SET_REFCNT() on a deeply immutable object");
+        }
+        if (_Py_NeedsAtomicRC(ob)) {
+#ifndef Py_LIMITED_API
+            _Py_atomic_store_uint32_relaxed(&ob->ob_refcnt, (PY_UINT32_T)refcnt);
+#else
+            // The atomics are not exposed under the limited API; _Py_SetRefcnt()
+            // is compiled without it and performs the same atomic store.
+            _Py_SetRefcnt(ob, refcnt);
+#endif
+            return;
+        }
+#endif
     }
 #ifndef Py_GIL_DISABLED
 #if SIZEOF_VOID_P > 4
@@ -246,6 +442,14 @@ PyAPI_FUNC(void) Py_DecRef(PyObject *);
 PyAPI_FUNC(void) _Py_IncRef(PyObject *);
 PyAPI_FUNC(void) _Py_DecRef(PyObject *);
 
+// Similar to Py_IncRef() and Py_DecRef() but the argument must be non-NULL.
+// Private functions used by Py_INCREF() and Py_DECREF().
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+PyAPI_FUNC(void) _Py_SlowIncRef(PyObject *);
+PyAPI_FUNC(void) _Py_SlowDecRef(PyObject *);
+PyAPI_FUNC(void) _Py_SlowDecRefSpecialized(PyObject *, const destructor);
+#endif
+
 static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 {
 #if defined(Py_LIMITED_API) && (Py_LIMITED_API+0 >= 0x030c0000 || defined(Py_REF_DEBUG))
@@ -276,13 +480,27 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         _Py_atomic_add_ssize(&op->ob_ref_shared, (1 << _Py_REF_SHARED_SHIFT));
     }
 #elif SIZEOF_VOID_P > 4
-    PY_UINT32_T cur_refcnt = op->ob_refcnt;
-    if (cur_refcnt >= _Py_IMMORTAL_INITIAL_REFCNT) {
+    // Using ob_refcnt_full allows us to check if a flag has been set for immutable too.
+    Py_ssize_t cur_refcnt = op->ob_refcnt_full;
+    if (_Py_NeedsSlowRcBranch(op)) {
         // the object is immortal
-        _Py_INCREF_IMMORTAL_STAT_INC();
+        if (_Py_IsImmortal(op))
+        {
+            _Py_INCREF_IMMORTAL_STAT_INC();
+            return;
+        }
+#ifndef Py_LIMITED_API
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        _Py_SlowIncRef(op);
         return;
+#endif
+#else
+        // Immutable object in limited API: delegate to runtime function
+        Py_IncRef(op);
+        return;
+#endif
     }
-    op->ob_refcnt = cur_refcnt + 1;
+    op->ob_refcnt = (uint32_t)cur_refcnt + 1;
 #else
     if (_Py_IsImmortal(op)) {
         _Py_INCREF_IMMORTAL_STAT_INC();
@@ -302,7 +520,6 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
 #if !defined(Py_LIMITED_API) || Py_LIMITED_API+0 < 0x030b0000
 #  define Py_INCREF(op) Py_INCREF(_PyObject_CAST(op))
 #endif
-
 
 #if !defined(Py_LIMITED_API) && defined(Py_GIL_DISABLED)
 // Implements Py_DECREF on objects not owned by the current thread.
@@ -333,6 +550,7 @@ static inline void Py_DECREF(PyObject *op) {
 #elif defined(Py_GIL_DISABLED) && defined(Py_REF_DEBUG)
 static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
 {
+    // FIXME(regions): This needs a _Py_NeedsSlowRcBranch for regions
     uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
     if (local == _Py_IMMORTAL_REFCNT_LOCAL) {
         _Py_DECREF_IMMORTAL_STAT_INC();
@@ -359,6 +577,7 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
 #elif defined(Py_GIL_DISABLED)
 static inline void Py_DECREF(PyObject *op)
 {
+    // FIXME(regions): This needs a _Py_NeedsSlowRcBranch for regions
     uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
     if (local == _Py_IMMORTAL_REFCNT_LOCAL) {
         _Py_DECREF_IMMORTAL_STAT_INC();
@@ -391,9 +610,16 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
 #endif
         _Py_NegativeRefcount(filename, lineno, op);
     }
-    if (_Py_IsImmortal(op)) {
-        _Py_DECREF_IMMORTAL_STAT_INC();
+    if (_Py_NeedsSlowRcBranch(op))
+    {
+        if (_Py_IsImmortal(op)) {
+            _Py_DECREF_IMMORTAL_STAT_INC();
+            return;
+        }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+        _Py_SlowDecRef(op);
         return;
+#endif // _Py_PYRONA_INTERPRETER_SHARING
     }
     _Py_DECREF_STAT_INC();
     _Py_DECREF_DecRefTotal();
@@ -409,9 +635,21 @@ static inline Py_ALWAYS_INLINE void Py_DECREF(PyObject *op)
 {
     // Non-limited C API and limited C API for Python 3.9 and older access
     // directly PyObject.ob_refcnt.
-    if (_Py_IsImmortal(op)) {
-        _Py_DECREF_IMMORTAL_STAT_INC();
+    if (_Py_NeedsSlowRcBranch(op))
+    {
+        if (_Py_IsImmortal(op)) {
+            _Py_DECREF_IMMORTAL_STAT_INC();
+            return;
+        }
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+#ifndef Py_LIMITED_API
+        _Py_SlowDecRef(op);
+#else
+        // Immutable object in limited API: delegate to runtime function
+        Py_DecRef(op);
+#endif
         return;
+#endif
     }
     _Py_DECREF_STAT_INC();
     if (--op->ob_refcnt == 0) {
