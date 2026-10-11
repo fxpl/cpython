@@ -3212,6 +3212,7 @@ static PyType_Slot pattern_slots[] = {
     {Py_tp_members, pattern_members},
     {Py_tp_getset, pattern_getset},
     {Py_tp_traverse, pattern_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, pattern_clear},
     {0, NULL},
 };
@@ -3272,6 +3273,7 @@ static PyType_Slot match_slots[] = {
     {Py_tp_members, match_members},
     {Py_tp_getset, match_getset},
     {Py_tp_traverse, match_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, match_clear},
 
     /* As mapping.
@@ -3315,6 +3317,7 @@ static PyType_Slot scanner_slots[] = {
     {Py_tp_methods, scanner_methods},
     {Py_tp_members, scanner_members},
     {Py_tp_traverse, scanner_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, scanner_clear},
     {0, NULL},
 };
@@ -3330,6 +3333,7 @@ static PyType_Spec scanner_spec = {
 static PyType_Slot template_slots[] = {
     {Py_tp_dealloc, template_dealloc},
     {Py_tp_traverse, template_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, template_clear},
     {0, NULL},
 };

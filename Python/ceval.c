@@ -3446,6 +3446,18 @@ _PyEval_FormatExcCheckArg(PyThreadState *tstate, PyObject *exc,
 }
 
 void
+_PyEval_FormatExcNotWriteable(PyThreadState *tstate, PyCodeObject *co, int oparg)
+{
+    PyObject *name;
+    /* Don't stomp existing exception */
+    if (_PyErr_Occurred(tstate))
+        return;
+    name = PyTuple_GET_ITEM(co->co_localsplusnames, oparg);
+    _PyEval_FormatExcCheckArg(tstate, PyExc_TypeError,
+                         NOT_WRITEABLE_ERROR_MSG, name);
+}
+
+void
 _PyEval_FormatExcUnbound(PyThreadState *tstate, PyCodeObject *co, int oparg)
 {
     PyObject *name;

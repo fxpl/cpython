@@ -199,6 +199,16 @@ PyAPI_FUNC(int) PyObject_GC_IsFinalized(PyObject *);
         }                                                               \
     } while (0)
 
+/* Like Py_VISIT, but for tp_reachable functions. */
+#define Py_VISIT_REACHABLE(op, flags)                                   \
+    do {                                                                \
+        if (op) {                                                       \
+            int vret = visit(_PyObject_CAST(op), (flags), arg);         \
+            if (vret)                                                   \
+                return vret;                                            \
+        }                                                               \
+    } while (0)
+
 #ifndef Py_LIMITED_API
 #  define Py_CPYTHON_OBJIMPL_H
 #  include "cpython/objimpl.h"

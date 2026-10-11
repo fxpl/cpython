@@ -629,6 +629,7 @@ static struct PyMemberDef blob_members[] = {
 static PyType_Slot blob_slots[] = {
     {Py_tp_dealloc, blob_dealloc},
     {Py_tp_traverse, blob_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, blob_clear},
     {Py_tp_methods, blob_methods},
     {Py_tp_members, blob_members},

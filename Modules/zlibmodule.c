@@ -2077,6 +2077,7 @@ static PyMethodDef zlib_methods[] =
 static PyType_Slot Comptype_slots[] = {
     {Py_tp_dealloc, Comp_dealloc},
     {Py_tp_traverse, compobject_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_methods, comp_methods},
     {0, 0},
 };
@@ -2096,6 +2097,7 @@ static PyType_Spec Comptype_spec = {
 static PyType_Slot Decomptype_slots[] = {
     {Py_tp_dealloc, Decomp_dealloc},
     {Py_tp_traverse, compobject_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_methods, Decomp_methods},
     {Py_tp_members, Decomp_members},
     {Py_tp_getset, Decomp_getset},
@@ -2117,6 +2119,7 @@ static PyType_Spec Decomptype_spec = {
 static PyType_Slot ZlibDecompressor_type_slots[] = {
     {Py_tp_dealloc, ZlibDecompressor_dealloc},
     {Py_tp_traverse, ZlibDecompressor_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_members, ZlibDecompressor_members},
     {Py_tp_getset, ZlibDecompressor_getset},
     {Py_tp_new, zlib__ZlibDecompressor},

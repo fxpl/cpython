@@ -246,6 +246,10 @@ getset_set(PyObject *self, PyObject *obj, PyObject *value)
     if (descr_setcheck((PyDescrObject *)descr, obj, value) < 0) {
         return -1;
     }
+    if (!Py_CHECKWRITE(obj)) {
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
     if (descr->d_getset->set != NULL) {
         return descr_set_trampoline_call(
             descr->d_getset->set, obj, value,
@@ -751,6 +755,7 @@ PyTypeObject PyMethodDescr_Type = {
     0,                                          /* tp_dict */
     method_get,                                 /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 /* This is for METH_CLASS in C, not for "f = classmethod(f)" in Python! */
@@ -789,6 +794,7 @@ PyTypeObject PyClassMethodDescr_Type = {
     0,                                          /* tp_dict */
     classmethod_get,                            /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyTypeObject PyMemberDescr_Type = {
@@ -826,6 +832,7 @@ PyTypeObject PyMemberDescr_Type = {
     0,                                          /* tp_dict */
     member_get,                                 /* tp_descr_get */
     member_set,                                 /* tp_descr_set */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyTypeObject PyGetSetDescr_Type = {
@@ -863,6 +870,7 @@ PyTypeObject PyGetSetDescr_Type = {
     0,                                          /* tp_dict */
     getset_get,                                 /* tp_descr_get */
     getset_set,                                 /* tp_descr_set */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyTypeObject PyWrapperDescr_Type = {
@@ -901,6 +909,7 @@ PyTypeObject PyWrapperDescr_Type = {
     0,                                          /* tp_dict */
     wrapperdescr_get,                           /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 static PyDescrObject *
@@ -1506,6 +1515,7 @@ PyTypeObject _PyMethodWrapper_Type = {
     0,                                          /* tp_dict */
     0,                                          /* tp_descr_get */
     0,                                          /* tp_descr_set */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject *
@@ -1638,6 +1648,14 @@ property_set_name(PyObject *self, PyObject *args) {
 
     propertyobject *prop = (propertyobject *)self;
     PyObject *name = PyTuple_GET_ITEM(args, 1);
+
+    if (!Py_CHECKWRITE(self)) {
+        // Reusing a frozen property under its existing name is fine.
+        if (prop->prop_name == name) {
+            Py_RETURN_NONE;
+        }
+        return PyErr_WriteToImmutable(self);
+    }
 
     Py_XSETREF(prop->prop_name, Py_XNewRef(name));
 
@@ -1862,6 +1880,11 @@ property_init_impl(propertyobject *self, PyObject *fget, PyObject *fset,
                    PyObject *fdel, PyObject *doc)
 /*[clinic end generated code: output=01a960742b692b57 input=dfb5dbbffc6932d5]*/
 {
+    if (!Py_CHECKWRITE(self)) {
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (fget == Py_None)
         fget = NULL;
     if (fset == Py_None)
@@ -2059,6 +2082,7 @@ PyTypeObject PyDictProxy_Type = {
     0,                                          /* tp_init */
     0,                                          /* tp_alloc */
     mappingproxy_new,                           /* tp_new */
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 PyTypeObject PyProperty_Type = {
@@ -2103,4 +2127,5 @@ PyTypeObject PyProperty_Type = {
     PyType_GenericAlloc,                        /* tp_alloc */
     PyType_GenericNew,                          /* tp_new */
     PyObject_GC_Del,                            /* tp_free */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
