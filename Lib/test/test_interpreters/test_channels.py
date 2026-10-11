@@ -5,6 +5,8 @@ from textwrap import dedent
 import unittest
 import time
 
+import immutable
+
 from test.support import import_helper
 # Raise SkipTest if subinterpreters not supported.
 _channels = import_helper.import_module('_interpchannels')
@@ -169,6 +171,8 @@ class TestSendChannelAttrs(TestBase):
 
 class TestSendRecv(TestBase):
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_send_recv_main(self):
         r, s = channels.create()
         orig = b'spam'
@@ -178,6 +182,8 @@ class TestSendRecv(TestBase):
         self.assertEqual(obj, orig)
         self.assertIsNot(obj, orig)
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_send_recv_same_interpreter(self):
         interp = interpreters.create()
         interp.exec(dedent("""
@@ -214,6 +220,8 @@ class TestSendRecv(TestBase):
         self.assertEqual(obj2, b'eggs')
         self.assertNotEqual(id(obj2), int(out))
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_send_recv_different_threads(self):
         r, s = channels.create()
 
@@ -236,6 +244,8 @@ class TestSendRecv(TestBase):
         self.assertEqual(obj, orig)
         self.assertIsNot(obj, orig)
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_send_recv_nowait_main(self):
         r, s = channels.create()
         orig = b'spam'
@@ -251,6 +261,8 @@ class TestSendRecv(TestBase):
 
         self.assertIsNone(obj)
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_send_recv_nowait_same_interpreter(self):
         interp = interpreters.create()
         interp.exec(dedent("""

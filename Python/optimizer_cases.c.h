@@ -2692,10 +2692,11 @@
             (void)index;
             attr = PyJitRef_NULL;
             if (sym_is_const(ctx, owner)) {
-                PyModuleObject *mod = (PyModuleObject *)sym_get_const(ctx, owner);
-                if (PyModule_CheckExact(mod)) {
+                stack_pointer[-1] = attr;
+                PyModuleObject *mod = _PyInterpreterState_LookupModuleState(
+                    sym_get_const(ctx, owner));
+                if (mod != NULL && PyModule_CheckExact(mod)) {
                     PyObject *dict = mod->md_dict;
-                    stack_pointer[-1] = attr;
                     uint64_t watched_mutations = get_mutations(dict);
                     if (watched_mutations < _Py_MAX_ALLOWED_GLOBALS_MODIFICATIONS) {
                         PyDict_Watch(GLOBALS_WATCHER_ID, dict);

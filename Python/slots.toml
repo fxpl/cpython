@@ -834,3 +834,11 @@ duplicates = 'allow'
 name = 'Py_mod_token'
 kind = 'mod'
 dtype = 'ptr'
+
+[111]
+name = 'Py_tp_reachable'
+kind = 'type'
+is_type_field = true
+functype = 'traverseproc'
+duplicates = 'deprecated'
+nulls = 'deprecated'

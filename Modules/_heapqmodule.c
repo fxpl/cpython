@@ -22,6 +22,14 @@ module _heapq
 [clinic start generated code]*/
 /*[clinic end generated code: output=da39a3ee5e6b4b0d input=d7cca0a2e4c0ceb3]*/
 
+#define CHECK_HEAP_WRITABLE(heap)               \
+    do {                                        \
+        if (!Py_CHECKWRITE(heap)) {             \
+            PyErr_WriteToImmutable(heap);       \
+            return NULL;                        \
+        }                                       \
+    } while (0)
+
 static int
 siftdown(PyListObject *heap, Py_ssize_t startpos, Py_ssize_t pos)
 {
@@ -132,6 +140,7 @@ static PyObject *
 _heapq_heappush_impl(PyObject *module, PyObject *heap, PyObject *item)
 /*[clinic end generated code: output=912c094f47663935 input=f7a4f03ef8d52e67]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     if (item == NULL) {
         PyErr_BadInternalCall();
         return NULL;
@@ -196,6 +205,7 @@ static PyObject *
 _heapq_heappop_impl(PyObject *module, PyObject *heap)
 /*[clinic end generated code: output=96dfe82d37d9af76 input=ed396461b153dd51]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     return heappop_internal(heap, siftup);
 }
 
@@ -243,6 +253,7 @@ static PyObject *
 _heapq_heapreplace_impl(PyObject *module, PyObject *heap, PyObject *item)
 /*[clinic end generated code: output=82ea55be8fbe24b4 input=9be1678b817ef1a9]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     return heapreplace_internal(heap, item, siftup);
 }
 
@@ -265,6 +276,7 @@ static PyObject *
 _heapq_heappushpop_impl(PyObject *module, PyObject *heap, PyObject *item)
 /*[clinic end generated code: output=67231dc98ed5774f input=491178a1c7d417ba]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     PyObject *returnitem;
     int cmp;
 
@@ -402,6 +414,7 @@ static PyObject *
 _heapq_heapify_impl(PyObject *module, PyObject *heap)
 /*[clinic end generated code: output=e63a636fcf83d6d0 input=aaaaa028b9b6af08]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     return heapify_internal(heap, siftup);
 }
 
@@ -514,6 +527,7 @@ static PyObject *
 _heapq_heappush_max_impl(PyObject *module, PyObject *heap, PyObject *item)
 /*[clinic end generated code: output=c869d5f9deb08277 input=c437e3d1ff8dcb70]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     if (item == NULL) {
         PyErr_BadInternalCall();
         return NULL;
@@ -546,6 +560,7 @@ static PyObject *
 _heapq_heappop_max_impl(PyObject *module, PyObject *heap)
 /*[clinic end generated code: output=2f051195ab404b77 input=5d70c997798aec64]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     return heappop_internal(heap, siftup_max);
 }
 
@@ -564,6 +579,7 @@ static PyObject *
 _heapq_heapreplace_max_impl(PyObject *module, PyObject *heap, PyObject *item)
 /*[clinic end generated code: output=8770778b5a9cbe9b input=fe70175356e4a649]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     return heapreplace_internal(heap, item, siftup_max);
 }
 
@@ -581,6 +597,7 @@ static PyObject *
 _heapq_heapify_max_impl(PyObject *module, PyObject *heap)
 /*[clinic end generated code: output=8401af3856529807 input=4eee63231e7d1573]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     return heapify_internal(heap, siftup_max);
 }
 
@@ -602,6 +619,7 @@ static PyObject *
 _heapq_heappushpop_max_impl(PyObject *module, PyObject *heap, PyObject *item)
 /*[clinic end generated code: output=ff0019f0941aca0d input=52030929667a4c08]*/
 {
+    CHECK_HEAP_WRITABLE(heap);
     PyObject *returnitem;
     int cmp;
 

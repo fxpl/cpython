@@ -4,6 +4,8 @@ import threading
 from textwrap import dedent
 import unittest
 
+import immutable
+
 from test.support import import_helper, Py_DEBUG
 # Raise SkipTest if subinterpreters not supported.
 _queues = import_helper.import_module('_interpqueues')
@@ -381,6 +383,8 @@ class TestQueueOps(TestBase):
                 self.assertEqual(obj, obj2)
                 self.assertIsNot(obj, obj2)
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_put_get_same_interpreter(self):
         interp = interpreters.create()
         interp.exec(dedent("""
@@ -397,6 +401,8 @@ class TestQueueOps(TestBase):
                     assert obj is not orig, 'expected: obj is not orig'
                     """))
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_put_get_different_interpreters(self):
         interp = interpreters.create()
         queue1 = queues.create()
@@ -638,6 +644,8 @@ class TestQueueOps(TestBase):
         self.assertIs(obj10, queues.UNBOUND)
         self.assertEqual(queue.qsize(), 0)
 
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+                     'deeply immutable objects are shared, not copied')
     def test_put_get_different_threads(self):
         queue1 = queues.create()
         queue2 = queues.create()

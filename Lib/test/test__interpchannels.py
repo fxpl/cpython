@@ -6,6 +6,8 @@ import threading
 import time
 import unittest
 
+import immutable
+
 from test.support import import_helper
 
 _channels = import_helper.import_module('_interpchannels')
@@ -677,7 +679,12 @@ class ChannelTests(TestBase):
         obj = recv_nowait(cid)
 
         self.assertEqual(obj, orig)
-        self.assertIsNot(obj, orig)
+        if immutable._cross_interpreter_sharing:
+            # Deeply frozen objects (e.g. bytes) are shared between
+            # interpreters rather than copied, so recv returns the same object.
+            self.assertIs(obj, orig)
+        else:
+            self.assertIsNot(obj, orig)
 
     def test_send_recv_same_interpreter(self):
         id1 = _interpreters.create()
