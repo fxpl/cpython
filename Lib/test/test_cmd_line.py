@@ -830,7 +830,9 @@ class CmdLineTest(unittest.TestCase):
             code = "import _testinternalcapi; print(_testinternalcapi.pymem_getallocatorsname())"
             with support.SuppressCrashReport():
                 out = self.run_xdev("-c", code, check_exitcode=False)
-            if support.with_pymalloc():
+            if support.mimalloc_default_for_sharing():
+                alloc_name = "mimalloc_debug"
+            elif support.with_pymalloc():
                 alloc_name = "pymalloc_debug"
             elif support.Py_GIL_DISABLED:
                 alloc_name = "mimalloc_debug"
@@ -910,6 +912,8 @@ class CmdLineTest(unittest.TestCase):
     @support.cpython_only
     def test_pythonmalloc(self):
         # Test the PYTHONMALLOC environment variable
+        if support.mimalloc_default_for_sharing():
+            self.skipTest('mimalloc is the default allocator instead of pymalloc')
         malloc = not support.Py_GIL_DISABLED
         pymalloc = support.with_pymalloc()
         mimalloc = support.with_mimalloc()

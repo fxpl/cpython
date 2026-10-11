@@ -1245,6 +1245,7 @@ static PyType_Slot winconsoleio_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)_io__WindowsConsoleIO___init____doc__},
     {Py_tp_traverse, winconsoleio_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, winconsoleio_clear},
     {Py_tp_methods, winconsoleio_methods},
     {Py_tp_members, winconsoleio_members},

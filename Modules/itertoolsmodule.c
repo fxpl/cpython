@@ -254,6 +254,7 @@ static PyType_Slot batched_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)batched_new__doc__},
     {Py_tp_traverse, batched_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, batched_next},
     {Py_tp_alloc, PyType_GenericAlloc},
@@ -377,7 +378,7 @@ pairwise_next(PyObject *op)
     }
 
     result = po->result;
-    if (_PyObject_IsUniquelyReferenced(result)) {
+    if (_PyTuple_CanRecycle(result)) {
         Py_INCREF(result);
         PyObject *last_old = PyTuple_GET_ITEM(result, 0);
         PyObject *last_new = PyTuple_GET_ITEM(result, 1);
@@ -403,6 +404,7 @@ static PyType_Slot pairwise_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)pairwise_new__doc__},
     {Py_tp_traverse, pairwise_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, pairwise_next},
     {Py_tp_alloc, PyType_GenericAlloc},
@@ -579,6 +581,7 @@ static PyType_Slot groupby_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_groupby__doc__},
     {Py_tp_traverse, groupby_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, groupby_next},
     {Py_tp_new, itertools_groupby},
@@ -699,6 +702,7 @@ static PyType_Slot _grouper_slots[] = {
     {Py_tp_dealloc, _grouper_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, _grouper_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, _grouper_next},
     {Py_tp_new, itertools__grouper},
@@ -930,6 +934,7 @@ static PyType_Slot teedataobject_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_teedataobject__doc__},
     {Py_tp_traverse, teedataobject_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, teedataobject_clear},
     {Py_tp_new, itertools_teedataobject},
     {Py_tp_free, PyObject_GC_Del},
@@ -1131,6 +1136,7 @@ static PyType_Slot tee_slots[] = {
     {Py_tp_dealloc, tee_dealloc},
     {Py_tp_doc, (void *)itertools__tee__doc__},
     {Py_tp_traverse, tee_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, tee_clear},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, tee_next},
@@ -1314,6 +1320,7 @@ static PyType_Slot cycle_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_cycle__doc__},
     {Py_tp_traverse, cycle_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, cycle_next},
     {Py_tp_new, itertools_cycle},
@@ -1438,6 +1445,7 @@ static PyType_Slot dropwhile_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_dropwhile__doc__},
     {Py_tp_traverse, dropwhile_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, dropwhile_next},
     {Py_tp_new, itertools_dropwhile},
@@ -1557,6 +1565,7 @@ static PyType_Slot takewhile_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_takewhile__doc__},
     {Py_tp_traverse, takewhile_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, takewhile_next},
     {Py_tp_new, itertools_takewhile},
@@ -1749,6 +1758,7 @@ static PyType_Slot islice_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)islice_doc},
     {Py_tp_traverse, islice_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, islice_next},
     {Py_tp_new, islice_new},
@@ -1859,6 +1869,7 @@ static PyType_Slot starmap_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_starmap__doc__},
     {Py_tp_traverse, starmap_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, starmap_next},
     {Py_tp_new, itertools_starmap},
@@ -2036,6 +2047,7 @@ static PyType_Slot chain_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)chain_doc},
     {Py_tp_traverse, chain_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, chain_next},
     {Py_tp_methods, chain_methods},
@@ -2216,7 +2228,7 @@ product_next_lock_held(PyObject *op)
         Py_ssize_t *indices = lz->indices;
 
         /* Copy the previous result tuple or re-use it if available */
-        if (!_PyObject_IsUniquelyReferenced(result)) {
+        if (!_PyTuple_CanRecycle(result)) {
             PyObject *old_result = result;
             result = PyTuple_FromArray(_PyTuple_ITEMS(old_result), npools);
             if (result == NULL)
@@ -2304,6 +2316,7 @@ static PyType_Slot product_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)product_doc},
     {Py_tp_traverse, product_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, product_next},
     {Py_tp_methods, product_methods},
@@ -2451,7 +2464,7 @@ combinations_next_lock_held(PyObject *op)
         }
     } else {
         /* Copy the previous result tuple or re-use it if available */
-        if (!_PyObject_IsUniquelyReferenced(result)) {
+        if (!_PyTuple_CanRecycle(result)) {
             PyObject *old_result = result;
             result = PyTuple_FromArray(_PyTuple_ITEMS(old_result), r);
             if (result == NULL)
@@ -2527,6 +2540,7 @@ static PyType_Slot combinations_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_combinations__doc__},
     {Py_tp_traverse, combinations_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, combinations_next},
     {Py_tp_methods, combinations_methods},
@@ -2705,7 +2719,7 @@ cwr_next_lock_held(PyObject *op)
         }
     } else {
         /* Copy the previous result tuple or re-use it if available */
-        if (!_PyObject_IsUniquelyReferenced(result)) {
+        if (!_PyTuple_CanRecycle(result)) {
             PyObject *old_result = result;
             result = PyTuple_FromArray(_PyTuple_ITEMS(old_result), r);
             if (result == NULL)
@@ -2773,6 +2787,7 @@ static PyType_Slot cwr_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_combinations_with_replacement__doc__},
     {Py_tp_traverse, cwr_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, cwr_next},
     {Py_tp_methods, cwr_methods},
@@ -2976,7 +2991,7 @@ permutations_next_lock_held(PyObject *op)
             goto empty;
 
         /* Copy the previous result tuple or re-use it if available */
-        if (!_PyObject_IsUniquelyReferenced(result)) {
+        if (!_PyTuple_CanRecycle(result)) {
             PyObject *old_result = result;
             result = PyTuple_FromArray(_PyTuple_ITEMS(old_result), r);
             if (result == NULL)
@@ -3053,6 +3068,7 @@ static PyType_Slot permutations_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_permutations__doc__},
     {Py_tp_traverse, permutations_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, permutations_next},
     {Py_tp_methods, permuations_methods},
@@ -3197,6 +3213,7 @@ static PyType_Slot accumulate_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_accumulate__doc__},
     {Py_tp_traverse, accumulate_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, accumulate_next},
     {Py_tp_new, itertools_accumulate},
@@ -3333,6 +3350,7 @@ static PyType_Slot compress_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_compress__doc__},
     {Py_tp_traverse, compress_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, compress_next},
     {Py_tp_new, itertools_compress},
@@ -3456,6 +3474,7 @@ static PyType_Slot filterfalse_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_filterfalse__doc__},
     {Py_tp_traverse, filterfalse_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, filterfalse_next},
     {Py_tp_new, itertools_filterfalse},
@@ -3704,6 +3723,7 @@ static PyType_Slot count_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)itertools_count__doc__},
     {Py_tp_traverse, count_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, count_next},
     {Py_tp_new, itertools_count},
@@ -3833,6 +3853,7 @@ static PyType_Slot repeat_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)repeat_doc},
     {Py_tp_traverse, repeat_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, repeat_next},
     {Py_tp_methods, repeat_methods},
@@ -3970,7 +3991,7 @@ zip_longest_next_lock_held(PyObject *op)
         return NULL;
     if (lz->numactive == 0)
         return NULL;
-    if (_PyObject_IsUniquelyReferenced(result)) {
+    if (_PyTuple_CanRecycle(result)) {
         Py_INCREF(result);
         for (i=0 ; i < tuplesize ; i++) {
             it = PyTuple_GET_ITEM(lz->ittuple, i);
@@ -4054,6 +4075,7 @@ static PyType_Slot ziplongest_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)zip_longest_doc},
     {Py_tp_traverse, zip_longest_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, zip_longest_next},
     {Py_tp_new, zip_longest_new},

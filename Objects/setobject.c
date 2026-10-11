@@ -600,6 +600,12 @@ set_discard_entry(PySetObject *so, PyObject *key, Py_hash_t hash)
 static int
 set_add_key(PySetObject *so, PyObject *key)
 {
+    if(!Py_CHECKWRITE(so)){
+        // TODO(Immutable): Should this be inside the critical section?
+        PyErr_WriteToImmutable(so);
+        return -1;
+    }
+
     Py_hash_t hash = _PyObject_HashFast(key);
     if (hash == -1) {
         set_unhashable_type(key);
@@ -915,6 +921,10 @@ set_pop_impl(PySetObject *so)
     setentry *entry = so->table + (so->finger & so->mask);
     setentry *limit = so->table + so->mask;
     PyObject *key;
+
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
 
     if (so->used == 0) {
         PyErr_SetString(PyExc_KeyError, "pop from an empty set");
@@ -1331,6 +1341,9 @@ set_update_impl(PySetObject *so, PyObject * const *others,
 {
     Py_ssize_t i;
 
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
     for (i = 0; i < others_length; i++) {
         PyObject *other = others[i];
         if (set_update_internal(so, other))
@@ -1631,6 +1644,10 @@ static PyObject *
 set_clear_impl(PySetObject *so)
 /*[clinic end generated code: output=4e71d5a83904161a input=c6f831b366111950]*/
 {
+    if(!Py_CHECKWRITE((PyObject*)so)){
+        return PyErr_WriteToImmutable((PyObject*)so);
+    }
+
     set_clear_internal((PyObject*)so);
     Py_RETURN_NONE;
 }
@@ -1698,6 +1715,10 @@ set_ior(PyObject *self, PyObject *other)
     if (!PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
+
+    if (!Py_CHECKWRITE(so)) {
+        return PyErr_WriteToImmutable(so);
+    }
 
     if (set_update_internal(so, other)) {
         return NULL;
@@ -1851,6 +1872,10 @@ set_intersection_update_multi_impl(PySetObject *so, PyObject * const *others,
                                    Py_ssize_t others_length)
 /*[clinic end generated code: output=d768b5584675b48d input=782e422fc370e4fc]*/
 {
+    if (!Py_CHECKWRITE(so)) {
+        return PyErr_WriteToImmutable(so);
+    }
+
     PyObject *tmp;
 
     tmp = set_intersection_multi_impl(so, others, others_length);
@@ -1886,6 +1911,10 @@ set_iand(PyObject *self, PyObject *other)
     if (!PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
+
+    if (!Py_CHECKWRITE(so)) {
+        return PyErr_WriteToImmutable(so);
+    }
 
     Py_BEGIN_CRITICAL_SECTION2(so, other);
     result = set_intersection_update(so, other);
@@ -2041,6 +2070,10 @@ set_difference_update_impl(PySetObject *so, PyObject * const *others,
                            Py_ssize_t others_length)
 /*[clinic end generated code: output=04a22179b322cfe6 input=93ac28ba5b233696]*/
 {
+    if (!Py_CHECKWRITE(so)) {
+        return PyErr_WriteToImmutable(so);
+    }
+
     Py_ssize_t i;
 
     for (i = 0; i < others_length; i++) {
@@ -2213,6 +2246,10 @@ set_isub(PyObject *self, PyObject *other)
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
 
+    if (!Py_CHECKWRITE(so)) {
+        return PyErr_WriteToImmutable(so);
+    }
+
     int rv;
     Py_BEGIN_CRITICAL_SECTION2(so, other);
     rv = set_difference_update_internal(so, other);
@@ -2295,6 +2332,10 @@ static PyObject *
 set_symmetric_difference_update_impl(PySetObject *so, PyObject *other)
 /*[clinic end generated code: output=79f80b4ee5da66c1 input=86a3dddac9bfb15e]*/
 {
+    if (!Py_CHECKWRITE(so)) {
+        return PyErr_WriteToImmutable(so);
+    }
+
     if (Py_Is((PyObject *)so, other)) {
         return set_clear((PyObject *)so, NULL);
     }
@@ -2382,6 +2423,10 @@ set_ixor(PyObject *self, PyObject *other)
     if (!PyAnySet_Check(other))
         Py_RETURN_NOTIMPLEMENTED;
     PySetObject *so = _PySet_CAST(self);
+
+    if (!Py_CHECKWRITE(so)) {
+        return PyErr_WriteToImmutable(so);
+    }
 
     result = set_symmetric_difference_update((PyObject*)so, other);
     if (result == NULL)
@@ -2536,6 +2581,10 @@ static PyObject *
 set_add_impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=4cc4a937f1425c96 input=03baf62cb0e66514]*/
 {
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
+
     if (set_add_key(so, key))
         return NULL;
     Py_RETURN_NONE;
@@ -2643,6 +2692,10 @@ set_remove_impl(PySetObject *so, PyObject *key)
 {
     int rv;
 
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
+
     rv = set_discard_key(so, key);
     if (rv < 0) {
         if (!PySet_Check(key) || !PyErr_ExceptionMatches(PyExc_TypeError))
@@ -2682,6 +2735,10 @@ set_discard_impl(PySetObject *so, PyObject *key)
 /*[clinic end generated code: output=eec3b687bf32759e input=861cb7fb69b4def0]*/
 {
     int rv;
+
+    if(!Py_CHECKWRITE(so)){
+        return PyErr_WriteToImmutable(so);
+    }
 
     rv = set_discard_key(so, key);
     if (rv < 0) {
@@ -2759,6 +2816,11 @@ set_init(PyObject *so, PyObject *args, PyObject *kwds)
         return -1;
     if (!PyArg_UnpackTuple(args, Py_TYPE(self)->tp_name, 0, 1, &iterable))
         return -1;
+
+    if (!Py_CHECKWRITE(self)) {
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (_PyObject_IsUniquelyReferenced((PyObject *)self) && self->fill == 0) {
         self->hash = -1;
@@ -2921,6 +2983,7 @@ PyTypeObject PySet_Type = {
     set_new,                            /* tp_new */
     PyObject_GC_Del,                    /* tp_free */
     .tp_vectorcall = set_vectorcall,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_version_tag = _Py_TYPE_VERSION_SET,
 };
 
@@ -3013,6 +3076,7 @@ PyTypeObject PyFrozenSet_Type = {
     frozenset_new,                      /* tp_new */
     PyObject_GC_Del,                    /* tp_free */
     .tp_vectorcall = frozenset_vectorcall,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_version_tag = _Py_TYPE_VERSION_FROZEN_SET,
 };
 
@@ -3052,6 +3116,11 @@ PySet_Clear(PyObject *set)
         PyErr_BadInternalCall();
         return -1;
     }
+
+    if(!Py_CHECKWRITE(set)){
+        PyErr_WriteToImmutable(set);
+        return -1;
+    }
     (void)set_clear(set, NULL);
     return 0;
 }
@@ -3059,6 +3128,9 @@ PySet_Clear(PyObject *set)
 void
 _PySet_ClearInternal(PySetObject *so)
 {
+    // No write barrier: this is only used to tear down interned code
+    // constants at finalization, which may be frozen and must be cleared
+    // regardless.
     (void)set_clear_internal((PyObject*)so);
 }
 
@@ -3088,8 +3160,18 @@ PySet_Discard(PyObject *set, PyObject *key)
     }
 
     int rv;
+
     Py_BEGIN_CRITICAL_SECTION(set);
+    // Need to check inside the critical section incase of
+    // concurrent freezing.
+    if(!Py_CHECKWRITE(set)){
+        PyErr_WriteToImmutable(set);
+        rv = -1;
+        goto end;
+    }
+
     rv = set_discard_key((PySetObject *)set, key);
+end:;
     Py_END_CRITICAL_SECTION();
     return rv;
 }
@@ -3172,6 +3254,10 @@ _PySet_Update(PyObject *set, PyObject *iterable)
         PyErr_BadInternalCall();
         return -1;
     }
+    if (!Py_CHECKWRITE(set)) {
+        PyErr_WriteToImmutable(set);
+        return -1;
+    }
     return set_update_internal((PySetObject *)set, iterable);
 }
 
@@ -3213,6 +3299,7 @@ static PyTypeObject _PySetDummy_Type = {
     0,                  /*tp_setattro */
     0,                  /*tp_as_buffer */
     Py_TPFLAGS_DEFAULT, /*tp_flags */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 static PyObject _dummy_struct = _PyObject_HEAD_INIT(&_PySetDummy_Type);

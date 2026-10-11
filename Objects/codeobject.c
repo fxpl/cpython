@@ -1316,6 +1316,15 @@ lineiter_dealloc(PyObject *self)
     Py_TYPE(li)->tp_free(li);
 }
 
+static int
+lineiter_reachable(PyObject *self, reachablevisitproc visit, void *arg)
+{
+    lineiterator *li = (lineiterator*)self;
+    Py_VISIT_REACHABLE(Py_TYPE(self), Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(li->li_code, Py_REACHABLE_STRONG);
+    return 0;
+}
+
 static PyObject *
 _source_offset_converter(void *arg) {
     int *value = (int*)arg;
@@ -1387,6 +1396,7 @@ PyTypeObject _PyLineIterator = {
     0,                                  /* tp_alloc */
     0,                                  /* tp_new */
     PyObject_Free,                      /* tp_free */
+    .tp_reachable = lineiter_reachable,
 };
 
 static lineiterator *
@@ -1418,6 +1428,15 @@ positionsiter_dealloc(PyObject *self)
     positionsiterator *pi = (positionsiterator*)self;
     Py_DECREF(pi->pi_code);
     Py_TYPE(pi)->tp_free(pi);
+}
+
+static int
+positionsiter_reachable(PyObject *self, reachablevisitproc visit, void *arg)
+{
+    positionsiterator *pi = (positionsiterator*)self;
+    Py_VISIT_REACHABLE(Py_TYPE(self), Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(pi->pi_code, Py_REACHABLE_STRONG);
+    return 0;
 }
 
 static PyObject*
@@ -1480,6 +1499,7 @@ PyTypeObject _PyPositionsIterator = {
     0,                                  /* tp_alloc */
     0,                                  /* tp_new */
     PyObject_Free,                      /* tp_free */
+    .tp_reachable = positionsiter_reachable,
 };
 
 static PyObject*
@@ -2478,6 +2498,29 @@ code_traverse(PyObject *self, visitproc visit, void *arg)
 }
 #endif
 
+static int
+code_reachable(PyObject *self, reachablevisitproc visit, void *arg)
+{
+    PyCodeObject *co = _PyCodeObject_CAST(self);
+    Py_VISIT_REACHABLE(Py_TYPE(self), Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_consts, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_names, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_exceptiontable, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_localsplusnames, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_localspluskinds, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_filename, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_name, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_qualname, Py_REACHABLE_STRONG);
+    Py_VISIT_REACHABLE(co->co_linetable, Py_REACHABLE_STRONG);
+    if (co->_co_cached != NULL) {
+        Py_VISIT_REACHABLE(co->_co_cached->_co_code, Py_REACHABLE_STRONG);
+        Py_VISIT_REACHABLE(co->_co_cached->_co_varnames, Py_REACHABLE_STRONG);
+        Py_VISIT_REACHABLE(co->_co_cached->_co_cellvars, Py_REACHABLE_STRONG);
+        Py_VISIT_REACHABLE(co->_co_cached->_co_freevars, Py_REACHABLE_STRONG);
+    }
+    return 0;
+}
+
 static PyObject *
 code_repr(PyObject *self)
 {
@@ -2923,6 +2966,7 @@ PyTypeObject PyCode_Type = {
     0,                                  /* tp_init */
     0,                                  /* tp_alloc */
     code_new,                           /* tp_new */
+    .tp_reachable = code_reachable,
 };
 
 

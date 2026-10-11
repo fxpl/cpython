@@ -293,6 +293,14 @@ typedef int(*objobjargproc)(PyObject *, PyObject *, PyObject *);
 typedef int (*objobjproc)(PyObject *, PyObject *);
 typedef int (*visitproc)(PyObject *, void *);
 typedef int (*traverseproc)(PyObject *, visitproc, void *);
+typedef int (*reachablevisitproc)(PyObject *, int flags, void *);
+typedef int (*reachableproc)(PyObject *, reachablevisitproc, void *);
+
+/* Flags passed with each reference visited by a tp_reachable function. */
+#define Py_REACHABLE_STRONG 0
+#define Py_REACHABLE_WEAK (1 << 0)
+
+typedef int (*prefreezeproc)(PyObject *);
 
 
 typedef void (*freefunc)(void *);
@@ -586,6 +594,8 @@ given type object has a specified feature.
 #    define _Py_TYPE_REVEALED_FLAG (1 << 3)
 #  endif
 #endif
+/* Bits 4-11 are reserved for the immutability system, see Include/refcount.h.
+   New flags here must use bit 12 or above. */
 
 #define Py_CONSTANT_NONE 0
 #define Py_CONSTANT_FALSE 1

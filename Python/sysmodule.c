@@ -4373,6 +4373,10 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
         goto error;
     }
     interp->sysdict = Py_NewRef(sysdict);
+    interp->mutable_modules = PyDict_New();
+    if (interp->mutable_modules == NULL) {
+        goto error;
+    }
 
     interp->sysdict_copy = PyDict_Copy(sysdict);
     if (interp->sysdict_copy == NULL) {
@@ -4391,6 +4395,11 @@ _PySys_Create(PyThreadState *tstate, PyObject **sysmod_p)
     if (PyDict_SetItemString(sysdict, "lazy_modules", lazy_modules) < 0) {
         goto error;
     }
+
+    if (PyDict_SetItemString(sysdict, "mut_modules", interp->mutable_modules) < 0) {
+        goto error;
+    }
+
 
     PyStatus status = _PySys_SetPreliminaryStderr(sysdict);
     if (_PyStatus_EXCEPTION(status)) {

@@ -30,6 +30,9 @@ static void _PyMem_mi_heap_collect_qsbr(mi_heap_t *heap);
 #if defined(Py_GIL_DISABLED) && !defined(WITH_MIMALLOC)
 #  error "Py_GIL_DISABLED requires WITH_MIMALLOC"
 #endif
+#if defined(_Py_PYRONA_INTERPRETER_SHARING) && !defined(WITH_MIMALLOC)
+#  error "sharing immutable objects between interpreters requires WITH_MIMALLOC"
+#endif
 
 #undef  uint
 #define uint pymem_uint
@@ -429,7 +432,8 @@ void* _PyObject_Realloc(void *ctx, void *ptr, size_t size);
 #endif  // WITH_PYMALLOC
 
 #if defined(WITH_MIMALLOC)
-// mimalloc is the default when available; Py_GIL_DISABLED requires it.
+// mimalloc is the default when available
+// Py_GIL_DISABLED and _Py_PYRONA_INTERPRETER_SHARING require it.
 #  define PYRAW_ALLOC MIMALLOC_RAWALLOC
 #  define PYMEM_ALLOC MIMALLOC_ALLOC
 #  define PYOBJ_ALLOC MIMALLOC_OBJALLOC

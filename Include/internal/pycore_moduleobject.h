@@ -25,11 +25,17 @@ typedef int (*_Py_modexecfunc)(PyObject *);
 
 typedef struct {
     PyObject_HEAD
+    // For immutable modules to find the mutable state and
+    // for logging purposes after md_dict is cleared
+    PyObject *md_name;
+    int md_frozen;
+
+    // *******************************************************
+    // Module state, only available on mutable module objects
+    // *******************************************************
     PyObject *md_dict;
     void *md_state;
     PyObject *md_weaklist;
-    // for logging purposes after md_dict is cleared
-    PyObject *md_name;
     bool md_token_is_def;  /* if true, `md_token` is the PyModuleDef */
 #ifdef Py_GIL_DISABLED
     bool md_requires_gil;
@@ -42,11 +48,17 @@ typedef struct {
     _Py_modexecfunc md_exec;  /* only set if md_token_is_def is true */
 } PyModuleObject;
 
+PyAPI_FUNC(PyModuleObject*) _PyInterpreterState_GetModuleState(PyObject *mod);
+PyAPI_FUNC(PyModuleObject*) _PyInterpreterState_LookupModuleState(PyObject *mod);
+
 #define _PyModule_CAST(op) \
     (assert(PyModule_Check(op)), _Py_CAST(PyModuleObject*, (op)))
 
 static inline PyModuleDef *_PyModule_GetDefOrNull(PyObject *arg) {
-    PyModuleObject *mod = _PyModule_CAST(arg);
+    PyModuleObject *mod = _PyInterpreterState_GetModuleState(arg);
+    if (mod == NULL) {
+        return NULL;
+    }
     if (mod->md_token_is_def) {
         return (PyModuleDef *)mod->md_token;
     }
@@ -61,11 +73,20 @@ static inline PyModuleDef *_PyModule_GetToken(PyObject *arg) {
 
 // Get md_state. Used in _DuringGC functions; must have no side effects.
 static inline void* _PyModule_GetState(PyObject* mod) {
-    return _PyModule_CAST(mod)->md_state;
+    PyModuleObject *state = _PyInterpreterState_GetModuleState(mod);
+    if (state == NULL) {
+        return NULL;
+    }
+    return state->md_state;
 }
 
 static inline PyObject* _PyModule_GetDict(PyObject *mod) {
-    PyObject *dict = _PyModule_CAST(mod)->md_dict;
+    assert(PyModule_Check(mod));
+    PyModuleObject *state = _PyInterpreterState_GetModuleState(mod);
+    if (state == NULL) {
+        return NULL;
+    }
+    PyObject *dict = state->md_dict;
     // _PyModule_GetDict(mod) must not be used after calling module_clear(mod)
     assert(dict != NULL);
     return dict;  // borrowed reference
@@ -79,6 +100,8 @@ extern Py_ssize_t _PyModule_GetFilenameUTF8(
 
 PyObject* _Py_module_getattro_impl(PyModuleObject *m, PyObject *name, int suppress);
 PyObject* _Py_module_getattro(PyObject *m, PyObject *name);
+
+extern int _Py_module_freeze_hook(PyObject *m);
 
 #ifdef __cplusplus
 }

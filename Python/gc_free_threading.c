@@ -1399,6 +1399,7 @@ gc_mark_alive_from_roots(PyInterpreterState *interp,
             } \
         }
     MARK_ENQUEUE(interp->sysdict);
+    MARK_ENQUEUE(interp->mutable_modules);
 #ifdef GC_MARK_ALIVE_EXTRA_ROOTS
     MARK_ENQUEUE(interp->builtins);
     MARK_ENQUEUE(interp->dict);
@@ -1758,6 +1759,8 @@ delete_garbage(struct collection_state *state)
         else {
             inquiry clear = Py_TYPE(op)->tp_clear;
             if (clear != NULL) {
+                // Make object mutable before clearing.
+                _Py_CLEAR_IMMUTABLE(op);
                 (void) clear(op);
                 if (_PyErr_Occurred(tstate)) {
                     PyErr_FormatUnraisable("Exception ignored in tp_clear of %s",
