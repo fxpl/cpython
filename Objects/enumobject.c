@@ -213,7 +213,7 @@ enum_next_long(enumobject *en, PyObject* next_item)
         return NULL;
     }
 
-    if (_PyObject_IsUniquelyReferenced(result)) {
+    if (_PyTuple_CanRecycle(result)) {
         Py_INCREF(result);
         old_index = PyTuple_GET_ITEM(result, 0);
         old_item = PyTuple_GET_ITEM(result, 1);
@@ -255,7 +255,7 @@ enum_next(PyObject *op)
     }
     FT_ATOMIC_STORE_SSIZE_RELAXED(en->en_index, en_index + 1);
 
-    if (_PyObject_IsUniquelyReferenced(result)) {
+    if (_PyTuple_CanRecycle(result)) {
         Py_INCREF(result);
         old_index = PyTuple_GET_ITEM(result, 0);
         old_item = PyTuple_GET_ITEM(result, 1);
@@ -339,6 +339,7 @@ PyTypeObject PyEnum_Type = {
     PyType_GenericAlloc,            /* tp_alloc */
     enum_new,                       /* tp_new */
     PyObject_GC_Del,                /* tp_free */
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_vectorcall = enumerate_vectorcall
 };
 
@@ -571,4 +572,5 @@ PyTypeObject PyReversed_Type = {
     reversed_new,                   /* tp_new */
     PyObject_GC_Del,                /* tp_free */
     .tp_vectorcall = reversed_vectorcall,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };

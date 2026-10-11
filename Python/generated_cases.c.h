@@ -3803,6 +3803,11 @@
                 self = nos;
                 assert(oparg == 1);
                 PyObject *self_o = PyStackRef_AsPyObjectBorrow(self);
+                if (_Py_IsShallowImmutable(self_o)) {
+                    UPDATE_MISS_STATS(CALL);
+                    assert(_PyOpcode_Deopt[opcode] == (CALL));
+                    JUMP_TO_PREDICTED(CALL);
+                }
                 if (!LOCK_OBJECT(self_o)) {
                     UPDATE_MISS_STATS(CALL);
                     assert(_PyOpcode_Deopt[opcode] == (CALL));
@@ -5587,7 +5592,14 @@
             next_instr += 1;
             INSTRUCTION_STATS(DELETE_DEREF);
             PyObject *cell = PyStackRef_AsPyObjectBorrow(GETLOCAL(oparg));
-            PyObject *oldobj = PyCell_SwapTakeRef((PyCellObject *)cell, NULL);
+            int result = 0;
+            PyObject *oldobj = PyCell_SwapTakeRef((PyCellObject *)cell, NULL, &result);
+            if (result == -1) {
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                _PyEval_FormatExcNotWriteable(tstate, _PyFrame_GetCode(frame), oparg);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                JUMP_TO_LABEL(error);
+            }
             if (oldobj == NULL) {
                 _PyFrame_SetStackPointer(frame, stack_pointer);
                 _PyEval_FormatExcUnbound(tstate, _PyFrame_GetCode(frame), oparg);
@@ -8830,7 +8842,15 @@
                     assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
                     JUMP_TO_PREDICTED(LOAD_ATTR);
                 }
-                PyDictObject *dict = (PyDictObject *)((PyModuleObject *)owner_o)->md_dict;
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                PyModuleObject* mod = _PyInterpreterState_LookupModuleState(owner_o);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                if (mod == NULL) {
+                    UPDATE_MISS_STATS(LOAD_ATTR);
+                    assert(_PyOpcode_Deopt[opcode] == (LOAD_ATTR));
+                    JUMP_TO_PREDICTED(LOAD_ATTR);
+                }
+                PyDictObject *dict = (PyDictObject *)mod->md_dict;
                 assert(dict != NULL);
                 PyDictKeysObject *keys = FT_ATOMIC_LOAD_PTR_ACQUIRE(dict->ma_keys);
                 if (FT_ATOMIC_LOAD_UINT32_RELAXED(keys->dk_version) != dict_version) {
@@ -11571,6 +11591,24 @@
                 uint16_t offset = read_u16(&this_instr[4].cache);
                 PyObject *owner_o = PyStackRef_AsPyObjectBorrow(owner);
                 STAT_INC(STORE_ATTR, hit);
+                if (!Py_CHECKWRITE(owner_o))
+                {
+                    UNLOCK_OBJECT(owner_o);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    PyErr_WriteToImmutable(owner_o);
+                    _PyStackRef tmp = owner;
+                    owner = PyStackRef_NULL;
+                    stack_pointer[-1] = owner;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = value;
+                    value = PyStackRef_NULL;
+                    stack_pointer[-2] = value;
+                    PyStackRef_CLOSE(tmp);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -2;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    JUMP_TO_LABEL(error);
+                }
                 assert(_PyObject_GetManagedDict(owner_o) == NULL);
                 PyObject **value_ptr = (PyObject**)(((char *)owner_o) + offset);
                 PyObject *old_value = *value_ptr;
@@ -11637,6 +11675,24 @@
                     UPDATE_MISS_STATS(STORE_ATTR);
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
+                }
+                if (!Py_CHECKWRITE(owner_o))
+                {
+                    UNLOCK_OBJECT(owner_o);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    PyErr_WriteToImmutable(owner_o);
+                    _PyStackRef tmp = owner;
+                    owner = PyStackRef_NULL;
+                    stack_pointer[-1] = owner;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = value;
+                    value = PyStackRef_NULL;
+                    stack_pointer[-2] = value;
+                    PyStackRef_CLOSE(tmp);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -2;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    JUMP_TO_LABEL(error);
                 }
                 char *addr = (char *)owner_o + index;
                 STAT_INC(STORE_ATTR, hit);
@@ -11707,6 +11763,24 @@
                     assert(_PyOpcode_Deopt[opcode] == (STORE_ATTR));
                     JUMP_TO_PREDICTED(STORE_ATTR);
                 }
+                if (!Py_CHECKWRITE(owner_o))
+                {
+                    UNLOCK_OBJECT(dict);
+                    _PyFrame_SetStackPointer(frame, stack_pointer);
+                    PyErr_WriteToImmutable(owner_o);
+                    _PyStackRef tmp = owner;
+                    owner = PyStackRef_NULL;
+                    stack_pointer[-1] = owner;
+                    PyStackRef_CLOSE(tmp);
+                    tmp = value;
+                    value = PyStackRef_NULL;
+                    stack_pointer[-2] = value;
+                    PyStackRef_CLOSE(tmp);
+                    stack_pointer = _PyFrame_GetStackPointer(frame);
+                    stack_pointer += -2;
+                    ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                    JUMP_TO_LABEL(error);
+                }
                 assert(PyDict_CheckExact((PyObject *)dict));
                 PyObject *name = GETITEM(FRAME_CO_NAMES, oparg);
                 if (hint >= (size_t)dict->ma_keys->dk_nentries ||
@@ -11774,8 +11848,17 @@
             v = stack_pointer[-1];
             PyCellObject *cell = (PyCellObject *)PyStackRef_AsPyObjectBorrow(GETLOCAL(oparg));
             _PyFrame_SetStackPointer(frame, stack_pointer);
-            PyCell_SetTakeRef(cell, PyStackRef_AsPyObjectSteal(v));
+            int result = PyCell_SetTakeRef(cell, PyStackRef_AsPyObjectSteal(v));
             stack_pointer = _PyFrame_GetStackPointer(frame);
+            if (result == -1)
+            {
+                stack_pointer += -1;
+                ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
+                _PyFrame_SetStackPointer(frame, stack_pointer);
+                _PyEval_FormatExcNotWriteable(tstate, _PyFrame_GetCode(frame), oparg);
+                stack_pointer = _PyFrame_GetStackPointer(frame);
+                JUMP_TO_LABEL(error);
+            }
             stack_pointer += -1;
             ASSERT_WITHIN_STACK_BOUNDS(__FILE__, __LINE__);
             DISPATCH();
@@ -12168,6 +12251,11 @@
                 PyObject *list = PyStackRef_AsPyObjectBorrow(list_st);
                 assert(PyLong_CheckExact(sub));
                 assert(PyList_CheckExact(list));
+                if (_Py_IsShallowImmutable(list)) {
+                    UPDATE_MISS_STATS(STORE_SUBSCR);
+                    assert(_PyOpcode_Deopt[opcode] == (STORE_SUBSCR));
+                    JUMP_TO_PREDICTED(STORE_SUBSCR);
+                }
                 Py_ssize_t index = _PyLong_CompactValue((PyLongObject *)sub);
                 if (!LOCK_OBJECT(list)) {
                     UPDATE_MISS_STATS(STORE_SUBSCR);

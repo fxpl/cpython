@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #include "pycore_ast_state.h"     // struct ast_state
+#include "pycore_immutability.h"  // struct _immutability_runtime_state
 #include "pycore_llist.h"         // struct llist_node
 #include "pycore_opcode_utils.h"  // NUM_COMMON_CONSTANTS
 #include "pycore_pymath.h"        // _PY_SHORT_FLOAT_REPR
@@ -533,7 +534,7 @@ struct _py_func_state {
    If you add a new static type to the standard library, you may have to
    update one of these numbers.
    */
-#define _Py_NUM_MANAGED_PREINITIALIZED_TYPES 120
+#define _Py_NUM_MANAGED_PREINITIALIZED_TYPES 121
 #define _Py_MAX_MANAGED_STATIC_BUILTIN_TYPES \
     (_Py_NUM_MANAGED_PREINITIALIZED_TYPES + 83)
 #define _Py_MAX_MANAGED_STATIC_EXT_TYPES 10
@@ -909,6 +910,7 @@ struct _is {
 
     // Dictionary of the sys module
     PyObject *sysdict;
+    PyObject *mutable_modules;
 
     // Dictionary of the builtins module
     PyObject *builtins;
@@ -1003,6 +1005,7 @@ struct _is {
 
     struct _Py_dict_state dict_state;
     struct _Py_exc_state exc_state;
+    struct _Py_immutability_state immutability;
     struct _Py_mem_interp_free_queue mem_free_queue;
 
     struct ast_state ast;

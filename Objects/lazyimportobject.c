@@ -670,18 +670,20 @@ _PyLazyImport_Reify(PyThreadState *tstate, PyObject *placeholder,
         return NULL;
     }
     int rc;
+    if (!Py_CHECKWRITE(namespace) ||
+        Py_TYPE(namespace)->tp_as_mapping == NULL ||
+        Py_TYPE(namespace)->tp_as_mapping->mp_ass_subscript == NULL) {
+        // Read-only (or frozen) namespaces can resolve a value without
+        // caching it.
+        Py_XDECREF(imported_module);
+        return value;
+    }
     if (PyDict_CheckExact(namespace)) {
         rc = _PyDict_ReplaceItemIf(namespace, name, placeholder, value);
         if (rc == 0 && imported_module != NULL) {
             rc = lazy_import_replace_child(
                 tstate, placeholder, name, namespace, imported_module, value);
         }
-    }
-    else if (Py_TYPE(namespace)->tp_as_mapping == NULL ||
-             Py_TYPE(namespace)->tp_as_mapping->mp_ass_subscript == NULL) {
-        // Read-only namespaces can resolve a value without caching it.
-        Py_XDECREF(imported_module);
-        return value;
     }
     else {
         // Custom namespaces retain their mapping protocol. Atomic replacement

@@ -8494,6 +8494,7 @@ static PyTypeObject EncodingMapType = {
     /* methods */
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_methods = encoding_map_methods,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject*
@@ -14073,6 +14074,7 @@ PyTypeObject PyUnicode_Type = {
     PyObject_Free,                /* tp_free */
     .tp_vectorcall = unicode_vectorcall,
     ._tp_iteritem = unicode_iteritem,
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 /* Initialize the Unicode implementation */
@@ -14709,6 +14711,7 @@ PyTypeObject PyUnicodeIter_Type = {
     unicodeiter_next,   /* tp_iternext */
     unicodeiter_methods,            /* tp_methods */
     0,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 PyTypeObject _PyUnicodeASCIIIter_Type = {
@@ -14722,6 +14725,7 @@ PyTypeObject _PyUnicodeASCIIIter_Type = {
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = unicode_ascii_iter_next,
     .tp_methods = unicodeiter_methods,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static PyObject *

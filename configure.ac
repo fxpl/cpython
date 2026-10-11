@@ -5236,21 +5236,23 @@ AS_VAR_IF([ac_cv_efficient_builtin_shufflevector], [yes], [
 AC_MSG_CHECKING([for --with-mimalloc])
 AC_ARG_WITH([mimalloc],
   [AS_HELP_STRING([--with-mimalloc],
-                 [build with mimalloc memory allocator (default is yes if C11 stdatomic.h is available.)])],
+                 [build with mimalloc memory allocator (default is yes; required, also the default allocator.)])],
   [],
-  [with_mimalloc="$ac_cv_header_stdatomic_h"]
+  [with_mimalloc=yes]
 )
 
 if test "$with_mimalloc" != no; then
   if test "$ac_cv_header_stdatomic_h" != yes; then
     # mimalloc-atomic.h wants C11 stdatomic.h on POSIX
-    AC_MSG_ERROR([mimalloc requires stdatomic.h, use --without-mimalloc to disable mimalloc.])
+    AC_MSG_ERROR([mimalloc requires stdatomic.h.])
   fi
   with_mimalloc=yes
   AC_DEFINE([WITH_MIMALLOC], [1], [Define if you want to compile in mimalloc memory allocator.])
   AC_SUBST([MIMALLOC_HEADERS], ['$(MIMALLOC_HEADERS)'])
 elif test "$disable_gil" = "yes"; then
   AC_MSG_ERROR([--disable-gil requires mimalloc memory allocator (--with-mimalloc).])
+else
+  AC_MSG_ERROR([sharing immutable objects between interpreters requires mimalloc (--with-mimalloc).])
 fi
 
 AC_MSG_RESULT([$with_mimalloc])
@@ -8264,6 +8266,7 @@ PY_STDLIB_MOD_SIMPLE([_asyncio])
 PY_STDLIB_MOD_SIMPLE([_bisect])
 PY_STDLIB_MOD_SIMPLE([_csv])
 PY_STDLIB_MOD_SIMPLE([_heapq])
+PY_STDLIB_MOD_SIMPLE([_immutable])
 PY_STDLIB_MOD_SIMPLE([_json])
 PY_STDLIB_MOD_SIMPLE([_lsprof])
 PY_STDLIB_MOD_SIMPLE([_pickle])
@@ -8567,6 +8570,7 @@ PY_STDLIB_MOD([_testmultiphase], [test "$TEST_MODULES" = yes], [test "$ac_cv_fun
 PY_STDLIB_MOD([_testsinglephase], [test "$TEST_MODULES" = yes], [test "$ac_cv_func_dlopen" = yes])
 PY_STDLIB_MOD([xxsubtype], [test "$TEST_MODULES" = yes])
 PY_STDLIB_MOD([_xxtestfuzz], [test "$TEST_MODULES" = yes])
+PY_STDLIB_MOD([_test_reachable], [test "$TEST_MODULES" = yes])
 dnl Check have_libffi so _ctypes_test is only built if _ctypes is built.
 dnl _ctypes_test doesn't use libffi directly.
 PY_STDLIB_MOD([_ctypes_test],

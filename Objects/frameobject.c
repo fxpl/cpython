@@ -281,7 +281,9 @@ framelocalsproxy_setitem(PyObject *self, PyObject *key, PyObject *value)
         }
         if (cell != NULL) {
             Py_XINCREF(value);
-            PyCell_SetTakeRef((PyCellObject *)cell, value);
+            if (PyCell_SetTakeRef((PyCellObject *)cell, value) < 0) {
+                return -1;
+            }
         } else if (value != PyStackRef_AsPyObjectBorrow(oldvalue)) {
             PyObject *old_obj = PyStackRef_AsPyObjectBorrow(fast[i]);
             if (old_obj != NULL && !_Py_IsImmortal(old_obj)) {
@@ -934,6 +936,7 @@ PyTypeObject PyFrameLocalsProxy_Type = {
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_MAPPING,
     .tp_traverse = framelocalsproxy_visit,
     .tp_clear = framelocalsproxy_tp_clear,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
     .tp_richcompare = framelocalsproxy_richcompare,
     .tp_iter = framelocalsproxy_iter,
     .tp_methods = framelocalsproxy_methods,
@@ -2100,6 +2103,7 @@ PyTypeObject PyFrame_Type = {
     frame_getsetlist,                           /* tp_getset */
     0,                                          /* tp_base */
     0,                                          /* tp_dict */
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static void

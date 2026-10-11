@@ -248,6 +248,10 @@ deque_pop_impl(dequeobject *deque)
     PyObject *item;
     block *prevblock;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     if (Py_SIZE(deque) == 0) {
         PyErr_SetString(PyExc_IndexError, "pop from an empty deque");
         return NULL;
@@ -292,6 +296,10 @@ deque_popleft_impl(dequeobject *deque)
 {
     PyObject *item;
     block *prevblock;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     if (Py_SIZE(deque) == 0) {
         PyErr_SetString(PyExc_IndexError, "pop from an empty deque");
@@ -340,6 +348,11 @@ deque_popleft_impl(dequeobject *deque)
 static inline int
 deque_append_lock_held(dequeobject *deque, PyObject *item, Py_ssize_t maxlen)
 {
+    if(!Py_CHECKWRITE(deque)){
+        PyErr_WriteToImmutable(deque);
+        return -1;
+    }
+
     if (deque->rightindex == BLOCKLEN - 1) {
         block *b = newblock(deque);
         if (b == NULL) {
@@ -389,6 +402,11 @@ static inline int
 deque_appendleft_lock_held(dequeobject *deque, PyObject *item,
                            Py_ssize_t maxlen)
 {
+    if(!Py_CHECKWRITE(deque)){
+        PyErr_WriteToImmutable(deque);
+        return -1;
+    }
+
     if (deque->leftindex == 0) {
         block *b = newblock(deque);
         if (b == NULL) {
@@ -483,6 +501,10 @@ deque_extend_impl(dequeobject *deque, PyObject *iterable)
     PyObject *(*iternext)(PyObject *);
     Py_ssize_t maxlen = deque->maxlen;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     /* Handle case where id(deque) == id(iterable) */
     if ((PyObject *)deque == iterable) {
         PyObject *result;
@@ -538,6 +560,10 @@ deque_extendleft_impl(dequeobject *deque, PyObject *iterable)
     PyObject *(*iternext)(PyObject *);
     Py_ssize_t maxlen = deque->maxlen;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     /* Handle case where id(deque) == id(iterable) */
     if ((PyObject *)deque == iterable) {
         PyObject *result;
@@ -579,6 +605,10 @@ deque_inplace_concat(PyObject *self, PyObject *other)
 {
     dequeobject *deque = dequeobject_CAST(self);
     PyObject *result;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     // deque_extend is thread-safe
     result = deque_extend((PyObject*)deque, other);
@@ -729,6 +759,11 @@ deque_clear(PyObject *self)
     PyObject **itemptr, **limit;
     dequeobject *deque = dequeobject_CAST(self);
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (Py_SIZE(deque) == 0)
         return 0;
 
@@ -815,7 +850,8 @@ static PyObject *
 deque_clearmethod_impl(dequeobject *deque)
 /*[clinic end generated code: output=79b2513e097615c1 input=3a22e9605d20c5e9]*/
 {
-    (void)deque_clear((PyObject *)deque);
+    if (deque_clear((PyObject *)deque) == -1)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -825,6 +861,10 @@ deque_inplace_repeat_lock_held(dequeobject *deque, Py_ssize_t n)
     Py_ssize_t i, m, size;
     PyObject *seq;
     PyObject *rv;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     size = Py_SIZE(deque);
     if (size == 0 || n == 1) {
@@ -954,6 +994,11 @@ destination block.  If a block is left-over at the end, it is freed.
 static int
 _deque_rotate(dequeobject *deque, Py_ssize_t n)
 {
+    if(!Py_CHECKWRITE(deque)){
+        PyErr_WriteToImmutable(deque);
+        return -1;
+    }
+
     block *b = NULL;
     block *leftblock = deque->leftblock;
     block *rightblock = deque->rightblock;
@@ -1115,6 +1160,10 @@ deque_reverse_impl(dequeobject *deque)
     Py_ssize_t rightindex = deque->rightindex;
     Py_ssize_t n = Py_SIZE(deque) >> 1;
     PyObject *tmp;
+
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
 
     while (--n >= 0) {
         /* Validate that pointers haven't met in the middle */
@@ -1467,6 +1516,10 @@ deque_remove_impl(dequeobject *deque, PyObject *value)
     size_t start_state = deque->state;
     int cmp, rv;
 
+    if(!Py_CHECKWRITE(deque)){
+        return PyErr_WriteToImmutable(deque);
+    }
+
     for (i = 0 ; i < n; i++) {
         item = Py_NewRef(b->data[index]);
         cmp = PyObject_RichCompareBool(item, value, Py_EQ);
@@ -1504,6 +1557,11 @@ deque_ass_item_lock_held(dequeobject *deque, Py_ssize_t i, PyObject *v)
 {
     block *b;
     Py_ssize_t n, len=Py_SIZE(deque), halflen=(len+1)>>1, index=i;
+
+    if(!Py_CHECKWRITE(deque)){
+        PyErr_WriteToImmutable(deque);
+        return -1;
+    }
 
     if (!valid_index(i, len)) {
         PyErr_SetString(PyExc_IndexError, "deque index out of range");
@@ -1755,6 +1813,11 @@ static int
 deque_init_impl(dequeobject *deque, PyObject *iterable, PyObject *maxlenobj)
 /*[clinic end generated code: output=7084a39d71218dcd input=2b9e37af1fd73143]*/
 {
+    if (!Py_CHECKWRITE(deque)) {
+        PyErr_WriteToImmutable(deque);
+        return -1;
+    }
+
     Py_ssize_t maxlen = -1;
     if (maxlenobj != NULL && maxlenobj != Py_None) {
         maxlen = PyLong_AsSsize_t(maxlenobj);
@@ -1871,6 +1934,7 @@ static PyType_Slot deque_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)deque_init__doc__},
     {Py_tp_traverse, deque_traverse},
+    {Py_tp_reachable, deque_traverse},
     {Py_tp_clear, deque_clear},
     {Py_tp_richcompare, deque_richcompare},
     {Py_tp_iter, deque_iter},
@@ -2078,6 +2142,7 @@ static PyType_Slot dequeiter_slots[] = {
     {Py_tp_dealloc, dequeiter_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, dequeiter_traverse},
+    {Py_tp_reachable, dequeiter_traverse},
     {Py_tp_clear, dequeiter_clear},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, dequeiter_next},
@@ -2196,6 +2261,7 @@ static PyType_Slot dequereviter_slots[] = {
     {Py_tp_dealloc, dequeiter_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, dequeiter_traverse},
+    {Py_tp_reachable, dequeiter_traverse},
     {Py_tp_clear, dequeiter_clear},
     {Py_tp_iter, PyObject_SelfIter},
     {Py_tp_iternext, dequereviter_next},
@@ -2512,6 +2578,7 @@ static PyType_Slot defdict_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_doc, (void *)defdict_doc},
     {Py_tp_traverse, defdict_traverse},
+    {Py_tp_reachable, defdict_traverse},
     {Py_tp_clear, defdict_tp_clear},
     {Py_tp_methods, defdict_methods},
     {Py_tp_members, defdict_members},
@@ -2789,6 +2856,7 @@ static PyType_Slot tuplegetter_slots[] = {
     {Py_tp_dealloc, tuplegetter_dealloc},
     {Py_tp_repr, tuplegetter_repr},
     {Py_tp_traverse, tuplegetter_traverse},
+    {Py_tp_reachable, tuplegetter_traverse},
     {Py_tp_clear, tuplegetter_clear},
     {Py_tp_methods, tuplegetter_methods},
     {Py_tp_members, tuplegetter_members},
@@ -2869,6 +2937,14 @@ collections_exec(PyObject *module) {
     ADD_TYPE(module, &dequeiter_spec, state->dequeiter_type, NULL);
     ADD_TYPE(module, &dequereviter_spec, state->dequereviter_type, NULL);
     ADD_TYPE(module, &tuplegetter_spec, state->tuplegetter_type, NULL);
+
+    if(_PyImmutability_SetFreezable((PyObject*)state->deque_type, _Py_FREEZABLE_YES) < 0){
+        return -1;
+    }
+
+    if(_PyImmutability_SetFreezable((PyObject*)state->defdict_type, _Py_FREEZABLE_YES) < 0){
+        return -1;
+    }
 
     if (PyModule_AddType(module, &PyODict_Type) < 0) {
         return -1;

@@ -606,6 +606,12 @@ _multibytecodec_MultibyteCodec_encode_impl(MultibyteCodecObject *self,
     PyObject *errorcb, *r, *ucvt;
     Py_ssize_t datalen;
 
+    if(self->codec->encinit != NULL){
+        if(!Py_CHECKWRITE(self)){
+            return PyErr_WriteToImmutable(self);
+        }
+    }
+
     if (PyUnicode_Check(input))
         ucvt = NULL;
     else {
@@ -673,6 +679,12 @@ _multibytecodec_MultibyteCodec_decode_impl(MultibyteCodecObject *self,
     PyObject *errorcb, *res;
     const char *data;
     Py_ssize_t datalen;
+
+    if(self->codec->decinit != NULL){
+        if(!Py_CHECKWRITE(self)){
+            return PyErr_WriteToImmutable(self);
+        }
+    }
 
     data = input->buf;
     datalen = input->len;
@@ -765,6 +777,7 @@ static PyType_Slot multibytecodec_slots[] = {
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_methods, multibytecodec_methods},
     {Py_tp_traverse, multibytecodec_traverse},
+    {Py_tp_reachable, multibytecodec_traverse},
     {Py_tp_clear, multibytecodec_clear},
     {0, NULL},
 };
@@ -1126,6 +1139,7 @@ static int
 mbiencoder_traverse(PyObject *op, visitproc visit, void *arg)
 {
     MultibyteIncrementalEncoderObject *self = _MultibyteIncrementalEncoderObject_CAST(op);
+    Py_VISIT(Py_TYPE(self));
     if (ERROR_ISCUSTOM(self->errors))
         Py_VISIT(self->errors);
     return 0;
@@ -1147,6 +1161,7 @@ static PyType_Slot encoder_slots[] = {
     {Py_tp_dealloc, mbiencoder_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, mbiencoder_traverse},
+    {Py_tp_reachable, mbiencoder_traverse},
     {Py_tp_methods, mbiencoder_methods},
     {Py_tp_getset, codecctx_getsets},
     {Py_tp_init, mbiencoder_init},
@@ -1409,6 +1424,7 @@ static int
 mbidecoder_traverse(PyObject *op, visitproc visit, void *arg)
 {
     MultibyteIncrementalDecoderObject *self = _MultibyteIncrementalDecoderObject_CAST(op);
+    Py_VISIT(Py_TYPE(self));
     if (ERROR_ISCUSTOM(self->errors))
         Py_VISIT(self->errors);
     return 0;
@@ -1429,6 +1445,7 @@ static PyType_Slot decoder_slots[] = {
     {Py_tp_dealloc, mbidecoder_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, mbidecoder_traverse},
+    {Py_tp_reachable, mbidecoder_traverse},
     {Py_tp_methods, mbidecoder_methods},
     {Py_tp_getset, codecctx_getsets},
     {Py_tp_init, mbidecoder_init},
@@ -1726,6 +1743,7 @@ static int
 mbstreamreader_traverse(PyObject *op, visitproc visit, void *arg)
 {
     MultibyteStreamReaderObject *self = _MultibyteStreamReaderObject_CAST(op);
+    Py_VISIT(Py_TYPE(self));
     if (ERROR_ISCUSTOM(self->errors))
         Py_VISIT(self->errors);
     Py_VISIT(self->stream);
@@ -1748,6 +1766,7 @@ static PyType_Slot reader_slots[] = {
     {Py_tp_dealloc, mbstreamreader_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, mbstreamreader_traverse},
+    {Py_tp_reachable, mbstreamreader_traverse},
     {Py_tp_methods, mbstreamreader_methods},
     {Py_tp_members, mbstreamreader_members},
     {Py_tp_getset, codecctx_getsets},
@@ -1950,6 +1969,7 @@ static int
 mbstreamwriter_traverse(PyObject *op, visitproc visit, void *arg)
 {
     MultibyteStreamWriterObject *self = _MultibyteStreamWriterObject_CAST(op);
+    Py_VISIT(Py_TYPE(self));
     if (ERROR_ISCUSTOM(self->errors))
         Py_VISIT(self->errors);
     Py_VISIT(self->stream);
@@ -1986,6 +2006,7 @@ static PyType_Slot writer_slots[] = {
     {Py_tp_dealloc, mbstreamwriter_dealloc},
     {Py_tp_getattro, PyObject_GenericGetAttr},
     {Py_tp_traverse, mbstreamwriter_traverse},
+    {Py_tp_reachable, mbstreamwriter_traverse},
     {Py_tp_methods, mbstreamwriter_methods},
     {Py_tp_members, mbstreamwriter_members},
     {Py_tp_getset, codecctx_getsets},

@@ -108,6 +108,7 @@ _PySlot_resolve_type_slot(uint16_t slot_id)
         case Py_tp_flags:
         case Py_tp_metaclass:
         case Py_tp_module:
+        case Py_tp_reachable:
             return slot_id;
         default:
             return Py_slot_invalid;
@@ -371,6 +372,8 @@ _PySlot_type_getslot(PyTypeObject *tp, uint16_t slot_id)
         case Py_mp_length:
             if (!(tp->tp_as_mapping)) return NULL;
             return (void*)tp->tp_as_mapping->mp_length;
+        case Py_tp_reachable:
+            return (void*)tp->tp_reachable;
     }
     _PySlot_err_bad_slot("PyType_GetSlot", slot_id);
     return NULL;
@@ -626,6 +629,9 @@ _PySlot_heaptype_apply_field_slot(PyHeapTypeObject *ht, PySlot slot)
         case Py_mp_length:
             ht->as_mapping.mp_length = (lenfunc)slot.sl_func;
             break;
+        case Py_tp_reachable:
+            ht->ht_type.tp_reachable = (traverseproc)slot.sl_func;
+            break;
     }
 }
 
@@ -740,6 +746,7 @@ _PySlot_get_dtype(uint16_t slot_id)
         case Py_tp_module: return _PySlot_DTYPE_PTR;
         case Py_mod_abi: return _PySlot_DTYPE_PTR;
         case Py_mod_token: return _PySlot_DTYPE_PTR;
+        case Py_tp_reachable: return _PySlot_DTYPE_FUNC;
         default: return _PySlot_DTYPE_VOID;
     }
 }
@@ -829,6 +836,7 @@ _PySlot_get_duplicate_handling(uint16_t slot_id)
         case Py_bf_releasebuffer:
         case Py_mp_ass_subscript:
         case Py_mp_length:
+        case Py_tp_reachable:
             return _PySlot_PROBLEM_DEPRECATED;
         case Py_mod_exec:
         case Py_mod_abi:
@@ -937,6 +945,7 @@ _PySlot_get_null_handling(uint16_t slot_id)
         case Py_bf_releasebuffer:
         case Py_mp_ass_subscript:
         case Py_mp_length:
+        case Py_tp_reachable:
             return _PySlot_PROBLEM_DEPRECATED;
         default:
             return _PySlot_PROBLEM_REJECT;
