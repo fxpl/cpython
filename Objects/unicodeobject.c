@@ -1662,6 +1662,10 @@ unicode_dealloc(PyObject *unicode)
             _Py_IncRefTotal(_PyThreadState_GET());
             _Py_IncRefTotal(_PyThreadState_GET());
 #endif
+            // FIXME(Immutability + Interpreter Sharing): Strings are shared
+            // between interpreters. If the last reference is dropped in a
+            // different interpreter than the one that interned the string,
+            // this looks in the wrong interned dict and the pop fails.
             PyInterpreterState *interp = _PyInterpreterState_GET();
             PyObject *interned = get_interned_dict(interp);
             assert(interned != NULL);

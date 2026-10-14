@@ -432,7 +432,7 @@ static int check_freezable(
         }
     }
 
-    // TODO(Immutable): Visit what the right balance of making Python types immutable is.
+    // TODO(Immutable): This entire heuristic is very likely broken we should review it.
     if(!_PyType_HasExtensionSlots(obj->ob_type)){
         return 0;
     }
@@ -1299,6 +1299,11 @@ static int scc_build_traverse(PyObject *obj, scc_build_state_t *state) {
     return result;
 }
 
+// FIXME(Immutability + Interpreter Sharing): A failure here (MemoryError) is
+// not rolled back. Objects already visited stay GC-untracked, with SCC ring
+// pointers in their GC header, SCC flags set and internal references
+// subtracted from their refcounts. Retrying the freeze or a later GC can
+// then crash.
 static int scc_build(PyObject *const *roots, int nroots) {
     int result = 0;
     scc_build_state_t state;
