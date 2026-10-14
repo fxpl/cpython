@@ -1483,6 +1483,11 @@ assign_version_tag(PyInterpreterState *interp, PyTypeObject *type)
     }
     else {
         /* heap types */
+        // FIXME(Immutability + Interpreter Sharing): Heap type version tags
+        // are allocated per interpreter. A frozen type shared with another
+        // interpreter can have the same tag as a type created there, so the
+        // type cache and specialized instructions confuse the two types
+        // (wrong attribute lookups, out-of-bounds slot reads).
         if (NEXT_VERSION_TAG(interp) == 0) {
             /* We have run out of version numbers */
             return 0;
@@ -13541,6 +13546,8 @@ _PyType_HasExtensionSlots(PyTypeObject *tp)
         }
     }
 
+    // FIXME(Immutability): Inverted: this block only runs if all am_* slots
+    // are NULL, so async slots are never checked.
     if(!(am == NULL || (am->am_await != NULL || am->am_aiter != NULL || am->am_anext != NULL || am->am_send != NULL)))
     {
         SLOT_EXT_FLAG(am, await);
