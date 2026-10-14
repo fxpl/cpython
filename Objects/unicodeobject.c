@@ -1662,6 +1662,16 @@ unicode_dealloc(PyObject *unicode)
             _Py_IncRefTotal(_PyThreadState_GET());
             _Py_IncRefTotal(_PyThreadState_GET());
 #endif
+            // FIXME(Immutability + Interpreter Sharing): Strings are shared
+            // between interpreters. If the last reference is dropped in a
+            // different interpreter than the one that interned the string,
+            // this looks in the wrong interned dict and the pop fails.
+            //
+            // FIXME(Immutability + Interpreter Sharing):
+            // Similarly, `_PyUnicode_ClearInterned()` frees the interned
+            // strings of a finalized interpreter regardless of their RC, so
+            // strings that were moved to other interpreters, e.g. via a
+            // region, are left dangling.
             PyInterpreterState *interp = _PyInterpreterState_GET();
             PyObject *interned = get_interned_dict(interp);
             assert(interned != NULL);

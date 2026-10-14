@@ -783,6 +783,9 @@ _PyMem_GetAllocatorName(const char *name, PyMemAllocatorName *allocator)
         *allocator = PYMEM_ALLOCATOR_DEBUG;
     }
 #if defined(WITH_PYMALLOC) && !defined(Py_GIL_DISABLED)
+    // FIXME(Immutability + Interpreter Sharing): pymalloc state is per
+    // interpreter. A shared object freed by another interpreter is returned
+    // to the wrong pool and corrupts the heap. Reject pymalloc here.
     else if (strcmp(name, "pymalloc") == 0) {
         *allocator = PYMEM_ALLOCATOR_PYMALLOC;
     }

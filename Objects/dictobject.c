@@ -8246,6 +8246,10 @@ _PyDictKeys_DecRef(PyDictKeysObject *keys)
     dictkeys_decref(keys, false);
 }
 
+// FIXME(Immutability + Interpreter Sharing): Keys versions are allocated per
+// interpreter. Keys of a frozen dict shared with another interpreter can have
+// the same version as keys created there, so LOAD_GLOBAL / LOAD_ATTR_MODULE
+// specializations can read the wrong index.
 static inline uint32_t
 get_next_dict_keys_version(PyInterpreterState *interp)
 {
