@@ -17,6 +17,20 @@
 #include "pycore_weakref.h"       // _PyWeakref_ClearRef()
 #include "pydtrace.h"
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+
+static inline Py_ALWAYS_INLINE int _Py_PyronaIgnoreObj(PyObject *op)
+{
+    // Deeply immutable objects are untracked by the freeze (see scc_init) and
+    // their lifetime is handed to SCC refcounting instead.
+    return _Py_IsDeepImmutable(op);
+}
+#define _Py_PyronaIgnoreObj(op) _Py_PyronaIgnoreObj(_PyObject_CAST(op))
+#else
+#define _Py_PyronaIgnoreObj(op) (false)
+#endif
+
+
 #if !defined(Py_GIL_DISABLED)
 
 typedef struct _gc_runtime_state GCState;
@@ -1102,6 +1116,8 @@ delete_garbage(PyThreadState *tstate, GCState *gcstate,
             inquiry clear;
             if ((clear = Py_TYPE(op)->tp_clear) != NULL) {
                 Py_INCREF(op);
+                // TODO(Immutable): This is only required until we have the SCC support working.
+                _Py_CLEAR_IMMUTABLE(op);
                 (void) clear(op);
                 if (_PyErr_Occurred(tstate)) {
                     PyErr_FormatUnraisable("Exception ignored in tp_clear of %s",

@@ -359,6 +359,11 @@ load_counter(_Py_BackoffCounter *counter)
     return result;
 }
 
+// FIXME(Immutability + Interpreter Sharing): Frozen code objects can be shared
+// between interpreters, each running under its own GIL. Specialization writes
+// opcodes and inline caches in co_code_adaptive without synchronization, and
+// caches written by one interpreter (type, keys and function versions) are
+// trusted by the others.
 static inline void
 specialize(_Py_CODEUNIT *instr, uint8_t specialized_opcode)
 {
@@ -449,7 +454,11 @@ static int
 specialize_module_load_attr(
     PyObject *owner, _Py_CODEUNIT *instr, PyObject *name)
 {
-    PyModuleObject *m = (PyModuleObject *)owner;
+    PyModuleObject *m = _PyInterpreterState_LookupModuleState(owner);
+    if (m == NULL) {
+        SPECIALIZATION_FAIL(LOAD_ATTR, SPEC_FAIL_OTHER);
+        return -1;
+    }
     assert((Py_TYPE(owner)->tp_flags & Py_TPFLAGS_MANAGED_DICT) == 0);
     PyDictObject *dict = (PyDictObject *)m->md_dict;
     if (dict == NULL) {

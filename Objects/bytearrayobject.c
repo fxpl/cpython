@@ -54,6 +54,41 @@ bytearray_reinit_from_bytes(PyByteArrayObject *self, Py_ssize_t size,
     FT_ATOMIC_STORE_SSIZE_RELAXED(self->ob_alloc, alloc);
 }
 
+/* Frozen bytearrays cannot be resized, so their exports are not counted.
+   This keeps ob_exports free of writes once the object may be shared.
+   Freezing is rejected while exports exist (bytearray_prefreeze), so a
+   counted export is never released on a frozen bytearray. */
+static inline void
+bytearray_export(PyByteArrayObject *self)
+{
+    if (!_Py_IsShallowImmutable(self)) {
+        self->ob_exports++;
+    }
+}
+
+static inline void
+bytearray_unexport(PyByteArrayObject *self)
+{
+    if (!_Py_IsShallowImmutable(self)) {
+        self->ob_exports--;
+        assert(self->ob_exports >= 0);
+    }
+}
+
+static int
+bytearray_prefreeze(PyObject *self)
+{
+    int ret = 0;
+    Py_BEGIN_CRITICAL_SECTION(self);
+    if (_PyByteArray_CAST(self)->ob_exports > 0) {
+        PyErr_SetString(PyExc_BufferError,
+                        "cannot freeze a bytearray with exported buffers");
+        ret = -1;
+    }
+    Py_END_CRITICAL_SECTION();
+    return ret;
+}
+
 static int
 bytearray_getbuffer_lock_held(PyObject *self, Py_buffer *view, int flags)
 {
@@ -66,10 +101,11 @@ bytearray_getbuffer_lock_held(PyObject *self, Py_buffer *view, int flags)
     }
 
     void *ptr = (void *) PyByteArray_AS_STRING(obj);
-    if (PyBuffer_FillInfo(view, (PyObject*)obj, ptr, Py_SIZE(obj), 0, flags) < 0) {
+    int readonly = _Py_IsShallowImmutable(obj);
+    if (PyBuffer_FillInfo(view, (PyObject*)obj, ptr, Py_SIZE(obj), readonly, flags) < 0) {
         return -1;
     }
-    obj->ob_exports++;
+    bytearray_export(obj);
     return 0;
 }
 
@@ -87,9 +123,7 @@ static void
 bytearray_releasebuffer(PyObject *self, Py_buffer *view)
 {
     Py_BEGIN_CRITICAL_SECTION(self);
-    PyByteArrayObject *obj = _PyByteArray_CAST(self);
-    obj->ob_exports--;
-    assert(obj->ob_exports >= 0);
+    bytearray_unexport(_PyByteArray_CAST(self));
     Py_END_CRITICAL_SECTION();
 }
 
@@ -106,15 +140,20 @@ _bytearray_with_buffer(PyByteArrayObject *self, _ba_bytes_op op, PyObject *sub,
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(self);
 
     /* Increase exports to prevent bytearray storage from changing during op. */
-    self->ob_exports++;
+    bytearray_export(self);
     res = op(PyByteArray_AS_STRING(self), Py_SIZE(self), sub, start, end);
-    self->ob_exports--;
+    bytearray_unexport(self);
     return res;
 }
 
 static int
 _canresize(PyByteArrayObject *self)
 {
+    // Checked before the memmove in shrinking mutators.
+    if (!Py_CHECKWRITE(self)) {
+        PyErr_WriteToImmutable(self);
+        return 0;
+    }
     if (self->ob_exports > 0) {
         PyErr_SetString(PyExc_BufferError,
                 "Existing exports of data: object cannot be re-sized");
@@ -218,6 +257,12 @@ bytearray_resize_lock_held(PyObject *self, Py_ssize_t requested_size)
     PyByteArrayObject *obj = ((PyByteArrayObject *)self);
 
     assert(obj->ob_bytes_object != NULL);
+
+    // All size-changing mutations go through here.
+    if (!Py_CHECKWRITE(self)) {
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     /* All computations are done unsigned to avoid integer overflows
        (see issue #22335). */
@@ -902,6 +947,11 @@ bytearray_ass_subscript_lock_held(PyObject *op, PyObject *index, PyObject *value
 static int
 bytearray_ass_subscript(PyObject *op, PyObject *index, PyObject *values)
 {
+    // Equal-length stores don't resize.
+    if (!Py_CHECKWRITE(op)) {
+        PyErr_WriteToImmutable(op);
+        return -1;
+    }
     int ret;
     if (values != NULL && PyByteArray_Check(values)) {
         Py_BEGIN_CRITICAL_SECTION2(op, values);
@@ -1402,11 +1452,11 @@ bytearray_contains(PyObject *self, PyObject *arg)
     PyByteArrayObject *ba = _PyByteArray_CAST(self);
 
     /* Increase exports to prevent bytearray storage from changing during _Py_bytes_contains(). */
-    ba->ob_exports++;
+    bytearray_export(ba);
     ret = _Py_bytes_contains(PyByteArray_AS_STRING(ba),
                              PyByteArray_GET_SIZE(self),
                              arg);
-    ba->ob_exports--;
+    bytearray_unexport(ba);
     Py_END_CRITICAL_SECTION();
     return ret;
 }
@@ -1834,7 +1884,7 @@ bytearray_split_impl(PyByteArrayObject *self, PyObject *sep,
     PyObject *list = NULL;
 
     /* Increase exports to prevent bytearray storage from changing during _Py_bytes_contains(). */
-    self->ob_exports++;
+    bytearray_export(self);
     const char *sbuf = PyByteArray_AS_STRING(self);
     Py_ssize_t slen = PyByteArray_GET_SIZE((PyObject *)self);
 
@@ -1856,7 +1906,7 @@ bytearray_split_impl(PyByteArrayObject *self, PyObject *sep,
     PyBuffer_Release(&vsub);
 
 done:
-    self->ob_exports--;
+    bytearray_unexport(self);
     return list;
 }
 
@@ -1958,7 +2008,7 @@ bytearray_rsplit_impl(PyByteArrayObject *self, PyObject *sep,
     PyObject *list = NULL;
 
     /* Increase exports to prevent bytearray storage from changing during _Py_bytes_contains(). */
-    self->ob_exports++;
+    bytearray_export(self);
     const char *sbuf = PyByteArray_AS_STRING(self);
     Py_ssize_t slen = PyByteArray_GET_SIZE((PyObject *)self);
 
@@ -1980,7 +2030,7 @@ bytearray_rsplit_impl(PyByteArrayObject *self, PyObject *sep,
     PyBuffer_Release(&vsub);
 
 done:
-    self->ob_exports--;
+    bytearray_unexport(self);
     return list;
 }
 
@@ -1997,6 +2047,11 @@ bytearray_reverse_impl(PyByteArrayObject *self)
 {
     char swap, *head, *tail;
     Py_ssize_t i, j, n = Py_SIZE(self);
+
+    // Doesn't resize.
+    if (!Py_CHECKWRITE(self)) {
+        return PyErr_WriteToImmutable(self);
+    }
 
     j = n / 2;
     head = PyByteArray_AS_STRING(self);
@@ -2593,9 +2648,9 @@ bytearray_join_impl(PyByteArrayObject *self, PyObject *iterable_of_bytes)
 /*[clinic end generated code: output=0ced382b5846a7ee input=0a31db349efcd7fa]*/
 {
     PyObject *ret;
-    self->ob_exports++; // this protects `self` from being cleared/resized if `iterable_of_bytes` is a custom iterator
+    bytearray_export(self); // this protects `self` from being cleared/resized if `iterable_of_bytes` is a custom iterator
     ret = stringlib_bytes_join((PyObject*)self, iterable_of_bytes);
-    self->ob_exports--; // unexport `self`
+    bytearray_unexport(self); // unexport `self`
     return ret;
 }
 
@@ -2701,9 +2756,9 @@ bytearray_hex_impl(PyByteArrayObject *self, PyObject *sep,
     // Prevent 'self' from being freed if computing len(sep) mutates 'self'
     // in _Py_strhex_with_sep().
     // See: https://github.com/python/cpython/issues/143195.
-    self->ob_exports++;
+    bytearray_export(self);
     PyObject *res = _Py_strhex_with_sep(argbuf, arglen, sep, bytes_per_sep);
-    self->ob_exports--;
+    bytearray_unexport(self);
     return res;
 }
 
@@ -2880,11 +2935,11 @@ bytearray_mod_lock_held(PyObject *v, PyObject *w)
 
     PyByteArrayObject *self = _PyByteArray_CAST(v);
     /* Increase exports to prevent bytearray storage from changing during op. */
-    self->ob_exports++;
+    bytearray_export(self);
     PyObject *res = _PyBytes_FormatEx(
         PyByteArray_AS_STRING(v), PyByteArray_GET_SIZE(v), w, 1
     );
-    self->ob_exports--;
+    bytearray_unexport(self);
     return res;
 }
 
@@ -2970,7 +3025,9 @@ PyTypeObject PyByteArray_Type = {
     PyType_GenericAlloc,                /* tp_alloc */
     bytearray_new,                      /* tp_new */
     PyObject_Free,                      /* tp_free */
+    .tp_reachable = _PyObject_ReachableVisitType,
     .tp_version_tag = _Py_TYPE_VERSION_BYTEARRAY,
+    .tp_prefreeze = bytearray_prefreeze,
 };
 
 /*********************** Bytearray Iterator ****************************/
@@ -3135,6 +3192,7 @@ PyTypeObject PyByteArrayIter_Type = {
     bytearrayiter_next,                /* tp_iternext */
     bytearrayiter_methods,             /* tp_methods */
     0,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 static PyObject *

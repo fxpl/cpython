@@ -5,10 +5,12 @@ on:
   push:
     branches:
     - 'main'
+    - '*-main'
     - '3.*'
   pull_request:
     branches:
     - 'main'
+    - '*-main'
     - '3.*'
 
 permissions:

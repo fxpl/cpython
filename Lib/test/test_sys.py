@@ -1200,6 +1200,8 @@ class SysModuleTest(unittest.TestCase):
     @unittest.skipUnless(hasattr(sys, "getallocatedblocks"),
                          "sys.getallocatedblocks unavailable on this build")
     def test_getallocatedblocks(self):
+        if support.mimalloc_default_for_sharing():
+            self.skipTest('mimalloc is the default allocator instead of pymalloc')
         try:
             import _testinternalcapi
         except ImportError:
@@ -1824,7 +1826,7 @@ class SizeofTest(unittest.TestCase):
             md_gil = '?'
         else:
             md_gil = ''
-        check(unittest, size('PPPP?' + md_gil + 'NPPPPP'))
+        check(unittest, size('PiPPP?' + md_gil + 'NPPPPP'))
         # None
         check(None, size(''))
         # NotImplementedType
@@ -1884,7 +1886,7 @@ class SizeofTest(unittest.TestCase):
         check((1,2,3), vsize('') + self.P + 3*self.P)
         # type
         # static type: PyTypeObject
-        fmt = 'P2nPI13Pl4Pn9Pn12PI2Pc'
+        fmt = 'P2nPI13Pl4Pn9Pn12PI2PcPP'
         s = vsize(fmt)
         check(int, s)
         typeid = 'n' if support.Py_GIL_DISABLED else ''
@@ -1945,9 +1947,9 @@ class SizeofTest(unittest.TestCase):
         # weakref
         import weakref
         if support.Py_GIL_DISABLED:
-            expected = size('2Pn4P')
+            expected = size('2Pln4P')
         else:
-            expected = size('2Pn3P')
+            expected = size('2Pln3P')
         check(weakref.ref(int), expected)
         # weakproxy
         # XXX

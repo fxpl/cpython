@@ -115,5 +115,6 @@ const char *const _PySlot_names[] = {
     "Py_tp_module",
     "Py_mod_abi",
     "Py_mod_token",
+    "Py_tp_reachable",
     NULL
 };

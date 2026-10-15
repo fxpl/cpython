@@ -116,6 +116,7 @@
 #define Py_tp_module 108
 #define Py_mod_abi 109
 #define Py_mod_token 110
+#define Py_tp_reachable 111
 
-#define _Py_slot_COUNT 111
+#define _Py_slot_COUNT 112
 #endif /* _PY_HAVE_SLOTS_GENERATED_H */

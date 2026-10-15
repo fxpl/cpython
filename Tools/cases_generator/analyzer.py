@@ -678,6 +678,7 @@ NON_ESCAPING_FUNCTIONS = (
     "_Py_CHECK_EMSCRIPTEN_SIGNALS_PERIODICALLY",
     "_Py_ID",
     "_Py_IsImmortal",
+    "_Py_IsShallowImmutable",
     "_Py_IsOwnedByCurrentThread",
     "_Py_LeaveRecursiveCallPy",
     "_Py_LeaveRecursiveCallTstate",

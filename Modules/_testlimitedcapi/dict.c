@@ -33,7 +33,8 @@ static PyObject *
 dict_clear(PyObject *self, PyObject *obj)
 {
     NULLABLE(obj);
-    PyDict_Clear(obj);
+    if (PyDict_Clear(obj) == -1)
+        return NULL;
     Py_RETURN_NONE;
 }
 

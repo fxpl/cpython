@@ -171,6 +171,10 @@ PyMember_SetOne(char *addr, PyMemberDef *l, PyObject *v)
         PyErr_SetString(PyExc_AttributeError, "readonly attribute");
         return -1;
     }
+    if (!Py_CHECKWRITE(obj)) {
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
     if (v == NULL && l->type != Py_T_OBJECT_EX && l->type != _Py_T_OBJECT) {
         PyErr_SetString(PyExc_TypeError,
                         "can't delete numeric/char attribute");

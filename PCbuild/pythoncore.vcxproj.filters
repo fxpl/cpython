@@ -111,6 +111,9 @@
     <ClInclude Include="..\Include\import.h">
       <Filter>Include</Filter>
     </ClInclude>
+    <ClInclude Include="..\Include\immutability.h">
+      <Filter>Include</Filter>
+    </ClInclude>
     <ClInclude Include="..\Include\intrcheck.h">
       <Filter>Include</Filter>
     </ClInclude>
@@ -519,6 +522,9 @@
     <ClInclude Include="..\Include\cpython\genobject.h">
       <Filter>Include</Filter>
     </ClInclude>
+    <ClInclude Include="..\Include\cpython\immutability.h">
+      <Filter>Include\cpython</Filter>
+    </ClInclude>
     <ClInclude Include="..\Include\cpython\pythonrun.h">
       <Filter>Include\cpython</Filter>
     </ClInclude>
@@ -706,6 +712,7 @@
       <Filter>Include\internal</Filter>
     </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_index_pool.h">
+    <ClInclude Include="..\Include\internal\pycore_immutability.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_initconfig.h">
@@ -1013,6 +1020,9 @@
     <ClCompile Include="..\Modules\_heapqmodule.c">
       <Filter>Modules</Filter>
     </ClCompile>
+    <ClCompile Include="..\Modules\_immutablemodule.c" >
+      <Filter>Modules</Filter>
+    </ClCompile>
     <ClCompile Include="..\Modules\_json.c">
       <Filter>Modules</Filter>
     </ClCompile>
@@ -1086,8 +1096,6 @@
       <Filter>Modules</Filter>
     </ClCompile>
     <ClCompile Include="..\Modules\hmacmodule.c">
-      <Filter>Modules</Filter>
-    </ClCompile>
     <ClCompile Include="..\Modules\itertoolsmodule.c">
       <Filter>Modules</Filter>
     </ClCompile>
@@ -1473,6 +1481,7 @@
       <Filter>Python</Filter>
     </ClCompile>
     <ClCompile Include="..\Python\index_pool.c">
+    <ClCompile Include="..\Python\immutability.c">
       <Filter>Python</Filter>
     </ClCompile>
     <ClCompile Include="..\Python\initconfig.c">
