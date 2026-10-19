@@ -43,6 +43,7 @@ static inline PyObject* _Py_FROM_GC(PyGC_Head *gc) {
 #  define _PyGC_BITS_SHARED         (1<<4)
 #  define _PyGC_BITS_ALIVE          (1<<5)    // Reachable from a known root.
 #  define _PyGC_BITS_DEFERRED       (1<<6)    // Use deferred reference counting
+#  define _PyGC_BITS_FREE_OWNER   (1<<7)    // Object is in a closed region
 #endif
 
 #ifdef Py_GIL_DISABLED
@@ -363,6 +364,25 @@ extern PyObject *_PyGC_GetObjects(PyInterpreterState *interp, int generation);
 extern PyObject *_PyGC_GetReferrers(PyInterpreterState *interp, PyObject *objs);
 
 // Functions to clear types free lists
+/* Disposal of a list of objects that are known to be unreachable. Used by the
+ * collector itself and by anything else that owns a set of objects it has
+ * established to be garbage, such as a closed tracing region.
+ *
+ * `_PyGC_FinalizeGarbage()` runs the finalizer of every object in `collectable`,
+ * before anything is cleared, so that a `__del__` still sees its object intact.
+ *
+ * `_PyGC_DeleteGarbage()` then breaks the references between them, deallocating
+ * every object whose reference count reaches zero. Objects that a finalizer kept
+ * alive are moved to `old` instead.
+ *
+ * Neither may be called with an exception set. Only available in the default
+ * build; the free-threaded collector has its own implementation.
+ */
+#ifndef Py_GIL_DISABLED
+extern void _PyGC_FinalizeGarbage(PyGC_Head *collectable);
+extern void _PyGC_DeleteGarbage(PyGC_Head *collectable, PyGC_Head *old);
+#endif
+
 extern void _PyGC_ClearAllFreeLists(PyInterpreterState *interp);
 extern void _Py_RunGC(PyThreadState *tstate);
 

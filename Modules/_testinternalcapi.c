@@ -725,6 +725,31 @@ hashtable_cb(_Py_hashtable_t *table,
 }
 
 
+static int
+hashtable_mut_cb(_Py_hashtable_t *table,
+                 const void *key_ptr, void **value_ptr,
+                 void *user_data)
+{
+    int *count = (int *)user_data;
+    char key = (char)FROM_PTR(key_ptr);
+    assert((int)FROM_PTR(*value_ptr) == VALUE(key));
+    *value_ptr = TO_PTR(VALUE(key) + 1);
+    *count += 1;
+    return 0;
+}
+
+
+static int
+hashtable_mut_stop_cb(_Py_hashtable_t *table,
+                      const void *key_ptr, void **value_ptr,
+                      void *user_data)
+{
+    int *count = (int *)user_data;
+    *count += 1;
+    return 42;
+}
+
+
 static PyObject*
 test_hashtable(PyObject *self, PyObject *Py_UNUSED(args))
 {
@@ -777,6 +802,25 @@ test_hashtable(PyObject *self, PyObject *Py_UNUSED(args))
     int res = _Py_hashtable_foreach(table, hashtable_cb, &count);
     assert(res == 0);
     assert(count == 25);
+
+    // Test _Py_hashtable_foreach_mut()
+    count = 0;
+    res = _Py_hashtable_foreach_mut(table, hashtable_mut_stop_cb, &count);
+    assert(res == 42);
+    assert(count == 1);
+
+    count = 0;
+    res = _Py_hashtable_foreach_mut(table, hashtable_mut_cb, &count);
+    assert(res == 0);
+    assert(count == 25);
+    assert(table->nentries == 25);
+    for (key='a'; key <= 'z'; key++) {
+        if (key == 'p') {
+            continue;
+        }
+        value_ptr = _Py_hashtable_get(table, TO_PTR(key));
+        assert((int)FROM_PTR(value_ptr) == VALUE(key) + 1);
+    }
 
     // Test _Py_hashtable_clear()
     _Py_hashtable_clear(table);
@@ -2776,6 +2820,72 @@ get_py_thread_id(PyObject *self, PyObject *Py_UNUSED(ignored))
     return PyLong_FromUnsignedLongLong(tid);
 }
 
+// Reads the item from the container, since passing it directly would incref it
+// and thereby claim a FREE object.
+static PyObject *
+get_item_owner(PyObject *self, PyObject *args)
+{
+    PyObject *container;
+    Py_ssize_t index;
+    if (!PyArg_ParseTuple(args, "On", &container, &index)) {
+        return NULL;
+    }
+    PyObject *item;
+    if (PyList_CheckExact(container) && index >= 0
+        && index < PyList_GET_SIZE(container))
+    {
+        item = PyList_GET_ITEM(container, index);
+    }
+    else if (PyTuple_CheckExact(container) && index >= 0
+             && index < PyTuple_GET_SIZE(container))
+    {
+        item = PyTuple_GET_ITEM(container, index);
+    }
+    else {
+        PyErr_SetString(PyExc_ValueError, "expected a list or tuple and a valid index");
+        return NULL;
+    }
+
+    uintptr_t owner = _Py_atomic_load_uintptr(&item->ob_tid);
+    if (owner == _Py_ThreadId()) {
+        return PyUnicode_FromString("self");
+    }
+    if (owner == _Py_FREE_TID) {
+        return PyUnicode_FromString("free");
+    }
+    if (owner == _Py_UNOWNED_TID) {
+        return PyUnicode_FromString("unowned");
+    }
+    return PyUnicode_FromString("other");
+}
+
+// Rotates the list behind the weakref under its lock, without touching any
+// refcount. Only a write watch can observe this. The referent is borrowed, so
+// the caller has to keep it alive.
+static PyObject *
+rotate_list_via_weakref(PyObject *self, PyObject *wref)
+{
+    if (!PyWeakref_Check(wref)) {
+        PyErr_SetString(PyExc_TypeError, "expected a weakref");
+        return NULL;
+    }
+    PyObject *list = _Py_atomic_load_ptr(&((PyWeakReference *)wref)->wr_object);
+    if (!PyList_Check(list)) {
+        Py_RETURN_FALSE;
+    }
+
+    Py_BEGIN_CRITICAL_SECTION(list);
+    PyObject **items = ((PyListObject *)list)->ob_item;
+    Py_ssize_t size = PyList_GET_SIZE(list);
+    if (size > 1) {
+        PyObject *last = items[size - 1];
+        memmove(&items[1], &items[0], (size - 1) * sizeof(PyObject *));
+        items[0] = last;
+    }
+    Py_END_CRITICAL_SECTION();
+    Py_RETURN_TRUE;
+}
+
 static PyCodeObject *
 get_code(PyObject *obj)
 {
@@ -3354,6 +3464,8 @@ static PyMethodDef module_functions[] = {
 
 #ifdef Py_GIL_DISABLED
     {"py_thread_id", get_py_thread_id, METH_NOARGS},
+    {"get_item_owner", get_item_owner, METH_VARARGS},
+    {"rotate_list_via_weakref", rotate_list_via_weakref, METH_O},
     {"get_tlbc", get_tlbc, METH_O, NULL},
     {"get_tlbc_id", get_tlbc_id, METH_O, NULL},
     {"get_long_lived_total", get_long_lived_total, METH_NOARGS},

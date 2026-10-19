@@ -2822,6 +2822,48 @@ _Py_GetThreadLocal_Addr(void)
     // _Py_tss_tstate variable with a unique address.
     return (uintptr_t)&_Py_tss_tstate;
 }
+
+static inline Py_ALWAYS_INLINE void
+_Py_CheckTracingFlag(PyObject *ob) {
+    if ((_Py_OB_FLAGS_LOAD(ob) & _Py_REGION_RC_CHANGE_FLAG) != 0) {
+        _Py_OB_FLAGS_REMOVE(ob, _Py_REGION_RC_CHANGE_FLAG);
+    }
+}
+
+static inline Py_ALWAYS_INLINE int
+_owned_by_thread_internal(PyObject *ob, bool check_flag) {
+    uintptr_t owner = _Py_atomic_load_uintptr(&ob->ob_tid);
+    uintptr_t this = _Py_ThreadId();
+    if (owner == this) {
+        return 1;
+    }
+
+    if (check_flag) {
+        // If the object is not owned by us, it may be part of a concurrent trace, so we
+        // clear the RC change flag.
+        //
+        // If the GC ran during a trace it may happen that the object is marked
+        // as FREE again. Therefore we need to check and clear the flag before checking
+        // for free.
+        _Py_CheckTracingFlag(ob);
+    }
+
+    // If the object is currently free, we try to claim ownership
+    if (owner == _Py_FREE_TID
+        && _Py_atomic_compare_exchange_uintptr(&ob->ob_tid, &owner, this)
+    ) {
+        return 1;
+    }
+
+    return 0;
+}
+
+int _Py_IsOwnedByCurrentThread(PyObject *ob) {
+    return _owned_by_thread_internal(ob, true);
+}
+int _Py_IsOwnedByCurrentThreadDecRef(PyObject *ob) {
+    return _owned_by_thread_internal(ob, false);
+}
 #endif
 
 /***********************************/

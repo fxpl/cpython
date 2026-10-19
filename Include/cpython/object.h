@@ -516,6 +516,8 @@ PyAPI_FUNC(int) PyUnstable_SetImmortal(PyObject *op);
 
 #if defined(Py_GIL_DISABLED)
 PyAPI_FUNC(uintptr_t) _Py_GetThreadLocal_Addr(void);
+PyAPI_FUNC(int) _Py_IsOwnedByCurrentThread(PyObject *ob);
+PyAPI_FUNC(int) _Py_IsOwnedByCurrentThreadDecRef(PyObject *ob);
 
 static inline uintptr_t
 _Py_ThreadId(void)
@@ -583,13 +585,4 @@ _Py_ThreadId(void)
   return tid;
 }
 
-static inline Py_ALWAYS_INLINE int
-_Py_IsOwnedByCurrentThread(PyObject *ob)
-{
-#ifdef _Py_THREAD_SANITIZER
-    return _Py_atomic_load_uintptr_relaxed(&ob->ob_tid) == _Py_ThreadId();
-#else
-    return ob->ob_tid == _Py_ThreadId();
-#endif
-}
 #endif
