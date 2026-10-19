@@ -8,6 +8,7 @@
 
 #include "Python.h"
 #include <stdbool.h>
+#include "pycore_mutexobject.h"
 #include "pycore_object.h"
 #include "pycore_immutability.h"
 #include "pycore_critical_section.h"
@@ -703,6 +704,25 @@ immutable_exec(PyObject *module) {
     }
     if (_PyImmutability_SetFreezable(
             module_state->sharedfield_type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, &_PyTracingRegion_Type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_SetFreezable(
+            (PyObject*)&_PyTracingRegion_Type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+
+    if (PyModule_AddType(module, &_PyMutex_Type) != 0) {
+        return -1;
+    }
+    if (_PyImmutability_SetFreezable((PyObject*)&_PyMutex_Type, _Py_FREEZABLE_YES) < 0) {
+        return -1;
+    }
+    // Mutexes are shared across threads and interpreters, so is their type.
+    if (_PyImmutability_DeepFreeze((PyObject*)&_PyMutex_Type, 0) < 0) {
         return -1;
     }
 

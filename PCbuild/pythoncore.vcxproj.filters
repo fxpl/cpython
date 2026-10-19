@@ -633,6 +633,9 @@
     <ClInclude Include="..\Include\internal\pycore_crossinterp_data_registry.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
+    <ClInclude Include="..\Include\internal\pycore_mutexobject.h">
+      <Filter>Include\internal</Filter>
+    </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_debug_offsets.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
@@ -712,6 +715,8 @@
       <Filter>Include\internal</Filter>
     </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_index_pool.h">
+      <Filter>Include\internal</Filter>
+    </ClInclude>
     <ClInclude Include="..\Include\internal\pycore_immutability.h">
       <Filter>Include\internal</Filter>
     </ClInclude>
@@ -1237,6 +1242,9 @@
     <ClCompile Include="..\Objects\complexobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
+    <ClCompile Include="..\Objects\mutexobject.c">
+      <Filter>Objects</Filter>
+    </ClCompile>
     <ClCompile Include="..\Objects\descrobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
@@ -1307,6 +1315,9 @@
       <Filter>Objects</Filter>
     </ClCompile>
     <ClCompile Include="..\Objects\structseq.c">
+      <Filter>Objects</Filter>
+    </ClCompile>
+    <ClCompile Include="..\Objects\tracingregionobject.c">
       <Filter>Objects</Filter>
     </ClCompile>
     <ClCompile Include="..\Objects\tupleobject.c">

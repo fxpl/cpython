@@ -363,6 +363,21 @@ extern PyObject *_PyGC_GetObjects(PyInterpreterState *interp, int generation);
 extern PyObject *_PyGC_GetReferrers(PyInterpreterState *interp, PyObject *objs);
 
 // Functions to clear types free lists
+/* Collects `collectable`, a list of objects that is only reachable from the `owner`
+ * via the `root` pointer.  Used by a closed tracing region, to free all its content
+ * at once.
+ *
+ * The objects are finalized before `*root` is cleared, so that a `__del__`
+ * still sees them intact. Objects that a finalizer kept alive move to the oldest
+ * generation, the rest is cleared like cyclic garbage.
+ *
+ * No exception is allowed to be set when calling this.
+ */
+#ifndef Py_GIL_DISABLED
+extern void _PyGC_CollectOwnedGarbage(PyGC_Head *collectable, PyObject *owner,
+                                      PyObject **root);
+#endif
+
 extern void _PyGC_ClearAllFreeLists(PyInterpreterState *interp);
 extern void _Py_RunGC(PyThreadState *tstate);
 

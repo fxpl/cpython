@@ -549,6 +549,95 @@ test_lock_recursive(PyObject *self, PyObject *obj)
     Py_RETURN_NONE;
 }
 
+static void
+write_watch_lock_thread(void *arg)
+{
+    struct test_lock2_data *test_data = arg;
+    _Py_atomic_store_int(&test_data->started, 1);
+    PyMutex_Lock(&test_data->m);
+    PyMutex_Unlock(&test_data->m);
+    _PyEvent_Notify(&test_data->done);
+}
+
+static PyObject *
+test_lock_write_watch(PyObject *self, PyObject *obj)
+{
+    PyMutex m = (PyMutex){0};
+
+    // The watch survives the unlock of the holder that installed it
+    PyMutex_Lock(&m);
+    _PyMutex_SetWriteWatch(&m);
+    assert(m._bits == (_Py_LOCKED | _Py_WRITE_WATCH));
+    PyMutex_Unlock(&m);
+    assert(m._bits == _Py_WRITE_WATCH);
+    assert(_PyMutex_ClearWriteWatch(&m) == 0);
+    assert(m._bits == 0);
+
+    // Clearing while still locked keeps the lock
+    PyMutex_Lock(&m);
+    _PyMutex_SetWriteWatch(&m);
+    assert(_PyMutex_ClearWriteWatch(&m) == 0);
+    assert(m._bits == _Py_LOCKED);
+    PyMutex_Unlock(&m);
+    assert(m._bits == 0);
+
+    // A watch that was never installed counts as broken
+    assert(_PyMutex_ClearWriteWatch(&m) != 0);
+    assert(m._bits == 0);
+
+    // Any following lock clears the watch: inline fast path, exported slow
+    // path and PyMutex_LockFast
+    PyMutex_Lock(&m);
+    _PyMutex_SetWriteWatch(&m);
+    PyMutex_Unlock(&m);
+    PyMutex_Lock(&m);
+    assert(m._bits == _Py_LOCKED);
+    PyMutex_Unlock(&m);
+    assert(m._bits == 0);
+    assert(_PyMutex_ClearWriteWatch(&m) != 0);
+
+    PyMutex_Lock(&m);
+    _PyMutex_SetWriteWatch(&m);
+    PyMutex_Unlock(&m);
+    assert(PyMutex_LockFast(&m));
+    assert(m._bits == _Py_LOCKED);
+    PyMutex_Unlock(&m);
+    assert(_PyMutex_ClearWriteWatch(&m) != 0);
+
+    // A lock by another thread clears the watch
+    struct test_lock2_data test_data;
+    memset(&test_data, 0, sizeof(test_data));
+    PyMutex_Lock(&test_data.m);
+    _PyMutex_SetWriteWatch(&test_data.m);
+    PyMutex_Unlock(&test_data.m);
+    PyThread_start_new_thread(write_watch_lock_thread, &test_data);
+    PyEvent_Wait(&test_data.done);
+    assert(test_data.m._bits == 0);
+    assert(_PyMutex_ClearWriteWatch(&test_data.m) != 0);
+
+    // A parked waiter that gets the lock handed over also clears the watch
+    memset(&test_data, 0, sizeof(test_data));
+    PyMutex_Lock(&test_data.m);
+    _PyMutex_SetWriteWatch(&test_data.m);
+    PyThread_start_new_thread(write_watch_lock_thread, &test_data);
+    int iters = 0;
+    uint8_t v;
+    do {
+        pysleep(10);
+        v = _Py_atomic_load_uint8_relaxed(&test_data.m._bits);
+        assert(v & _Py_LOCKED);
+        assert(v & _Py_WRITE_WATCH);
+        iters++;
+    } while (!(v & _Py_HAS_PARKED) && iters < 200);
+    assert(v == (_Py_LOCKED | _Py_HAS_PARKED | _Py_WRITE_WATCH));
+    PyMutex_Unlock(&test_data.m);
+    PyEvent_Wait(&test_data.done);
+    assert(test_data.m._bits == 0);
+    assert(_PyMutex_ClearWriteWatch(&test_data.m) != 0);
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef test_methods[] = {
     {"test_lock_basic", test_lock_basic, METH_NOARGS},
     {"test_lock_two_threads", test_lock_two_threads, METH_NOARGS},
@@ -559,6 +648,7 @@ static PyMethodDef test_methods[] = {
     {"test_lock_once", test_lock_once, METH_NOARGS},
     {"test_lock_rwlock", test_lock_rwlock, METH_NOARGS},
     {"test_lock_recursive", test_lock_recursive, METH_NOARGS},
+    {"test_lock_write_watch", test_lock_write_watch, METH_NOARGS},
     {NULL, NULL} /* sentinel */
 };
 

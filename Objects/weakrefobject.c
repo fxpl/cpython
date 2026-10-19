@@ -77,7 +77,13 @@
  */
 #endif
 
-PyMutex _PyWeakref_Lock;
+// FIXME(region): Reusing the same weakref easily breaks region isolation
+// without a simple way out for programmers. For now we disable the optimization.
+// in the future, we may create a new object every time, but make sure that
+// the internal metadata is shared until this is no longer possible due to regions.
+#define WEAKREF_REUSE_BASIC_REFS 0
+
+PyMutex _PyPyrona_Lock;
 
 #define GET_WEAKREFS_LISTPTR(o) \
         ((PyWeakReference **) _PyObject_GET_WEAKREFS_LISTPTR(o))
@@ -110,6 +116,7 @@ init_weakref(PyWeakReference *self, PyObject *ob, PyObject *callback)
     self->wr_object = ob;
     self->wr_prev = NULL;
     self->wr_next = NULL;
+    self->wr_region_info = NULL;
     self->wr_callback = Py_XNewRef(callback);
     if (callback == NULL) {
         self->callback_ipid = -1;
@@ -169,6 +176,17 @@ clear_weakref(PyObject *op)
 }
 
 
+// Must run after `clear_weakref`, which unlinks the weakref so no install can reach it
+static void
+release_region_info(PyObject *op)
+{
+    PyWeakReference *self = _PyWeakref_CAST(op);
+    if (self->wr_region_info != NULL) {
+        _PyRegion_WrefInfoDecRef(self->wr_region_info);
+        self->wr_region_info = NULL;
+    }
+}
+
 /* Cyclic gc uses this to *just* clear the passed-in reference, leaving
  * the callback intact and uncalled.  It must be possible to call self's
  * tp_dealloc() after calling this, so self has to be left in a sane enough
@@ -193,6 +211,7 @@ weakref_dealloc(PyObject *self)
 {
     PyObject_GC_UnTrack(self);
     clear_weakref(self);
+    release_region_info(self);
     Py_TYPE(self)->tp_free(self);
 }
 
@@ -391,7 +410,7 @@ static PyWeakReference *
 try_reuse_basic_ref(PyWeakReference *list, PyTypeObject *type,
                     PyObject *callback)
 {
-    if (callback != NULL) {
+    if (!WEAKREF_REUSE_BASIC_REFS || callback != NULL) {
         return NULL;
     }
 
@@ -805,6 +824,7 @@ proxy_dealloc(PyObject *self)
 {
     PyObject_GC_UnTrack(self);
     clear_weakref(self);
+    release_region_info(self);
     PyObject_GC_Del(self);
 }
 
@@ -1294,4 +1314,43 @@ int
 _PyWeakref_IsDead(PyObject *weakref)
 {
     return _PyWeakref_IS_DEAD(weakref);
+}
+
+int _PyWeakref_HasWeakrefs(PyObject *obj) {
+    if (!_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
+        return 0;
+    }
+
+    PyWeakReference **list = GET_WEAKREFS_LISTPTR(obj);
+    return FT_ATOMIC_LOAD_PTR(*list) != NULL;
+}
+
+void _PyWeakref_InstallRegionInfo_InfoLockHeld(PyObject *obj, _PyRegion_WrefInfo* info) {
+    assert(obj != NULL && _PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj)));
+    PyWeakReference **list = GET_WEAKREFS_LISTPTR(obj);
+    if (_Py_atomic_load_ptr(list) == NULL) {
+        // Fast path for the common case
+        return;
+    }
+
+    // On GIL builds the held wref-info lock is already the weakref lock
+#ifdef Py_GIL_DISABLED
+    LOCK_WEAKREFS(obj);
+#endif
+    PyWeakReference *next = *list;
+    while (next != NULL) {
+        PyWeakReference *current = next;
+
+        _PyRegion_WrefInfo *old = current->wr_region_info;
+        _PyRegion_WrefInfoIncRefLockHeld(info);
+        _Py_atomic_store_ptr_release(&current->wr_region_info, info);
+        if (old != NULL) {
+            _PyRegion_WrefInfoDecRefLockHeld(old);
+        }
+
+        next = next->wr_next;
+    }
+#ifdef Py_GIL_DISABLED
+    UNLOCK_WEAKREFS(obj);
+#endif
 }

@@ -17,7 +17,6 @@
 #include "pycore_weakref.h"       // _PyWeakref_ClearRef()
 #include "pydtrace.h"
 
-
 #if !defined(Py_GIL_DISABLED)
 
 typedef struct _gc_runtime_state GCState;
@@ -1253,6 +1252,47 @@ handle_resurrected_objects(PyGC_Head *unreachable, PyGC_Head* still_unreachable,
     gc_list_merge(resurrected, old_generation);
 }
 
+void
+_PyGC_CollectOwnedGarbage(PyGC_Head *collectable, PyObject *owner, PyObject **root)
+{
+    // This is a specialized subset of the `gc_collect_main`
+    PyThreadState *tstate = _PyThreadState_GET();
+    GCState *gcstate = &tstate->interp->gc;
+    PyGC_Head *old = GEN_HEAD(gcstate, NUM_GENERATIONS-1);
+    assert(!_PyErr_Occurred(tstate));
+
+    // Mark the GC as running, if this was called outside a GC run.
+    int expected = 0;
+    int blocked = _Py_atomic_compare_exchange_int(&gcstate->collecting, &expected, 1);
+
+    // Marks `collectable` as garbage, so handle_weakref_callbacks() skips the
+    // callbacks of weakrefs inside it
+    for (PyGC_Head *gc = GC_NEXT(collectable); gc != collectable; gc = GC_NEXT(gc)) {
+        gc->_gc_prev |= PREV_MASK_COLLECTING;
+    }
+    handle_weakref_callbacks(collectable, old);
+    finalize_garbage(tstate, collectable);
+
+    // Dropped only now, so that finalizers could still access objects via the root.
+    Py_CLEAR(*root);
+
+    // Back references to the owner could corrupt its `_gc_prev` if an enclosing
+    // collection has marked the owner as being collected. This restors the
+    // original value.
+    PyGC_Head *owner_gc = AS_GC(owner);
+    uintptr_t owner_collecting = owner_gc->_gc_prev & PREV_MASK_COLLECTING;
+    gc_clear_collecting(owner_gc);
+    PyGC_Head still_unreachable;
+    handle_resurrected_objects(collectable, &still_unreachable, old);
+    owner_gc->_gc_prev |= owner_collecting;
+
+    clear_weakrefs(&still_unreachable);
+    delete_garbage(tstate, gcstate, &still_unreachable, old);
+
+    if (blocked) {
+        _Py_atomic_store_int(&gcstate->collecting, 0);
+    }
+}
 
 /* Invoke progress callbacks to notify clients that garbage collection
  * is starting or stopping
