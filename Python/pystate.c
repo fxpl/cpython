@@ -2822,6 +2822,12 @@ _Py_GetThreadLocal_Addr(void)
     // _Py_tss_tstate variable with a unique address.
     return (uintptr_t)&_Py_tss_tstate;
 }
+
+void _Py_CheckTracingFlag(PyObject *ob) {
+    if ((_Py_OB_FLAGS_LOAD(ob) & _Py_REGION_TRACE_FLAG) != 0) {
+        _Py_OB_FLAG_REMOVE(ob, _Py_REGION_TRACE_FLAG);
+    }
+}
 #endif
 
 /***********************************/
