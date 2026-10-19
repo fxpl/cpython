@@ -26,10 +26,12 @@ extern "C" {
 // The contents of the PyMutex are not part of the public API, but are
 // described to aid in understanding the implementation and debugging. Only
 // the two least significant bits are used. The remaining bits are always zero:
-// 0b00: unlocked
-// 0b01: locked
-// 0b10: unlocked and has parked threads
-// 0b11: locked and has parked threads
+// 0b000: unlocked
+// 0b001: locked
+// 0b010: unlocked and has parked threads
+// 0b011: locked and has parked threads
+// 0b1__: For object locks, a write watch has been installed. Following locks
+//        clear the flag before locking.
 typedef struct PyMutex {
     uint8_t _bits;  // (private)
 } PyMutex;

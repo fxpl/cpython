@@ -2822,6 +2822,7 @@ _Py_GetThreadLocal_Addr(void)
     // _Py_tss_tstate variable with a unique address.
     return (uintptr_t)&_Py_tss_tstate;
 }
+
 #endif
 
 /***********************************/

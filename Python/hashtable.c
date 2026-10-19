@@ -283,6 +283,25 @@ _Py_hashtable_foreach(_Py_hashtable_t *ht,
 }
 
 
+int
+_Py_hashtable_foreach_mut(_Py_hashtable_t *ht,
+                          _Py_hashtable_foreach_mut_func func,
+                          void *user_data)
+{
+    for (size_t hv = 0; hv < ht->nbuckets; hv++) {
+        _Py_hashtable_entry_t *entry = TABLE_HEAD(ht, hv);
+        while (entry != NULL) {
+            int res = func(ht, entry->key, &entry->value, user_data);
+            if (res) {
+                return res;
+            }
+            entry = ENTRY_NEXT(entry);
+        }
+    }
+    return 0;
+}
+
+
 static int
 hashtable_rehash(_Py_hashtable_t *ht)
 {

@@ -65,6 +65,10 @@ void _Py_brc_queue_object(PyObject *ob);
 // Merge the refcounts of queued objects for the current thread.
 void _Py_brc_merge_refcounts(PyThreadState *tstate);
 
+// Merge the queued objects of the thread `tid` on its behalf, if it is
+// detached. `tid` must not be the current thread.
+void _Py_brc_merge_for_detached_owner(uintptr_t tid);
+
 #endif /* Py_GIL_DISABLED */
 
 #ifdef __cplusplus

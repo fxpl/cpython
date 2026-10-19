@@ -55,6 +55,9 @@ void _Py_OpFlagsAdd(PyObject *op, uint16_t flag) {
 void _Py_OpFlagsRmv(PyObject *op, uint16_t flag) {
     _Py_OB_FLAGS_REMOVE(op, flag);
 }
+int _Py_OpFlagsCAS(PyObject *op, uint16_t* expected, uint16_t desired) {
+    return _Py_OB_FLAGS_CAS(op, expected, desired);
+}
 
 int
 _PyObject_CheckConsistency(PyObject *op, int check_content)
@@ -448,14 +451,16 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
     Py_ssize_t new_shared;
     Py_ssize_t shared = _Py_atomic_load_ssize_relaxed(&o->ob_ref_shared);
     do {
-        should_queue = (shared == 0 || shared == _Py_REF_MAYBE_WEAKREF);
+        Py_ssize_t rc_change = shared & _Py_REF_REGION_RC_CHANGE;
+        Py_ssize_t unflagged = shared & ~_Py_REF_REGION_RC_CHANGE;
+        should_queue = (unflagged == 0 || unflagged == _Py_REF_MAYBE_WEAKREF);
 
         if (should_queue) {
             // If the object had refcount zero, not queued, and not merged,
             // then we enqueue the object to be merged by the owning thread.
             // In this case, we don't subtract one from the reference count
             // because the queue holds a reference.
-            new_shared = _Py_REF_QUEUED;
+            new_shared = _Py_REF_QUEUED | rc_change;
         }
         else {
             // Otherwise, subtract one from the reference count. This might
@@ -479,11 +484,28 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
 #endif
         _Py_brc_queue_object(o);
     }
-    else if (new_shared == _Py_REF_MERGED) {
+    else if ((new_shared & ~_Py_REF_REGION_RC_CHANGE) == _Py_REF_MERGED) {
         // refcount is zero AND merged
         return 1;
     }
     return 0;
+}
+
+// Py_INCREF only inlines the `ob_tid == this` check; clearing the region RC
+// flag lives here to keep call sites small.
+void
+_Py_IncRefShared(PyObject *o)
+{
+    if (_Py_IsOwnedByCurrentThread(o)) {
+        _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, o->ob_ref_local + 1);
+    }
+    else {
+        Py_ssize_t shared = _Py_atomic_load_ssize_relaxed(&o->ob_ref_shared);
+        while (!_Py_atomic_compare_exchange_ssize(
+                &o->ob_ref_shared, &shared,
+                (shared + (1 << _Py_REF_SHARED_SHIFT)) & ~_Py_REF_REGION_RC_CHANGE)) {
+        }
+    }
 }
 
 void
@@ -521,14 +543,14 @@ _Py_MergeZeroLocalRefcount(PyObject *op)
     // a zero `ob_tid` implies a merged refcount.
     _Py_atomic_store_uintptr_relaxed(&op->ob_tid, 0);
 
-    // Slow-path: atomically set the flags (low two bits) to _Py_REF_MERGED.
+    // Slow-path: atomically set the BRC flags (low two bits) to _Py_REF_MERGED.
     Py_ssize_t new_shared;
     do {
-        new_shared = (shared & ~_Py_REF_SHARED_FLAG_MASK) | _Py_REF_MERGED;
+        new_shared = (shared & ~_Py_REF_SHARED_BRC_FLAG_MASK) | _Py_REF_MERGED;
     } while (!_Py_atomic_compare_exchange_ssize(&op->ob_ref_shared,
                                                 &shared, new_shared));
 
-    if (new_shared == _Py_REF_MERGED) {
+    if ((new_shared & ~_Py_REF_REGION_RC_CHANGE) == _Py_REF_MERGED) {
         // TODO(Immutable):  Clear the immutable flag here.
         _Py_CLEAR_IMMUTABLE(op);
         // i.e., the shared refcount is zero (only the flags are set) so we
@@ -559,7 +581,8 @@ _Py_ExplicitMergeRefcount(PyObject *op, Py_ssize_t extra)
         refcnt += local;
         refcnt += extra;
 
-        new_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED);
+        new_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED)
+                     | (shared & _Py_REF_REGION_RC_CHANGE);
     } while (!_Py_atomic_compare_exchange_ssize(&op->ob_ref_shared,
                                                 &shared, new_shared));
     return refcnt;
@@ -3727,7 +3750,7 @@ warn_missing_tp_reachable(PyTypeObject *tp)
 }
 
 int
-_PyObject_VisitReachable(PyObject *op, reachablevisitproc visit, void *arg)
+_PyObject_VisitReachable(PyObject *op, reachablevisitproc visit, void *arg, bool add_write_watch)
 {
     assert(op != NULL);
     PyTypeObject *tp = Py_TYPE(op);
@@ -3748,11 +3771,21 @@ _PyObject_VisitReachable(PyObject *op, reachablevisitproc visit, void *arg)
         // what keeps the borrowed references handed to visit alive.
         Py_BEGIN_CRITICAL_SECTION2_MUTEX(&_PyInterpreterState_GET()->types.mutex,
                                          &op->ob_mutex);
+#ifdef Py_GIL_DISABLED
+        if (add_write_watch) {
+            _PyMutex_SetWriteWatch(&op->ob_mutex);
+        }
+#endif
         result = reachable(op, visit, arg);
         Py_END_CRITICAL_SECTION2();
     }
     else {
         Py_BEGIN_CRITICAL_SECTION(op);
+#ifdef Py_GIL_DISABLED
+        if (add_write_watch) {
+            _PyMutex_SetWriteWatch(&op->ob_mutex);
+        }
+#endif
         result = reachable(op, visit, arg);
         Py_END_CRITICAL_SECTION();
     }

@@ -141,7 +141,7 @@ PyAPI_FUNC(void) _Py_RefcntAdd_Immutable(PyObject *op, Py_ssize_t n);
 // Declared again here because Python.h pulls in pyerrors.h after this header.
 PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
 
-#else // _Py_PYRONA_INTERPRETER_SHARING
+#else // !_Py_PYRONA_INTERPRETER_SHARING
 // FIXME(immutability): These should probably be removed.
 #define _Py_IMMUTABLE_MASK (_Py_IMMUTABLE_FLAG)
 #define _Py_IMMUTABLE_CLEAR_MASK (_Py_IMMUTABLE_MASK | _Py_IMMUTABLE_DEPTH_FLAG)
@@ -150,6 +150,29 @@ PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
     | _Py_FREEZABLE_SET_FLAG | _Py_PREFREEZE_RAN_FLAG)
 #endif // _Py_PYRONA_INTERPRETER_SHARING
 
+// TRegions: Set if this object is currently part of a trace. Any concurrent
+// traces will fail.
+//
+// In theory, two traces can overlap and then set the RC flag and write
+// watch for each other causing them to incorrectly succeed. There are several
+// ways to avoid this [1] we decided to steal a second bit and ensure exclusive
+// trace access.
+//
+// [1] Like logging when a flag is cleared, or sending a message to the tracing
+// thread.
+#define _Py_REGION_TRACE_FLAG (1 << 11)
+
+// The region flags share bits with sub-interpreter-only immutability flags.
+#ifdef Py_GIL_DISABLED
+static_assert(
+    (_Py_REGION_TRACE_FLAG & _Py_IMMUTABLE_RESET_MASK) == 0,
+    "TRegions flags overlap with immutability flags");
+#endif
+
+
+#if defined(Py_GIL_DISABLED) && !defined(Py_LIMITED_API)
+PyAPI_FUNC(void) _Py_IncRefShared(PyObject *);
+#endif
 
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
 // always 32-bits.
@@ -159,16 +182,28 @@ PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
 
 
 #ifdef Py_GIL_DISABLED
-   // The shared reference count uses the two least-significant bits to store
+   // The shared reference count uses the three least-significant bits to store
    // flags. The remaining bits are used to store the reference count.
-#  define _Py_REF_SHARED_SHIFT        2
-#  define _Py_REF_SHARED_FLAG_MASK    0x3
+#  define _Py_REF_SHARED_SHIFT            3
+#  define _Py_REF_SHARED_FLAG_MASK        0x7
+   // The two low bits hold the biased reference counting state.
+#  define _Py_REF_SHARED_BRC_FLAG_MASK    0x3
 
    // The shared flags are initialized to zero.
-#  define _Py_REF_SHARED_INIT         0x0
-#  define _Py_REF_MAYBE_WEAKREF       0x1
-#  define _Py_REF_QUEUED              0x2
-#  define _Py_REF_MERGED              0x3
+#  define _Py_REF_SHARED_INIT             0x0
+#  define _Py_REF_MAYBE_WEAKREF           0x1
+#  define _Py_REF_QUEUED                  0x2
+#  define _Py_REF_MERGED                  0x3
+
+   // TRegions: Indicates if the RC was increased by a non-owning thread since
+   // the flag was set.
+   //
+   // Traces need to detect when a concurrent thread changes the RC
+   // and thereby invalidated the trace. Just reading the RC is not strong
+   // enough due to the ABA problem. This flag is set during tracing when the
+   // RC is observed. Any (non-owning) concurrent incref clears it as part of
+   // the shared RC update. Decrefs and merges preserve it.
+#  define _Py_REF_REGION_RC_CHANGE        0x4
 
    // Create a shared field from a refcnt and desired flags
 #  define _Py_REF_SHARED(refcnt, flags) \
@@ -178,15 +213,18 @@ PyAPI_FUNC(void) _Py_NO_RETURN _Py_FatalErrorFunc(const char *, const char *);
 PyAPI_FUNC(uint16_t) _Py_LoadOpFlags(PyObject *);
 PyAPI_FUNC(void) _Py_OpFlagsAdd(PyObject *, uint16_t);
 PyAPI_FUNC(void) _Py_OpFlagsRmv(PyObject *, uint16_t);
+PyAPI_FUNC(int) _Py_OpFlagsCAS(PyObject *, uint16_t*, uint16_t);
 
 #ifdef Py_LIMITED_API
 #define _Py_OB_FLAGS_ADD(op, flag) _Py_OpFlagsAdd(_PyObject_CAST(op), flag);
 #define _Py_OB_FLAGS_REMOVE(op, flag) _Py_OpFlagsRmv(_PyObject_CAST(op), flag);
 #define _Py_OB_FLAGS_LOAD(op) _Py_LoadOpFlags(_PyObject_CAST(op))
+#define _Py_OB_FLAGS_CAS(op, expect, set) _Py_OpFlagsCAS(_PyObject_CAST(op), expect, set)
 #else // !Py_LIMITED_API
-#define _Py_OB_FLAGS_LOAD(op) _Py_atomic_load_uint16_relaxed(&_PyObject_CAST(op)->ob_flags)
+#define _Py_OB_FLAGS_LOAD(op) _Py_atomic_load_uint16(&_PyObject_CAST(op)->ob_flags)
 #define _Py_OB_FLAGS_ADD(op, flag) _Py_atomic_or_uint16(&_PyObject_CAST(op)->ob_flags, (flag))
 #define _Py_OB_FLAGS_REMOVE(op, flag) _Py_atomic_and_uint16(&_PyObject_CAST(op)->ob_flags, ~(flag))
+#define _Py_OB_FLAGS_CAS(op, expect, set) _Py_atomic_compare_exchange_uint16(&_PyObject_CAST(op)->ob_flags, (expect), (set))
 #endif // Py_LIMITED_API
 
 
@@ -487,7 +525,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, new_local);
     }
     else {
-        _Py_atomic_add_ssize(&op->ob_ref_shared, (1 << _Py_REF_SHARED_SHIFT));
+        _Py_IncRefShared(op);
     }
 #elif SIZEOF_VOID_P > 4
     // Using ob_refcnt_full allows us to check if a flag has been set for immutable too.
@@ -563,7 +601,6 @@ static inline void Py_DECREF(PyObject *op) {
 #elif defined(Py_GIL_DISABLED) && defined(Py_REF_DEBUG)
 static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
 {
-    // FIXME(regions): This needs a _Py_NeedsSlowRcBranch for regions
     uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
     if (local == _Py_IMMORTAL_REFCNT_LOCAL) {
         _Py_DECREF_IMMORTAL_STAT_INC();
@@ -590,7 +627,6 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
 #elif defined(Py_GIL_DISABLED)
 static inline void Py_DECREF(PyObject *op)
 {
-    // FIXME(regions): This needs a _Py_NeedsSlowRcBranch for regions
     uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
     if (local == _Py_IMMORTAL_REFCNT_LOCAL) {
         _Py_DECREF_IMMORTAL_STAT_INC();
