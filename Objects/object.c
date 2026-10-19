@@ -55,6 +55,9 @@ void _Py_OpFlagsAdd(PyObject *op, uint16_t flag) {
 void _Py_OpFlagsRmv(PyObject *op, uint16_t flag) {
     _Py_OB_FLAGS_REMOVE(op, flag);
 }
+int _Py_OpFlagsCAS(PyObject *op, uint16_t* expected, uint16_t desired) {
+    return _Py_OB_FLAGS_CAS(op, expected, desired);
+}
 
 int
 _PyObject_CheckConsistency(PyObject *op, int check_content)
@@ -486,6 +489,19 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
     return 0;
 }
 
+// Py_INCREF only inlines the `ob_tid == this` check; clearing the region RC
+// flag lives here to keep call sites small.
+void
+_Py_IncRefShared(PyObject *o)
+{
+    if (_Py_IsOwnedOrClearRcFlag(o)) {
+        _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, o->ob_ref_local + 1);
+    }
+    else {
+        _Py_atomic_add_ssize(&o->ob_ref_shared, (1 << _Py_REF_SHARED_SHIFT));
+    }
+}
+
 void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
@@ -572,7 +588,7 @@ _PyObject_ResurrectEndSlow(PyObject *op)
     if (_Py_IsImmortal(op)) {
         return 1;
     }
-    if (_Py_IsOwnedByCurrentThread(op)) {
+    if (_Py_IsOwnedByCurrentThread(op) || _Py_IsOwnedOrClearRcFlag(op)) {
         // If the object is owned by the current thread, give up ownership and
         // merge the refcount. This isn't necessary in all cases, but it
         // simplifies the implementation.
@@ -3727,7 +3743,7 @@ warn_missing_tp_reachable(PyTypeObject *tp)
 }
 
 int
-_PyObject_VisitReachable(PyObject *op, reachablevisitproc visit, void *arg)
+_PyObject_VisitReachable(PyObject *op, reachablevisitproc visit, void *arg, bool add_write_watch)
 {
     assert(op != NULL);
     PyTypeObject *tp = Py_TYPE(op);
@@ -3748,11 +3764,21 @@ _PyObject_VisitReachable(PyObject *op, reachablevisitproc visit, void *arg)
         // what keeps the borrowed references handed to visit alive.
         Py_BEGIN_CRITICAL_SECTION2_MUTEX(&_PyInterpreterState_GET()->types.mutex,
                                          &op->ob_mutex);
+#ifdef Py_GIL_DISABLED
+        if (add_write_watch) {
+            _PyMutex_SetWriteWatch(&op->ob_mutex);
+        }
+#endif
         result = reachable(op, visit, arg);
         Py_END_CRITICAL_SECTION2();
     }
     else {
         Py_BEGIN_CRITICAL_SECTION(op);
+#ifdef Py_GIL_DISABLED
+        if (add_write_watch) {
+            _PyMutex_SetWriteWatch(&op->ob_mutex);
+        }
+#endif
         result = reachable(op, visit, arg);
         Py_END_CRITICAL_SECTION();
     }

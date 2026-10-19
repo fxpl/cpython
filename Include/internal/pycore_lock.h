@@ -14,15 +14,43 @@ extern "C" {
 #endif
 
 //_Py_UNLOCKED is defined as 0 and _Py_LOCKED as 1 in Include/cpython/pylock.h
-#define _Py_HAS_PARKED  2
+#define _Py_HAS_PARKED       2
 #define _Py_ONCE_INITIALIZED 4
+#define _Py_WRITE_WATCH      0b100
 
 static inline int
 PyMutex_LockFast(PyMutex *m)
 {
     uint8_t expected = _Py_UNLOCKED;
-    uint8_t *lock_bits = &m->_bits;
-    return _Py_atomic_compare_exchange_uint8(lock_bits, &expected, _Py_LOCKED);
+    if (_Py_atomic_compare_exchange_uint8(&m->_bits, &expected, _Py_LOCKED)) {
+        return 1;
+    }
+    // If the lock is unlocked, and only has a write watch, clear the write watch
+    return (expected == _Py_WRITE_WATCH &&
+            _Py_atomic_compare_exchange_uint8(&m->_bits, &expected, _Py_LOCKED));
+}
+
+// Adds a write-watch to the lock, any following locks will clear the flag.
+static inline void
+_PyMutex_SetWriteWatch(PyMutex *m)
+{
+    uint8_t expected = _Py_LOCKED;
+    while (!_Py_atomic_compare_exchange_uint8(&m->_bits, &expected, expected | _Py_WRITE_WATCH)) {
+        // pass
+    }
+}
+
+// Clears the write watch and returns `!= 0` if the write watch was not set.
+static inline int
+_PyMutex_ClearWriteWatch(PyMutex *m)
+{
+    uint8_t expected = _Py_UNLOCKED | _Py_WRITE_WATCH;
+    while ((expected & _Py_WRITE_WATCH) != 0
+        && !_Py_atomic_compare_exchange_uint8(&m->_bits, &expected, expected & ~_Py_WRITE_WATCH)
+    ) {
+        // pass
+    }
+    return (expected & _Py_WRITE_WATCH) != _Py_WRITE_WATCH;
 }
 
 // Re-initializes the mutex after a fork to the unlocked state.

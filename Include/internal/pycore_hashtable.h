@@ -106,6 +106,17 @@ PyAPI_FUNC(int) _Py_hashtable_foreach(
     _Py_hashtable_foreach_func func,
     void *user_data);
 
+typedef int (*_Py_hashtable_foreach_mut_func) (_Py_hashtable_t *ht,
+                                               const void *key, void **value,
+                                               void *user_data);
+
+/* Like _Py_hashtable_foreach(), but func() may overwrite the entry's value.
+   func() must not add or remove entries. */
+PyAPI_FUNC(int) _Py_hashtable_foreach_mut(
+    _Py_hashtable_t *ht,
+    _Py_hashtable_foreach_mut_func func,
+    void *user_data);
+
 PyAPI_FUNC(size_t) _Py_hashtable_size(const _Py_hashtable_t *ht);
 PyAPI_FUNC(size_t) _Py_hashtable_len(const _Py_hashtable_t *ht);
 

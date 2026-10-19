@@ -11,7 +11,7 @@ filename	funcname	name	reason
 
 Python/immutability.c	-	PostOrderMarker	-
 Python/immutability.c	-	EnsureVisitedMarker	-
-Objects/weakrefobject.c	-	_PyWeakref_Lock	-
+Objects/weakrefobject.c	-	_PyPyrona_Lock	-
 
 ## ---------------
 ## Lazy

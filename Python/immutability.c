@@ -228,6 +228,7 @@ static PyObject* pop(PyObject* s){
     return item;
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 // Returns a borrowed reference to the last item in the list.
 static PyObject* peek(PyObject* s){
     PyObject* item;
@@ -243,6 +244,7 @@ static PyObject* peek(PyObject* s){
 
     return item;
 }
+#endif
 
 static bool is_c_wrapper(PyObject* obj){
     return PyCFunction_Check(obj) || Py_IS_TYPE(obj, &_PyMethodWrapper_Type) || Py_IS_TYPE(obj, &PyWrapperDescr_Type);
@@ -1279,7 +1281,7 @@ static int scc_build_traverse(PyObject *obj, scc_build_state_t *state) {
         return 0;
     }
 
-    return _PyObject_VisitReachable(obj, scc_build_visit, state);
+    return _PyObject_VisitReachable(obj, scc_build_visit, state, false);
 }
 
 // FIXME(Immutability + Interpreter Sharing): A failure here (MemoryError) is
@@ -1409,7 +1411,7 @@ static void scc_reconstruct_rcs(PyObject *obj, scc_details_t *details) {
         PyObject* c = n;
         n = get_scc_next(c);
 
-        _PyObject_VisitReachable(c, _dissolve_scc_reconstruct_rcs_visit, scc_rep);
+        _PyObject_VisitReachable(c, _dissolve_scc_reconstruct_rcs_visit, scc_rep, false);
 
         if (Py_TYPE(c)->tp_del != NULL)
             details->has_legacy_finalizers++;
@@ -1826,7 +1828,7 @@ int _PyImmutability_CanViewAsShallowImmutable(PyObject *obj)
     // Returns 0 if it cannot be viewed as shallow immutable, -1 on error.
 
     // Already shallow immutable — trivially yes.
-    if (_Py_IsShallowImmutable(obj)) {
+    if (obj == NULL || _Py_IsShallowImmutable(obj)) {
         return 1;
     }
 
@@ -1855,7 +1857,7 @@ int _PyImmutability_CanViewAsDeepImmutable(PyObject *obj)
     // Returns 0 if the graph cannot be viewed as deeply immutable, -1 on error.
 
     // Already frozen — trivially yes.
-    if (_Py_IsDeepImmutable(obj)) {
+    if (obj == NULL || _Py_IsDeepImmutable(obj)) {
         return 1;
     }
 
@@ -1888,7 +1890,7 @@ int _PyImmutability_CanViewAsDeepImmutable(PyObject *obj)
         PyObject *item = pop(state.pending);
 
         // Traverse the item
-        result = _PyObject_VisitReachable(item, can_view_as_immutable_visit, &state);
+        result = _PyObject_VisitReachable(item, can_view_as_immutable_visit, &state, false);
         Py_DECREF(item);
 
         // Stop on error.
@@ -2048,7 +2050,7 @@ static int traverse_freeze(PyObject *obj, shallow_freeze_state_t *freeze_state)
         return 0;
     }
 
-    result = _PyObject_VisitReachable(obj, freeze_visit, freeze_state);
+    result = _PyObject_VisitReachable(obj, freeze_visit, freeze_state, false);
     if (result != 0) {
         goto error;
     }

@@ -55,7 +55,7 @@ _PyMutex_LockTimed(PyMutex *m, PyTime_t timeout, _PyLockFlags flags)
 {
     uint8_t v = _Py_atomic_load_uint8_relaxed(&m->_bits);
     if ((v & _Py_LOCKED) == 0) {
-        if (_Py_atomic_compare_exchange_uint8(&m->_bits, &v, v|_Py_LOCKED)) {
+        if (_Py_atomic_compare_exchange_uint8(&m->_bits, &v, (v & ~_Py_WRITE_WATCH) | _Py_LOCKED)) {
             return PY_LOCK_ACQUIRED;
         }
     }
@@ -82,7 +82,7 @@ _PyMutex_LockTimed(PyMutex *m, PyTime_t timeout, _PyLockFlags flags)
     for (;;) {
         if ((v & _Py_LOCKED) == 0) {
             // The lock is unlocked. Try to grab it.
-            if (_Py_atomic_compare_exchange_uint8(&m->_bits, &v, v|_Py_LOCKED)) {
+            if (_Py_atomic_compare_exchange_uint8(&m->_bits, &v, (v & ~_Py_WRITE_WATCH) | _Py_LOCKED)) {
                 return PY_LOCK_ACQUIRED;
             }
             continue;
@@ -194,7 +194,9 @@ _PyMutex_TryUnlock(PyMutex *m)
             _PyParkingLot_Unpark(&m->_bits, mutex_unpark, m);
             return 0;
         }
-        else if (_Py_atomic_compare_exchange_uint8(&m->_bits, &v, _Py_UNLOCKED)) {
+        // The write watch is installed while the lock is acquired. This keeps the
+        // flag. The next unlock will clear it.
+        else if (_Py_atomic_compare_exchange_uint8(&m->_bits, &v, v & _Py_WRITE_WATCH)) {
             // fast-path: no waiters
             return 0;
         }

@@ -1652,12 +1652,13 @@ PyObject* _Py_ListPop(PyListObject *self, Py_ssize_t index)
 
     PyObject **items = self->ob_item;
     v = items[index];
-    if (Py_SIZE(self) == 1) {
-        Py_INCREF(v);
+    Py_ssize_t size_after_pop = Py_SIZE(self) - 1;
+    if (size_after_pop == 0) {
+        // Steal `v` from the list: with size 0, list_clear() only frees the array.
+        Py_SET_SIZE(self, 0);
         list_clear(self);
         return v;
     }
-    Py_ssize_t size_after_pop = Py_SIZE(self) - 1;
     if (index < size_after_pop) {
         ptr_wise_atomic_memmove(self, &items[index], &items[index+1],
                                 size_after_pop - index);
