@@ -5,6 +5,7 @@
         "dnf",
         "install",
         "-y",
+        "compiler-rt",
         // For umask fix below.
         "/usr/bin/setfacl"
     ],
