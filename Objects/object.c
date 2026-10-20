@@ -486,9 +486,32 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
     return 0;
 }
 
+int
+_Py_TryClaimFreeObject(PyObject *op)
+{
+    uintptr_t expected = _Py_FREE_TID;
+    if (!_Py_atomic_compare_exchange_uintptr(&op->ob_tid, &expected,
+                                           _Py_ThreadId())) {
+      return 0;  // another thread claimed it first
+    }
+    // TODO: clear the gc bits -- or else the object becomes free again on the next GC.
+    // OTOH, that might not be so bad.
+    return 1; // successfully claimed free object
+}
+
 void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
+    if (_Py_atomic_load_uintptr_relaxed(&o->ob_tid) == _Py_FREE_TID
+        && _Py_TryClaimFreeObject(o)) {
+        // Now the owner: take the owner branch of Py_DECREF.
+        uint32_t local = _Py_atomic_load_uint32_relaxed(&o->ob_ref_local) - 1;
+        _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, local);
+        if (local == 0) {
+          _Py_MergeZeroLocalRefcount(o);
+        }
+        return;
+    }
     if (_Py_DecRefSharedIsDead(o, filename, lineno)) {
         // TODO(Immutable): Should make mutable here?
         _Py_CLEAR_IMMUTABLE(o);

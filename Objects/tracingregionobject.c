@@ -9,6 +9,7 @@
 #include "pycore_weakref.h"
 #include "pycore_cown.h"
 #include "pycore_regionref.h"
+#include <stdint.h>
 #ifdef Py_GIL_DISABLED
 #include "pycore_parking_lot.h"   // _PyParkingLot_Park()
 #include "pycore_time.h"          // _PyDeadline_Init()
@@ -1648,6 +1649,33 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
     return _move_obj(obj, state);
 }
 
+static void _make_object_free(PyObject *obj)
+{
+    // TODO: what happens if obj is queued for merging
+    // _PyObject_GC_UNTRACK(obj); // TODO: this keeps ob_tid during GC, but requires building a remset for the region
+
+    assert(!_Py_IsImmortal(obj));
+
+    // Merge RC into local
+    Py_ssize_t shared = _Py_atomic_exchange_ssize(
+      &obj->ob_ref_shared, _Py_REF_SHARED(0, _Py_REF_MAYBE_WEAKREF));
+    assert(!_Py_REF_IS_QUEUED(shared));
+
+    Py_ssize_t total = (Py_ssize_t)_Py_atomic_load_uint32_relaxed(&obj->ob_ref_local)
+      + Py_ARITHMETIC_RIGHT_SHIFT(Py_ssize_t, shared, _Py_REF_SHARED_SHIFT);
+    assert(total > 0 && total < (Py_ssize_t)_Py_IMMORTAL_REFCNT_LOCAL);
+    _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, (uint32_t)total);
+
+    // @FRED -- this is the signal to "stay FREE after GC"
+    // Make the object keep its owner during GC
+    _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_REGION_OWNED);
+
+    // Make the object FREE
+    _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
+    printf("Object %p is now free (%d)\n", obj, obj->ob_tid);
+}
+
+
 typedef struct {
     // The weak references that live inside the region and therefore survive the
     // close. NULL when the trace did not find any.
@@ -1689,6 +1717,12 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
         goto error;
     }
     _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
+
+    // FIXME: I would like to optimistically make the objects free
+    // here, but that will re-own them when we drop their pin's later!
+    // An UGLY hack to test this would be dropping the reference count
+    // prematurely in _make_object_free.
+    _make_object_free(obj);
 
     // ### Soundness:
     // This catches RC updates that passed the flag but got paused before
@@ -1992,6 +2026,10 @@ static int try_close_region_tree(PyObject *root) {
         }
         Py_ssize_t non_local_before = PyList_GET_SIZE(state.non_local_objs);
 #endif
+
+        // Drain our own queue to avoid (some) incorrect failures to close
+        PyThreadState *tstate = _PyThreadState_GET();
+        _Py_brc_merge_refcounts(tstate);
 
         dbg("- tracing region %p", region);
         int res = _try_close_region(region, &state);

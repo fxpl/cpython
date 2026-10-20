@@ -440,6 +440,11 @@ PyAPI_FUNC(void) _Py_DECREF_DecRefTotal(void);
 PyAPI_FUNC(void) _Py_Dealloc(PyObject *);
 
 
+#if !defined(Py_LIMITED_API) && defined(Py_GIL_DISABLED)
+// Attempt to claim a free object for the current thread. Returns 1 if successful, 0 otherwise.
+PyAPI_FUNC(int) _Py_TryClaimFreeObject(PyObject *);
+#endif
+
 /*
 These are provided as conveniences to Python runtime embedders, so that
 they can have object code that is not dependent on Python compilation flags.
@@ -487,6 +492,13 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
     }
     if (_Py_IsOwnedByCurrentThread(op)) {
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, new_local);
+    }
+    else if (_Py_atomic_load_uintptr_relaxed(&op->ob_tid) == _Py_FREE_TID
+       && _Py_TryClaimFreeObject(op)) {
+       // Claimed: we are now the owner -- increase the local reference count.
+       uint32_t claimed = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
+       _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, claimed + 1);
+       // Failure to claim falls through to incrementing the shared reference count.
     }
     else {
         _Py_atomic_add_ssize(&op->ob_ref_shared, (1 << _Py_REF_SHARED_SHIFT));

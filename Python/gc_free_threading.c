@@ -5,6 +5,7 @@
 #include "pycore_dict.h"          // _PyInlineValuesSize()
 #include "pycore_frame.h"         // FRAME_CLEARED
 #include "pycore_freelist.h"      // _PyObject_ClearFreeLists()
+#include "pycore_gc.h"
 #include "pycore_genobject.h"     // _PyGen_GetGeneratorFromFrame()
 #include "pycore_initconfig.h"    // _PyStatus_NO_MEMORY()
 #include "pycore_interp.h"        // PyInterpreterState.gc
@@ -156,6 +157,13 @@ gc_is_frozen(PyObject *op)
     return gc_has_bit(op, _PyGC_BITS_FROZEN);
 }
 
+// @FRED
+static inline int
+gc_is_region_owned(PyObject *op)
+{
+    return gc_has_bit(op, _PyGC_BITS_REGION_OWNED);
+}
+
 static inline int
 gc_is_unreachable(PyObject *op)
 {
@@ -305,6 +313,11 @@ gc_restore_tid(PyObject *op)
     mi_segment_t *segment = _mi_ptr_segment(op);
     if (_Py_REF_IS_MERGED(op->ob_ref_shared)) {
         op->ob_tid = 0;
+    }
+    // @FRED
+    else if (gc_is_region_owned(op)) {
+        // Keep region ownership
+        op->ob_tid = _Py_FREE_TID;
     }
     else {
         // NOTE: may change ob_tid if the object was re-initialized by

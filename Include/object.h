@@ -152,6 +152,10 @@ struct _object {
 // This includes both immortal objects and objects whose reference count
 // fields have been merged.
 #define _Py_UNOWNED_TID             0
+// @FRED
+// Objects which are not owned by a thread YET but will become owned by
+// the next thread that observes the value.
+#define _Py_FREE_TID                1
 
 struct _object {
     // ob_tid stores the thread id (or zero). It is also used by the GC and the

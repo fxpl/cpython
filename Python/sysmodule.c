@@ -1053,6 +1053,22 @@ sys__is_immortal_impl(PyObject *module, PyObject *op)
     return PyUnstable_IsImmortal(op);
 }
 
+// FIXME: throw this away -- ugly hack to be able to read the ob_tid of an object
+#ifdef Py_GIL_DISABLED
+static PyObject *
+sys__ob_tid(PyObject *module, PyObject *addr)
+{
+    // Debug only, and unsafe: addr must be the id() of a live object.
+    PyObject *op = (PyObject *)PyLong_AsVoidPtr(addr);
+    if (op == NULL && PyErr_Occurred()) {
+        return NULL;
+    }
+    return PyLong_FromUnsignedLongLong(
+        _Py_atomic_load_uintptr_relaxed(&op->ob_tid));
+}
+#endif
+
+
 /*
  * Cached interned string objects used for calling the profile and
  * trace functions.
@@ -2943,6 +2959,10 @@ static PyMethodDef sys_methods[] = {
     SYS_GETWINDOWSVERSION_METHODDEF
     SYS__ENABLELEGACYWINDOWSFSENCODING_METHODDEF
     SYS__IS_IMMORTAL_METHODDEF
+// FIXME: remove this in favour of proper testing
+#ifdef Py_GIL_DISABLED
+    {"_ob_tid", sys__ob_tid, METH_O, NULL},
+#endif
     SYS_INTERN_METHODDEF
     SYS__IS_INTERNED_METHODDEF
     SYS_IS_FINALIZING_METHODDEF
