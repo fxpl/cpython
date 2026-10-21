@@ -752,6 +752,32 @@ typedef struct {
     bool has_weak_refs;
 } region_trace_state_t;
 
+// TEMPORARY: drop the trace's reference to a FREE object without claiming it.
+// Py_DECREF() would claim the object for this thread and track it again.
+// Remove once the close path stops holding these references.
+static void _region_release_trace_ref(PyObject *obj)
+{
+#ifdef Py_GIL_DISABLED
+    uintptr_t expected = _Py_FREE_TID;
+    if (_Py_atomic_compare_exchange_uintptr(&obj->ob_tid, &expected, _Py_ThreadId())) {
+        // Owner for the moment: the whole count, this reference included, is in local.
+#ifdef Py_REF_DEBUG
+        _Py_DECREF_DecRefTotal();
+#endif
+        uint32_t local = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local) - 1;
+        _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local);
+        if (local == 0) {
+            // That was the last local reference: finish as the owner would.
+            _Py_MergeZeroLocalRefcount(obj);
+            return;
+        }
+        _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
+        return;
+    }
+#endif
+    Py_DECREF(obj);
+}
+
 static int _region_trace_state_free_visited(
     _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
 {
@@ -764,7 +790,7 @@ static int _region_trace_state_free_visited(
 #endif
 
     // Balances the `Py_INCREF(obj)` taken when the object was marked visited.
-    Py_DECREF(obj);
+    _region_release_trace_ref(obj);
 
     PyMem_Free((void*)value);
 
@@ -1748,24 +1774,6 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
     }
     _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
 
-    // FIXME: I would like to optimistically make the objects free
-    // here, but that will re-own them when we drop their pin's later!
-    // An UGLY hack to test this would be dropping the reference count
-    // prematurely in _make_object_free.
-    _make_object_free(obj);
-
-    // ### Soundness:
-    // This catches RC updates that passed the flag but got paused before
-    // the RC update.
-    //
-    // The thread could remain stalled there, but then we would either observe
-    // the incoming reference and not make it this far, or if it's a lock-free
-    // read on a now killed reference the try-inc-ref will fail.
-    Py_ssize_t expected_rc = info->inital_rc + 1;
-    if (Py_REFCNT(obj) != expected_rc) {
-        goto error;
-    }
-
     // ### Soundness
     // This catches concurent reference moves inside our region that didn't
     // affect the RC.
@@ -1794,6 +1802,24 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
         }
     }
 
+    // FIXME: I would like to optimistically make the objects free
+    // here, but that will re-own them when we drop their pin's later!
+    // An UGLY hack to test this would be dropping the reference count
+    // prematurely in _make_object_free.
+    _make_object_free(obj);
+
+    // ### Soundness:
+    // This catches RC updates that passed the flag but got paused before
+    // the RC update.
+    //
+    // The thread could remain stalled there, but then we would either observe
+    // the incoming reference and not make it this far, or if it's a lock-free
+    // read on a now killed reference the try-inc-ref will fail.
+    Py_ssize_t expected_rc = info->inital_rc + 1;
+    if (Py_REFCNT(obj) != expected_rc) {
+        goto error;
+    }
+
     return 0;
 error:
     PyErr_Format(
@@ -1807,6 +1833,18 @@ error:
 #endif
 }
 
+#ifdef Py_GIL_DISABLED
+// The close failed: take back the objects already made FREE, so the region
+// is left open with local, tracked objects. Objects not yet converted fail
+// the CAS and are untouched.
+static int _undo_object_free(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
+{
+    (void)_Py_TryClaimFreeObject(_PyObject_CAST(key));
+    return 0;
+}
+#endif
+
 static int prepare_region_close_closed(region_trace_state_t *trace_state) {
     prepare_region_close_state_t state = {
         .keep = trace_state->has_weak_refs ? trace_state->visited : NULL,
@@ -1816,6 +1854,9 @@ static int prepare_region_close_closed(region_trace_state_t *trace_state) {
     if (_Py_hashtable_foreach(
         trace_state->visited, _prepare_region_close_visit, (void*)&state)
     ) {
+#ifdef Py_GIL_DISABLED
+        (void)_Py_hashtable_foreach(trace_state->visited, _undo_object_free, NULL);
+#endif
         return -1;
     }
     return 0;
