@@ -211,8 +211,7 @@ static inline void _Py_SetMortal(PyObject *op, short refcnt)
     if (op) {
         assert(_Py_IsImmortal(op));
 #ifdef Py_GIL_DISABLED
-        // TODO(Immutable): Do we need to do something here?
-        op->ob_tid = _Py_UNOWNED_TID;
+        _Py_atomic_store_uintptr(&op->ob_tid, _Py_UNOWNED_TID);
         op->ob_ref_local = 0;
         op->ob_ref_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED);
 #else
@@ -759,7 +758,7 @@ _PyObject_ResurrectStart(PyObject *op)
     _Py_IncRefTotal(_PyThreadState_GET());
 #endif
 #ifdef Py_GIL_DISABLED
-    _Py_atomic_store_uintptr_relaxed(&op->ob_tid, _Py_ThreadId());
+    _Py_atomic_store_uintptr(&op->ob_tid, _Py_ThreadId());
     _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, 1);
     _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, 0);
 #else

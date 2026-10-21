@@ -1438,7 +1438,7 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
 #ifndef _Py_PYRONA_INTERPRETER_SHARING
     // We get the owner first, just in case the actual owner is concurrently
     // decref'ing and then setting the owner to shared.
-    uintptr_t owner = _Py_atomic_load_uintptr_relaxed(&obj->ob_tid);
+    uintptr_t owner = _Py_atomic_load_uintptr(&obj->ob_tid);
 #endif
 
     // Update the LRC
