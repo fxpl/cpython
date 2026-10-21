@@ -86,6 +86,13 @@ struct collection_state {
     _PyObjectStack escaped;
 };
 
+// Used by region closing to check if GC happend concurrently with closing
+uint64_t
+_PyGC_GetEscapeEpoch(PyInterpreterState *interp)
+{
+    return _Py_atomic_load_uint64(&interp->gc.escape_epoch);
+}
+
 // iterate over a worklist
 #define WORKSTACK_FOR_EACH(stack, op) \
     for ((op) = (PyObject *)(stack)->head; (op) != NULL; (op) = (PyObject *)(op)->ob_tid)
@@ -2151,12 +2158,21 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
         return;
     }
 
-    // TODO: add comment
+    // Track the region-owned objects that `visit_decref()` reached from a
+    // tracked object: they are no longer encapsulated. This is done after
+    // `deduce_unreachable_heap()` so they take no part in this collection.
+    // `escape_epoch` moves while the world is still stopped; see
+    // `_PyGC_GetEscapeEpoch()`.
+    bool move_escape_epoch = false;
     PyObject *op;
     while ((op = _PyObjectStack_Pop(&state->escaped)) != NULL) {
         if (_PyObject_GC_IS_ENCAPSULATED(op)) {  // the stack may hold duplicates
             _PyObject_GC_TRACK(op);
+            move_escape_epoch = true;
         }
+    }
+    if (move_escape_epoch) {
+        _Py_atomic_add_uint64(&state->gcstate->escape_epoch, 1);
     }
 
 #ifdef GC_DEBUG

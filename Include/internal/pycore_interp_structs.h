@@ -264,6 +264,9 @@ struct _gc_runtime_state {
 #ifdef Py_GIL_DISABLED
     /* True if gc.freeze() has been used. */
     int freeze_active;
+    /* Collections that re-tracked a region-owned object; see
+       _PyGC_GetEscapeEpoch(). */
+    uint64_t escape_epoch;
 #else
     PyGC_Head *generation0;
 #endif

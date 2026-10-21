@@ -422,11 +422,31 @@ region_meta_release(TracingRegionObject *self)
     Py_END_CRITICAL_SECTION();
 }
 
+#ifdef Py_GIL_DISABLED
+// Untracks an object that a GC re-tracked after it was made FREE, keeping it
+// region-owned so that it is re-tracked lazily once the region is opened.
+static int _untrack_escaped(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
+{
+    PyObject *obj = _PyObject_CAST(key);
+    uint8_t bits = _Py_atomic_load_uint8_relaxed(&obj->ob_gc_bits);
+    if ((bits & (_PyGC_BITS_TRACKED | _PyGC_BITS_REGION_OWNED))
+        == (_PyGC_BITS_TRACKED | _PyGC_BITS_REGION_OWNED))
+    {
+        _Py_atomic_and_uint8(&obj->ob_gc_bits, (uint8_t)~_PyGC_BITS_TRACKED);
+    }
+    return 0;
+}
+#endif
+
 static int _region_close_lock_held(
     TracingRegionObject *self,
     Py_ssize_t bridge_rc,
     _Py_hashtable_t *visited,
     bool has_weak_refs
+#ifdef Py_GIL_DISABLED
+    , uint64_t escape_epoch
+#endif
 ) {
     if (self->state == Py_REGION_STATUS_TRACING_FAILED) {
         PyErr_Format(
@@ -451,6 +471,17 @@ static int _region_close_lock_held(
 
     assert(self->state == Py_REGION_STATUS_TRACING);
     region_set_state(self, Py_REGION_STATUS_CLOSED);
+
+#ifdef Py_GIL_DISABLED
+    // The closing thread may have detached (e.g. on a contended critical
+    // section) after the first object was made FREE, letting a GC re-track
+    // some of them through `visit_decref()`. A closed region must have no
+    // tracked members, or the self-edges in `TracingRegion_traverse()` are
+    // counted twice. Nothing below can detach, so no GC can follow the sweep.
+    if (_PyGC_GetEscapeEpoch(_PyInterpreterState_GET()) != escape_epoch) {
+        (void)_Py_hashtable_foreach(visited, _untrack_escaped, NULL);
+    }
+#endif
     return 0;
 }
 
@@ -459,10 +490,17 @@ static int _region_close(
     Py_ssize_t bridge_rc,
     _Py_hashtable_t *visited,
     bool has_weak_refs
+#ifdef Py_GIL_DISABLED
+    , uint64_t escape_epoch
+#endif
 ) {
     int result;
     Py_BEGIN_CRITICAL_SECTION(self);
-    result = _region_close_lock_held(self, bridge_rc, visited, has_weak_refs);
+    result = _region_close_lock_held(self, bridge_rc, visited, has_weak_refs
+#ifdef Py_GIL_DISABLED
+                                     , escape_epoch
+#endif
+                                     );
     Py_END_CRITICAL_SECTION();
     return result;
 }
@@ -750,6 +788,11 @@ typedef struct {
     bool strong_ref;
 
     bool has_weak_refs;
+
+#ifdef Py_GIL_DISABLED
+    // To be able to tell if GC ran during close
+    uint64_t escape_epoch;
+#endif
 } region_trace_state_t;
 
 // TEMPORARY: drop the trace's reference to a FREE object without claiming it.
@@ -1850,6 +1893,10 @@ static int prepare_region_close_closed(region_trace_state_t *trace_state) {
         .keep = trace_state->has_weak_refs ? trace_state->visited : NULL,
         .region = _PyObject_CAST(trace_state->bridge),
     };
+#ifdef Py_GIL_DISABLED
+    // Read before the first object is made FREE; see `_region_close_lock_held()`.
+    trace_state->escape_epoch = _PyGC_GetEscapeEpoch(_PyInterpreterState_GET());
+#endif
 
     if (_Py_hashtable_foreach(
         trace_state->visited, _prepare_region_close_visit, (void*)&state)
@@ -1986,7 +2033,11 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
 
     SUCCEEDS(prepare_region_close_closed(&state));
 
-    SUCCEEDS(_region_close(region, state.bridge_rc, state.visited, state.has_weak_refs));
+    SUCCEEDS(_region_close(region, state.bridge_rc, state.visited, state.has_weak_refs
+#ifdef Py_GIL_DISABLED
+                           , state.escape_epoch
+#endif
+                           ));
 
     goto finally;
 error:

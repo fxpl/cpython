@@ -374,6 +374,13 @@ extern Py_ssize_t _PyGC_GetFreezeCount(PyInterpreterState *interp);
 extern PyObject *_PyGC_GetObjects(PyInterpreterState *interp, int generation);
 extern PyObject *_PyGC_GetReferrers(PyInterpreterState *interp, PyObject *objs);
 
+#ifdef Py_GIL_DISABLED
+/* Number of collections that re-tracked a region-owned object. Bumped while
+ * the world is stopped, so a thread that compares two reads around a point
+ * where it may have detached sees every such collection in between. */
+extern uint64_t _PyGC_GetEscapeEpoch(PyInterpreterState *interp);
+#endif
+
 // Functions to clear types free lists
 /* Disposal of a list of objects that are known to be unreachable. Used by the
  * collector itself and by anything else that owns a set of objects it has
