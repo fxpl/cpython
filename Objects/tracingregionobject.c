@@ -1482,6 +1482,10 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     // We need to incref the object in case another thread kills
     // all references. This ensures that obj is still allocated on cleanup
     Py_INCREF(obj);
+    if (owner == _Py_FREE_TID) {
+        // Py_INCREF() claimed it for us, unless another thread claimed it first.
+        owner = _Py_atomic_load_uintptr_relaxed(&obj->ob_tid);
+    }
 
 #ifdef Py_GIL_DISABLED
     // ### Soundness
@@ -1522,7 +1526,7 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     }
 
 #ifdef Py_GIL_DISABLED
-    if (owner != _Py_ThreadId() && owner != _Py_UNOWNED_TID) {
+    if (owner != _Py_ThreadId() && owner != _Py_UNOWNED_TID && owner != _Py_FREE_TID) {
         Py_INCREF(obj);
         _Py_brc_queue_object(obj);
         if (PyList_Append(state->tree_trace_state->non_local_objs, obj)) {
@@ -1858,7 +1862,11 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         // Traverse item
         state.src = item;
         dbg("  - traversing %p", item);
-        SUCCEEDS(_PyObject_VisitReachable(item, (visitproc)_trace_visit, (void*)&state));
+        int res;
+        Py_BEGIN_CRITICAL_SECTION(item);
+        res = _PyObject_VisitReachable(item, (visitproc)_trace_visit, (void*)&state);
+        Py_END_CRITICAL_SECTION();
+        SUCCEEDS(res);
 
         if (PyWeakref_Check(item)) {
             PyWeakReference *wref = (PyWeakReference*)item;
@@ -1874,8 +1882,9 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
             // referent inflates its `Py_REFCNT` and thus the weak-ref LRC,
             // which still needs to be compensated for.
             Py_BEGIN_CRITICAL_SECTION(wref);
-            SUCCEEDS(_trace_visit(wref->wr_object, &state));
+            res = _trace_visit(wref->wr_object, &state);
             Py_END_CRITICAL_SECTION();
+            SUCCEEDS(res);
             state.strong_ref = true;
             state.has_weak_refs = true;
         }
