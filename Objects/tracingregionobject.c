@@ -501,7 +501,7 @@ static void _open_region(TracingRegionObject *self) {
 #ifdef Py_GIL_DISABLED
 // How long a tree close waits for another thread to merge the refcounts of a
 // non-local object before giving up.
-#define NON_LOCAL_MERGE_TIMEOUT_MS 1000
+#define NON_LOCAL_MERGE_TIMEOUT_MS 20 * 1000
 #endif
 
 // ###################################################################
@@ -1251,7 +1251,7 @@ mermaid_traverse(PyObject *obj, mermaid_dump_state_t *state)
         return mermaid_visit_sequence(obj, state);
     }
 
-    return _PyObject_VisitReachable(obj, (visitproc)mermaid_visit, (void *)state);
+    return _PyObject_VisitReachable(obj, (visitproc)mermaid_visit, (void *)state, false);
 }
 
 static void
@@ -1468,6 +1468,8 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
     // all references. This ensures that obj is still allocated on cleanup
     Py_INCREF(obj);
 
+    // FIXME(regions): This could probably be optimized, by not setting the flags
+    // if we know that we'll reset anywas.
 #ifdef Py_GIL_DISABLED
     // ### Soundness
     // A concurrent reader will first clear the flag and then update the RC
@@ -1534,6 +1536,10 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
         if (_PyList_AppendTakeRef(_PyList_CAST(state->pending), obj)) {
             return -1;
         }
+    } else {
+#ifdef Py_GIL_DISABLED
+        _PyMutex_SetWriteWatch(&obj->ob_mutex);
+#endif
     }
 
     return 0;
@@ -1691,6 +1697,19 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
     _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
 
     // ### Soundness:
+    // If the lock was acquired by a different thread during tracing the write
+    // watch is cleared and we'll fail.
+    //
+    // This catches cases, where a different thread moves a reference without
+    // effecting the RC of the object. Currently, to the best of our knowledge,
+    // all data structures in CPython use locks duing mutation. We may want to
+    // add an API for lock-free structures to inform us anyways. Lock-free
+    // structures should probably not be in regions in the first place.
+    if (_PyMutex_ClearWriteWatch(&obj->ob_mutex)) {
+        goto error;
+    }
+
+    // ### Soundness:
     // This catches RC updates that passed the flag but got paused before
     // the RC update.
     //
@@ -1808,8 +1827,13 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         // Traverse item
         state.src = item;
         dbg("  - traversing %p", item);
-        SUCCEEDS(_PyObject_VisitReachable(item, (visitproc)_trace_visit, (void*)&state));
+        SUCCEEDS(_PyObject_VisitReachable(item, (visitproc)_trace_visit, (void*)&state, true));
 
+        // FIXME(regions): tp_reachable should really have a different signature with
+        // flags, that indicate if a reference is weak or strong. That would drop
+        // all of this and also make it more sound. RN, we relock the object, but
+        // a concurrent thread could mess with this. Then we could also avoid
+        // special casing like this.
         if (PyWeakref_Check(item)) {
             PyWeakReference *wref = (PyWeakReference*)item;
             state.strong_ref = false;
@@ -1824,6 +1848,7 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
             // referent inflates its `Py_REFCNT` and thus the weak-ref LRC,
             // which still needs to be compensated for.
             Py_BEGIN_CRITICAL_SECTION(wref);
+            _PyMutex_SetWriteWatch(&_PyObject_CAST(wref)->ob_mutex);
             SUCCEEDS(_trace_visit(wref->wr_object, &state));
             Py_END_CRITICAL_SECTION();
             state.strong_ref = true;

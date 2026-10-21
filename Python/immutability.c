@@ -1277,7 +1277,7 @@ static int scc_build_traverse(PyObject *obj, scc_build_state_t *state) {
     }
 
     // Traverse the object
-    int result = _PyObject_VisitReachable(obj, (visitproc)scc_build_visit, state);
+    int result = _PyObject_VisitReachable(obj, (visitproc)scc_build_visit, state, false);
 
     // We can't visit these weakly referenced objects directly, as that may
     // build SCCs across weakreferences and keep objects alive when they
@@ -1424,7 +1424,7 @@ static void scc_reconstruct_rcs(PyObject *obj, scc_details_t *details) {
         PyObject* c = n;
         n = get_scc_next(c);
 
-        _PyObject_VisitReachable(c, (visitproc)_dissolve_scc_reconstruct_rcs_visit, scc_rep);
+        _PyObject_VisitReachable(c, (visitproc)_dissolve_scc_reconstruct_rcs_visit, scc_rep, false);
 
         if (Py_TYPE(c)->tp_del != NULL)
             details->has_legacy_finalizers++;
@@ -1903,7 +1903,7 @@ int _PyImmutability_CanViewAsDeepImmutable(PyObject *obj)
         PyObject *item = pop(state.pending);
 
         // Traverse the item
-        result = _PyObject_VisitReachable(item, can_view_as_immutable_visit, &state);
+        result = _PyObject_VisitReachable(item, can_view_as_immutable_visit, &state, false);
         Py_DECREF(item);
 
         // Stop on error.
@@ -2063,7 +2063,7 @@ static int traverse_freeze(PyObject *obj, shallow_freeze_state_t *freeze_state)
         return 0;
     }
 
-    result = _PyObject_VisitReachable(obj, (visitproc)freeze_visit, freeze_state);
+    result = _PyObject_VisitReachable(obj, (visitproc)freeze_visit, freeze_state, false);
     if (result != 0) {
         goto error;
     }

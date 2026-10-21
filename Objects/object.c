@@ -3708,7 +3708,7 @@ warn_missing_tp_reachable(PyTypeObject *tp)
 }
 
 int
-_PyObject_VisitReachable(PyObject *op, visitproc visit, void *arg)
+_PyObject_VisitReachable(PyObject *op, visitproc visit, void *arg, bool add_write_watch)
 {
     assert(op != NULL);
     PyTypeObject *tp = Py_TYPE(op);
@@ -3729,11 +3729,21 @@ _PyObject_VisitReachable(PyObject *op, visitproc visit, void *arg)
         // what keeps the borrowed references handed to visit alive.
         Py_BEGIN_CRITICAL_SECTION2_MUTEX(&_PyInterpreterState_GET()->types.mutex,
                                          &op->ob_mutex);
+#ifdef Py_GIL_DISABLED
+        if (add_write_watch) {
+            _PyMutex_SetWriteWatch(&op->ob_mutex);
+        }
+#endif
         result = reachable(op, visit, arg);
         Py_END_CRITICAL_SECTION2();
     }
     else {
         Py_BEGIN_CRITICAL_SECTION(op);
+#ifdef Py_GIL_DISABLED
+        if (add_write_watch) {
+            _PyMutex_SetWriteWatch(&op->ob_mutex);
+        }
+#endif
         result = reachable(op, visit, arg);
         Py_END_CRITICAL_SECTION();
     }
