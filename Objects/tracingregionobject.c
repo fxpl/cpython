@@ -351,16 +351,30 @@ static bool region_is_open(TracingRegionObject *self) {
     return res;
 }
 
+#ifdef Py_GIL_DISABLED
+// For tp_traverse: during a collection the world is stopped, and for
+// gc.get_referents() a stale answer only changes what is reported.
+static bool region_is_open_unlocked(TracingRegionObject *self) {
+    return _Py_atomic_load_int32_relaxed(&self->state) >= Py_REGION_STATUS_OPEN;
+}
+#endif
+
+// Writes are made under the critical section, but `region_is_open_unlocked()`
+// reads `state` without it.
+static void region_set_state(TracingRegionObject *self, int32_t state) {
+    _Py_atomic_store_int32_relaxed(&self->state, state);
+}
+
 static int region_set_tracing_mark(TracingRegionObject *self) {
     int res = 0;
     Py_BEGIN_CRITICAL_SECTION(self);
     if (self->state == Py_REGION_STATUS_CLOSED) {
         res = 1;
     } else if (self->state == Py_REGION_STATUS_OPEN) {
-        self->state = Py_REGION_STATUS_TRACING;
+        region_set_state(self, Py_REGION_STATUS_TRACING);
     } else if (self->state == Py_REGION_STATUS_TRACING) {
         // Someone else is tracing the region, mark it as failed.
-        self->state = Py_REGION_STATUS_TRACING_FAILED;
+        region_set_state(self, Py_REGION_STATUS_TRACING_FAILED);
         res = -1;
     }
     Py_END_CRITICAL_SECTION();
@@ -371,7 +385,7 @@ static int region_clear_tracing_mark(TracingRegionObject *self) {
     int res = 0;
     Py_BEGIN_CRITICAL_SECTION(self);
     assert(self->state != Py_REGION_STATUS_CLOSED && self->state != Py_REGION_STATUS_OPEN);
-    self->state = Py_REGION_STATUS_OPEN;
+    region_set_state(self, Py_REGION_STATUS_OPEN);
     Py_END_CRITICAL_SECTION();
     return res;
 }
@@ -430,13 +444,13 @@ static int _region_close_lock_held(
         dbg("- subtracting %zd internal references from the bridge object %p", bridge_rc, self);
         _Py_RefcntAdd(self, -bridge_rc);
 #endif
-        self->internal_bridge_refs = bridge_rc;
+        FT_ATOMIC_STORE_SSIZE_RELAXED(self->internal_bridge_refs, bridge_rc);
     } else {
         assert(self->internal_bridge_refs == 0);
     }
 
     assert(self->state == Py_REGION_STATUS_TRACING);
-    self->state = Py_REGION_STATUS_CLOSED;
+    region_set_state(self, Py_REGION_STATUS_CLOSED);
     return 0;
 }
 
@@ -464,14 +478,14 @@ static void _restore_internal_bridge_refs(TracingRegionObject *self) {
         dbg("- adding %zd internal references from the bridge object %p", self->internal_bridge_refs, self);
         _Py_RefcntAdd(self, self->internal_bridge_refs);
 #endif
-        self->internal_bridge_refs = 0;
+        FT_ATOMIC_STORE_SSIZE_RELAXED(self->internal_bridge_refs, 0);
     }
 }
 
 static void _open_region_lock_held(TracingRegionObject *self) {
     if (self->state >= Py_REGION_STATUS_OPEN) {
         if (self->state == Py_REGION_STATUS_TRACING) {
-            self->state = Py_REGION_STATUS_TRACING_FAILED;
+            region_set_state(self, Py_REGION_STATUS_TRACING_FAILED);
         }
         return;
     }
@@ -488,7 +502,7 @@ static void _open_region_lock_held(TracingRegionObject *self) {
     assert(gc_list_is_empty(&self->gc_list));
 #endif
 
-    self->state = Py_REGION_STATUS_OPEN;
+    region_set_state(self, Py_REGION_STATUS_OPEN);
 }
 
 static void _open_region(TracingRegionObject *self) {
@@ -2085,7 +2099,7 @@ TracingRegion_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
     // We make the region open by default, this ensures that the first close
     // will handle the region type correctly. Alternatively, we could make them
     // closed in the beginning, but then handle the cases specifically.
-    self->state = Py_REGION_STATUS_OPEN;
+    region_set_state(self, Py_REGION_STATUS_OPEN);
 
     return _PyObject_CAST(self);
 }
@@ -2177,13 +2191,14 @@ TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
     }
 #else
     // TODO: remset
-    if (region_is_open(self)) {
+    if (region_is_open_unlocked(self)) {
         Py_VISIT(self->dict);
     }
     else {
         // Closed: the region's objects are untracked, so the GC cannot see
         // their references to the bridge. Report them as self-edges.
-        for (Py_ssize_t i = 0; i < self->internal_bridge_refs; i++) {
+        Py_ssize_t internal_refs = FT_ATOMIC_LOAD_SSIZE_RELAXED(self->internal_bridge_refs);
+        for (Py_ssize_t i = 0; i < internal_refs; i++) {
             Py_VISIT(self);
         }
     }
