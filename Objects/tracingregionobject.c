@@ -453,20 +453,20 @@ static int _region_close(
     return result;
 }
 
-#ifdef _Py_PYRONA_INTERPRETER_SHARING
-/* Re-adds the references to the bridge object that `_region_close()` subtracted.
+/* Re-adds the references to the bridge object that `_region_close()` subtracted (if necessary).
  *
  * Note that this may resurrect the bridge object. Callers may need to handle this case.
  */
 static void _restore_internal_bridge_refs(TracingRegionObject *self) {
     if (self->internal_bridge_refs != 0) {
         assert(self->internal_bridge_refs >= 0);
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
         dbg("- adding %zd internal references from the bridge object %p", self->internal_bridge_refs, self);
         _Py_RefcntAdd(self, self->internal_bridge_refs);
+#endif
         self->internal_bridge_refs = 0;
     }
 }
-#endif
 
 static void _open_region_lock_held(TracingRegionObject *self) {
     if (self->state >= Py_REGION_STATUS_OPEN) {
@@ -480,9 +480,9 @@ static void _open_region_lock_held(TracingRegionObject *self) {
 
     region_meta_release_lock_held(self);
 
-#ifdef _Py_PYRONA_INTERPRETER_SHARING
     _restore_internal_bridge_refs(self);
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     // This only dissolves this region, all sub-regions remain closed.
     gc_list_dissolve(&self->gc_list);
     assert(gc_list_is_empty(&self->gc_list));
@@ -1651,8 +1651,7 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
 
 static void _make_object_free(PyObject *obj)
 {
-    // TODO: what happens if obj is queued for merging
-    // _PyObject_GC_UNTRACK(obj); // TODO: this keeps ob_tid during GC, but requires building a remset for the region
+    // TODO: this keeps ob_tid during GC, but requires building a remset for the region
 
     assert(!_Py_IsImmortal(obj));
 
@@ -1668,11 +1667,14 @@ static void _make_object_free(PyObject *obj)
 
     // @FRED -- this is the signal to "stay FREE after GC"
     // Make the object keep its owner during GC
-    _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_REGION_OWNED);
+    // If the object is tracked, we also untrack it.
+    if (_PyObject_GC_IS_TRACKED(obj)) {
+        _PyObject_GC_UNTRACK(obj);
+        _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_REGION_OWNED);
+    }
 
     // Make the object FREE
     _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
-    printf("Object %p is now free (%d)\n", obj, obj->ob_tid);
 }
 
 
@@ -2174,7 +2176,17 @@ TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
         Py_VISIT(self->dict);
     }
 #else
-    Py_VISIT(self->dict);
+    // TODO: remset
+    if (region_is_open(self)) {
+        Py_VISIT(self->dict);
+    }
+    else {
+        // Closed: the region's objects are untracked, so the GC cannot see
+        // their references to the bridge. Report them as self-edges.
+        for (Py_ssize_t i = 0; i < self->internal_bridge_refs; i++) {
+            Py_VISIT(self);
+        }
+    }
 #endif
     return 0;
 }

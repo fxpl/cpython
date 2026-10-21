@@ -292,7 +292,7 @@ static inline void _PyObject_GC_UNTRACK(
 #endif
 
 #ifdef Py_GIL_DISABLED
-    _PyObject_CLEAR_GC_BITS(op, _PyGC_BITS_TRACKED);
+    _PyObject_CLEAR_GC_BITS(op, _PyGC_BITS_TRACKED | _PyGC_BITS_REGION_OWNED);
 #else
     PyGC_Head *gc = _Py_AS_GC(op);
     PyGC_Head *prev = _PyGCHead_PREV(gc);
@@ -306,6 +306,16 @@ static inline void _PyObject_GC_UNTRACK(
 #endif
 }
 
+#ifdef Py_GIL_DISABLED
+// A closed-region object the GC does not see: region-owned and untracked.
+static inline int
+_PyObject_GC_IS_ENCAPSULATED(PyObject *op)
+{
+    uint8_t bits = _Py_atomic_load_uint8_relaxed(&op->ob_gc_bits);
+    return (bits & (_PyGC_BITS_REGION_OWNED | _PyGC_BITS_TRACKED))
+            == _PyGC_BITS_REGION_OWNED;
+}
+#endif
 
 
 /*

@@ -83,6 +83,7 @@ struct collection_state {
     struct worklist legacy_finalizers;
     struct worklist wrcb_to_call;
     struct worklist objs_to_decref;
+    _PyObjectStack escaped;
 };
 
 // iterate over a worklist
@@ -966,11 +967,18 @@ process_delayed_frees(PyInterpreterState *interp, struct collection_state *state
 static int
 visit_decref(PyObject *op, void *arg)
 {
-    if (_PyObject_GC_IS_TRACKED(op)
-        && !_Py_IsImmortal(op)
-        && !gc_is_frozen(op)
-        && !gc_is_alive(op))
-    {
+    // NOTE: Code rewritten in a more complicated way to avoid a double read
+    // of the gc bits
+    uint8_t bits = _Py_atomic_load_uint8_relaxed(&op->ob_gc_bits);
+    if (!(bits & _PyGC_BITS_TRACKED)) {
+        if (bits & _PyGC_BITS_REGION_OWNED) {
+            // Reached from a traced object, so no longer encapsulated.
+            // Track it after marking; on OOM it is found again next time.
+            (void)_PyObjectStack_Push(&((struct collection_state *)arg)->escaped, op);
+        }
+        return 0;
+    }
+    if (!_Py_IsImmortal(op) && !gc_is_frozen(op) && !gc_is_alive(op)) {
         // If update_refs hasn't reached this object yet, mark it
         // as (tentatively) unreachable and initialize ob_tid to zero.
         gc_maybe_init_refs(op);
@@ -1031,7 +1039,7 @@ update_refs(const mi_heap_t *heap, const mi_heap_area_t *area,
     // Subtract internal references from ob_tid. Objects with ob_tid > 0
     // are directly reachable from outside containers, and so can't be
     // collected.
-    Py_TYPE(op)->tp_traverse(op, visit_decref, NULL);
+    Py_TYPE(op)->tp_traverse(op, visit_decref, state);
     return true;
 }
 
@@ -2138,7 +2146,17 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
     if (err < 0) {
         _PyEval_StartTheWorld(interp);
         PyErr_NoMemory();
+        // Clear stack on early return
+        _PyObjectStack_Clear(&state->escaped);
         return;
+    }
+
+    // TODO: add comment
+    PyObject *op;
+    while ((op = _PyObjectStack_Pop(&state->escaped)) != NULL) {
+        if (_PyObject_GC_IS_ENCAPSULATED(op)) {  // the stack may hold duplicates
+            _PyObject_GC_TRACK(op);
+        }
     }
 
 #ifdef GC_DEBUG

@@ -496,6 +496,12 @@ _Py_TryClaimFreeObject(PyObject *op)
     }
     // TODO: clear the gc bits -- or else the object becomes free again on the next GC.
     // OTOH, that might not be so bad.
+
+    // Make this object GC tracked again
+    if (_PyObject_GC_IS_ENCAPSULATED(op)) {
+        _Py_atomic_or_uint8(&op->ob_gc_bits, _PyGC_BITS_TRACKED);
+    }
+
     return 1; // successfully claimed free object
 }
 
