@@ -100,17 +100,6 @@ _Py_brc_queue_object(PyObject *ob)
         return;
     }
 
-    // If the owning thread is blocked, we attach outself and then merge the RC for it.
-    if (_PyThreadState_TrySuspendDetached(&tstate->base)) {
-        Py_ssize_t refcount = _Py_ExplicitMergeRefcount(ob, -1);
-        _PyThreadState_ResumeDetached(&tstate->base);
-        PyMutex_Unlock(&bucket->mutex);
-        if (refcount == 0) {
-            _Py_Dealloc(ob);
-        }
-        return;
-    }
-
     if (_PyObjectStack_Push(&tstate->brc.objects_to_merge, ob) < 0) {
         PyMutex_Unlock(&bucket->mutex);
 
@@ -178,6 +167,31 @@ _Py_brc_merge_refcounts(PyThreadState *tstate)
 
     // Process the local stack until it's empty
     merge_queued_objects(&brc->local_objects_to_merge);
+}
+
+// Merge the queue of the thread that owns `tid` on its behalf, if that
+// thread is detached. An owner that was attached when objects were queued
+// may detach (e.g. block on a lock) before its eval breaker drains them.
+void
+_Py_brc_merge_for_detached_owner(uintptr_t tid)
+{
+    assert(tid != _Py_ThreadId());
+    PyInterpreterState *interp = _PyInterpreterState_GET();
+    struct _brc_bucket *bucket = get_bucket(interp, tid);
+    _PyObjectStack merged = {0};
+
+    PyMutex_Lock(&bucket->mutex);
+    _PyThreadStateImpl *tstate = find_thread_state(bucket, tid);
+    if (tstate != NULL && tstate->brc.objects_to_merge.head != NULL
+        && _PyThreadState_TrySuspendDetached(&tstate->base))
+    {
+        _PyObjectStack_Merge(&merged, &tstate->brc.objects_to_merge);
+        merge_queued_refcounts(&merged);
+        _PyThreadState_ResumeDetached(&tstate->base);
+    }
+    PyMutex_Unlock(&bucket->mutex);
+
+    decref_merged_objects(&merged);
 }
 
 void

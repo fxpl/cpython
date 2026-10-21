@@ -641,6 +641,16 @@ static int tree_trace_state_wait_non_local_objects(tree_trace_state_t* state, Py
         // front to leave the not-yet-scanned prefix untouched.
         for (Py_ssize_t i = PyList_GET_SIZE(objs) - 1; i >= 0; i--) {
             PyObject *obj = PyList_GET_ITEM(objs, i);
+            if (!_Py_REF_IS_MERGED(_Py_atomic_load_ssize_acquire(&obj->ob_ref_shared))) {
+                // The owner may have detached with `obj` still in its merge
+                // queue; merge it on the owner's behalf if so.
+                uintptr_t owner = _Py_atomic_load_uintptr_relaxed(&obj->ob_tid);
+                if (owner != _Py_UNOWNED_TID && owner != _Py_FREE_TID
+                    && owner != _Py_ThreadId())
+                {
+                    _Py_brc_merge_for_detached_owner(owner);
+                }
+            }
             if (_Py_REF_IS_MERGED(_Py_atomic_load_ssize_acquire(&obj->ob_ref_shared))) {
                 list_remove(objs, i);
             }
