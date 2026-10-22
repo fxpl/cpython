@@ -981,6 +981,12 @@ visit_decref(PyObject *op, void *arg)
         if (bits & _PyGC_BITS_REGION_OWNED) {
             // Reached from a traced object, so no longer encapsulated.
             // Track it after marking; on OOM it is found again next time.
+            //
+            // This only sees children of objects that `update_refs()`
+            // traverses, i.e. not of those already marked alive from the
+            // roots. That is deliberate: a live untracked object needs no
+            // tracking. It is tracked again when a refcount operation claims
+            // it, or here once it is no longer reachable from the roots.
             (void)_PyObjectStack_Push(&((struct collection_state *)arg)->escaped, op);
         }
         return 0;
