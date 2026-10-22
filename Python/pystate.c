@@ -2823,10 +2823,33 @@ _Py_GetThreadLocal_Addr(void)
     return (uintptr_t)&_Py_tss_tstate;
 }
 
-void _Py_CheckTracingFlag(PyObject *ob) {
+static inline Py_ALWAYS_INLINE void
+_Py_CheckTracingFlag(PyObject *ob) {
     if ((_Py_OB_FLAGS_LOAD(ob) & _Py_REGION_TRACE_FLAG) != 0) {
         _Py_OB_FLAG_REMOVE(ob, _Py_REGION_TRACE_FLAG);
     }
+}
+
+int _Py_IsOwnedByCurrentThread(PyObject *ob)
+{
+    uintptr_t owner = _Py_atomic_load_uintptr(&ob->ob_tid);
+    uintptr_t this = _Py_ThreadId();
+    if (owner == this) {
+        return 1;
+    }
+
+    // If the object is not owned by us, it may be part of a concurrent trace,
+    // we clear the flag instead.
+    _Py_CheckTracingFlag(ob);
+
+    // If the object is currently free, we try to claim ownership
+    if (owner == _Py_FREE_TID
+        && _Py_atomic_compare_exchange_uintptr(&ob->ob_tid, &owner, this)
+    ) {
+        return 1;
+    }
+
+    return 0;
 }
 #endif
 

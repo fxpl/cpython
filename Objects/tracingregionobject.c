@@ -9,6 +9,7 @@
 #include "pycore_weakref.h"
 #include "pycore_cown.h"
 #include "pycore_regionref.h"
+#include <stdint.h>
 #ifdef Py_GIL_DISABLED
 #include "pycore_parking_lot.h"   // _PyParkingLot_Park()
 #include "pycore_time.h"          // _PyDeadline_Init()
@@ -407,6 +408,59 @@ region_meta_release(TracingRegionObject *self)
     Py_END_CRITICAL_SECTION();
 }
 
+#ifdef Py_GIL_DISABLED
+// This marks the given object as free. For this to be safe,
+static void _decref_and_set_free_owner(PyObject *obj)
+{
+    // Immortal should never be passed to this, since they're frozen.
+    assert(!_Py_IsImmortal(obj));
+
+    // At this point we have proven isolation, so no ref should be reachable by
+    // other threads. Meaning no ref should be enqueued.
+    assert(!_Py_REF_IS_QUEUED(_Py_atomic_load_ssize(&obj->ob_ref_shared)));
+
+    // The shared RC for non-merged objects has a flag to indicate if weak-refs
+    // refer to the object. This flag gets lost when the RC is fully merged
+    // into the shared RC. Currently, we can't recreate it, so we just flag
+    // every object as having weak-references.
+    //
+    // In the future, we could preserve the flag, or only add it, if the object
+    // has actually been merged.
+    Py_ssize_t shared = _Py_atomic_exchange_ssize(
+        &obj->ob_ref_shared, _Py_REF_SHARED(0, _Py_REF_MAYBE_WEAKREF));
+    shared = Py_ARITHMETIC_RIGHT_SHIFT(Py_ssize_t, shared, _Py_REF_SHARED_SHIFT);
+    Py_ssize_t local = (Py_ssize_t)_Py_atomic_load_uint32_relaxed(&obj->ob_ref_local);
+    Py_ssize_t total = local + shared;
+
+    // If this addition makes the object immortal we
+    if (total > (Py_ssize_t)_Py_IMMORTAL_REFCNT_LOCAL) {
+        _Py_SetImmortal(obj);
+        return;
+    }
+
+    // The total is always above 1, since we have at least one path from the
+    // bridge and then the strong reference stored in the visited set.
+    // This function also removes the reference we took for the visited set.
+    //
+    // Weak-references also pull objects into the region. We still now that
+    // there has to be a second strong reference to the object as it would
+    // otherwise have been deallocated.
+    assert(total > 1);
+    _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, (uint32_t)total - 1);
+
+    // Notify the GC that the owner should be set to free and not the allocating
+    // thread.
+    _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_FREE_OWNER);
+
+    // Make the object FREE
+    dbg("  - The ob_tid of %p is set to free from %lu", obj, obj->ob_tid);
+    _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
+}
+#endif
+
+static int _region_trace_state_free_visited(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *decref_void);
+
 static int _region_close_lock_held(
     TracingRegionObject *self,
     Py_ssize_t bridge_rc,
@@ -422,7 +476,19 @@ static int _region_close_lock_held(
 
     dbg("Closing region %p", self);
 
+#ifdef Py_GIL_DISABLED
+    // This marks marks the owner of all objects as free and decrefs the value.
+    // This has to be done while the lock is held and its proven that the region
+    // is isolated as a concurrent thread could otherwise mess this up
+    (void)_Py_hashtable_foreach(
+        visited,
+        _region_trace_state_free_visited,
+        (void*)_decref_and_set_free_owner);
+    _Py_hashtable_clear(visited);
+#endif
+
     // See comment on `self->internal_bridge_refs`
+    assert(self->internal_bridge_refs == 0);
     if (bridge_rc != 0) {
         assert(bridge_rc >= 0);
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
@@ -430,10 +496,9 @@ static int _region_close_lock_held(
         _Py_RefcntAdd(self, -bridge_rc);
 #endif
         self->internal_bridge_refs = bridge_rc;
-    } else {
-        assert(self->internal_bridge_refs == 0);
     }
 
+    // Mark the region as closed
     assert(self->state == Py_REGION_STATUS_TRACING);
     self->state = Py_REGION_STATUS_CLOSED;
     return 0;
@@ -501,7 +566,7 @@ static void _open_region(TracingRegionObject *self) {
 #ifdef Py_GIL_DISABLED
 // How long a tree close waits for another thread to merge the refcounts of a
 // non-local object before giving up.
-#define NON_LOCAL_MERGE_TIMEOUT_MS 20 * 1000
+#define NON_LOCAL_MERGE_TIMEOUT_MS 1000
 #endif
 
 // ###################################################################
@@ -727,8 +792,9 @@ typedef struct {
     bool has_weak_refs;
 } region_trace_state_t;
 
+typedef void (*decref_t)(PyObject *);
 static int _region_trace_state_free_visited(
-    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
+    _Py_hashtable_t *ht, const void *key, const void *value, void *decref_void)
 {
     PyObject* obj = _PyObject_CAST(key);
 
@@ -739,7 +805,10 @@ static int _region_trace_state_free_visited(
 #endif
 
     // Balances the `Py_INCREF(obj)` taken when the object was marked visited.
-    Py_DECREF(obj);
+    //
+    // If this belongs to a successful close, it will also mark the region as closed
+    decref_t decref = (decref_t)decref_void;
+    decref(obj);
 
     PyMem_Free((void*)value);
 
@@ -755,7 +824,7 @@ static void region_trace_state_destroy(region_trace_state_t* state) {
     }
     if (state->visited) {
         (void)_Py_hashtable_foreach(
-            state->visited, _region_trace_state_free_visited, NULL);
+            state->visited, _region_trace_state_free_visited, (void*)_Py_DecRef);
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
     }
@@ -1504,14 +1573,30 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
 
     // Mark the object as visited, this stores the lrc_change for better error reporting
     if (_Py_hashtable_set(state->visited, obj, (void*)visit_info) == -1) {
+        Py_DECREF(obj);
         PyErr_NoMemory();
         return -1;
     }
 
 #ifdef Py_GIL_DISABLED
-    if (owner != _Py_ThreadId() && owner != _Py_UNOWNED_TID) {
+    uintptr_t this_tid = _Py_ThreadId();
+    if (owner == _Py_FREE_TID) {
+        // The object was marked as free, the INCREF for the visited set will have
+        // claimed ownership of the object for this thread. If not, we have a
+        // concurrent access and fail.
+        if (_Py_atomic_load_uintptr(&obj->ob_tid) ==  this_tid) {
+            owner = this_tid;
+        } else {
+            PyErr_Format(
+                PyExc_RuntimeError,
+                "the region cannot be closed due to a concurrent access to the object at %p [2]",
+                obj);
+            return -1;
+        }
+    } else if (owner != this_tid && owner != _Py_UNOWNED_TID) {
         Py_INCREF(obj);
         _Py_brc_queue_object(obj);
+        dbg("      - requesting RC ownership for %p from %lu", obj, owner);
         if (PyList_Append(state->tree_trace_state->non_local_objs, obj)) {
             return -1;
         }
@@ -1753,7 +1838,7 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
 error:
     PyErr_Format(
         PyExc_RuntimeError,
-        "the region cannot be closed due to a concurrent access to the object at %p",
+        "the region cannot be closed due to a concurrent access to the object at %p [1]",
         key);
     return -1;
 
@@ -1847,10 +1932,14 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
             // try-incref under `LOCK_WEAKREFS(referent)`, but pinning the
             // referent inflates its `Py_REFCNT` and thus the weak-ref LRC,
             // which still needs to be compensated for.
+            int res;
             Py_BEGIN_CRITICAL_SECTION(wref);
+#ifdef Py_GIL_DISABLED
             _PyMutex_SetWriteWatch(&_PyObject_CAST(wref)->ob_mutex);
-            SUCCEEDS(_trace_visit(wref->wr_object, &state));
+#endif
+            res = _trace_visit(wref->wr_object, &state);
             Py_END_CRITICAL_SECTION();
+            SUCCEEDS(res);
             state.strong_ref = true;
             state.has_weak_refs = true;
         }
@@ -2016,6 +2105,10 @@ static int try_close_region_tree(PyObject *root) {
                 &state, NON_LOCAL_MERGE_TIMEOUT_MS));
         }
         Py_ssize_t non_local_before = PyList_GET_SIZE(state.non_local_objs);
+
+        // Drain our own queue to avoid (some) incorrect failures to close
+        PyThreadState *tstate = _PyThreadState_GET();
+        _Py_brc_merge_refcounts(tstate);
 #endif
 
         dbg("- tracing region %p", region);
