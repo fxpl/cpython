@@ -184,7 +184,8 @@ _PyCown_owner_id_t _PyCown_ThisOwnerId(void) {
 #endif
 }
 
-static int PyCown_init(_PyCownObject *self, PyObject *args, PyObject *kwds) {
+static int PyCown_init(PyObject *op, PyObject *args, PyObject *kwds) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     // See if we got a value as a keyword argument
     static char *kwlist[] = {"value", NULL};
     PyObject *value = Py_None;
@@ -219,7 +220,8 @@ error:
     return -1;
 }
 
-static int PyCown_traverse(_PyCownObject *self, visitproc visit, void *arg) {
+static int PyCown_traverse(PyObject *op, visitproc visit, void *arg) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     // tp_traverse should never be called on cowns since they're not
     // tracked by the GC or in any other GC list. The cown type
@@ -237,7 +239,8 @@ static int PyCown_traverse(_PyCownObject *self, visitproc visit, void *arg) {
 #endif
 }
 
-static int PyCown_reachable(_PyCownObject *self, visitproc visit, void *arg) {
+static int PyCown_reachable(PyObject *op, visitproc visit, void *arg) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     Py_VISIT(Py_TYPE(self));
 
     // The value is explicitly not visited. Freezing or moving cowns should
@@ -247,7 +250,8 @@ static int PyCown_reachable(_PyCownObject *self, visitproc visit, void *arg) {
     return 0;
 }
 
-static int PyCown_clear(_PyCownObject *self) {
+static int PyCown_clear(PyObject *op) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     if (_PyImmutability_CanViewAsDeepImmutable(self->value)) {
         Py_CLEAR(self->value);
         return 0;
@@ -270,7 +274,7 @@ static void cown_dealloc_owned(_PyCownObject *self) {
     }
 
     // Clearing hands the region off, so no region reference points here any more.
-    PyCown_clear(self);
+    PyCown_clear(_PyObject_CAST(self));
     PyObject_GC_Del(self);
 }
 
@@ -327,7 +331,8 @@ static bool cown_handoff_dealloc(_PyCownObject *self) {
 }
 #endif
 
-static void PyCown_dealloc(_PyCownObject *self) {
+static void PyCown_dealloc(PyObject *op) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     // Reaching zero returned the cown to this interpreter's GC list. Nothing may
     // traverse it, `PyCown_traverse` asserts as much.
     PyObject_GC_UnTrack(self);
@@ -387,8 +392,9 @@ lock_acquire_parse_args(PyObject *args, PyObject *kwds,
 }
 
 static PyObject *
-CownObject_acquire(_PyCownObject *self, PyObject *args, PyObject *kwds)
+CownObject_acquire(PyObject *op, PyObject *args, PyObject *kwds)
 {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     // Parse the arguments
     PyTime_t timeout;
     if (lock_acquire_parse_args(args, kwds, &timeout) < 0) {
@@ -475,7 +481,8 @@ static int cown_release(_PyCownObject *self, _PyCown_owner_id_t unlocking_owner)
     return cown_release_unchecked(self, unlocking_owner);
 }
 
-static PyObject* CownObject_release(_PyCownObject *self, PyObject *ignored) {
+static PyObject* CownObject_release(PyObject *op, PyObject *ignored) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     _PyCown_owner_id_t owner = _PyCown_ThisOwnerId();
     if (cown_release(self, owner) < 0) {
         return NULL;
@@ -491,9 +498,9 @@ Release the cown, allowing another owner to acquire the cown\n\
 The cown must be in the locked state and must be unlocked from owner.");
 
 static PyObject *
-CownObject_locked(_PyCownObject *op, PyObject *Py_UNUSED(dummy))
+CownObject_locked(PyObject *op, PyObject *Py_UNUSED(dummy))
 {
-    return PyBool_FromLong(cown_get_owner(op) != RELEASED_OWNER_ID);
+    return PyBool_FromLong(cown_get_owner(_PyCownObject_CAST(op)) != RELEASED_OWNER_ID);
 }
 
 PyDoc_STRVAR(CownObject_locked_doc,
@@ -504,9 +511,9 @@ Return whether the cown currently released or acquired.  \n\
 Use `owned()` to check if the cown is acquired by the current thread.");
 
 static PyObject *
-CownObject_owned(_PyCownObject *op, PyObject *Py_UNUSED(dummy))
+CownObject_owned(PyObject *op, PyObject *Py_UNUSED(dummy))
 {
-    return PyBool_FromLong(cown_get_owner(op) == _PyCown_ThisOwnerId());
+    return PyBool_FromLong(cown_get_owner(_PyCownObject_CAST(op)) == _PyCown_ThisOwnerId());
 }
 
 PyDoc_STRVAR(CownObject_owned_doc,
@@ -518,31 +525,34 @@ Return true if the cown is currently acquired by this thread, false otherwise.")
 // Define the CownType with methods
 static PyMethodDef PyCown_methods[] = {
     {"acquire", _PyCFunction_CAST(CownObject_acquire), METH_VARARGS | METH_KEYWORDS, CownObject_acquire_doc},
-    {"release", _PyCFunction_CAST(CownObject_release), METH_NOARGS, CownObject_release_doc},
-    {"locked", _PyCFunction_CAST(CownObject_locked), METH_NOARGS, CownObject_locked_doc},
-    {"owned", _PyCFunction_CAST(CownObject_owned), METH_NOARGS, CownObject_owned_doc},
+    {"release", CownObject_release, METH_NOARGS, CownObject_release_doc},
+    {"locked", CownObject_locked, METH_NOARGS, CownObject_locked_doc},
+    {"owned", CownObject_owned, METH_NOARGS, CownObject_owned_doc},
     {NULL}  // Sentinel
 };
 
-static PyObject *CownObject_get_value(_PyCownObject *self, void *closure) {
+static PyObject *CownObject_get_value(PyObject *op, void *closure) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     BAIL_UNLESS_OWNED_NULL(self);
 
     return Py_NewRef(self->value);
 }
 
-static int CownObject_set_value(_PyCownObject *self, PyObject *value, void *closure) {
+static int CownObject_set_value(PyObject *op, PyObject *value, void *closure) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     BAIL_UNLESS_OWNED(self, -1);
 
     return cown_set_value(self, value);
 }
 
 static PyGetSetDef PyCownObject_getset[] = {
-    {"value", (getter)CownObject_get_value, (setter)CownObject_set_value,
+    {"value", CownObject_get_value, CownObject_set_value,
         "", NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
-static PyObject *PyCown_repr(_PyCownObject *self) {
+static PyObject *PyCown_repr(PyObject *op) {
+    _PyCownObject *self = _PyCownObject_CAST(op);
     _PyCown_owner_id_t owner = cown_get_owner(self);
     // This thread/interpreter owns the cown
     if (owner == _PyCown_ThisOwnerId()) {
@@ -571,15 +581,15 @@ PyTypeObject _PyCown_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
     .tp_name = "Cown",
     .tp_basicsize = sizeof(_PyCownObject),
-    .tp_dealloc = (destructor)PyCown_dealloc,
-    .tp_repr = (reprfunc)PyCown_repr,
+    .tp_dealloc = PyCown_dealloc,
+    .tp_repr = PyCown_repr,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE,
-    .tp_traverse = (traverseproc)PyCown_traverse,
-    .tp_reachable = (traverseproc)PyCown_reachable,
-    .tp_clear = (inquiry)PyCown_clear,
+    .tp_traverse = PyCown_traverse,
+    .tp_reachable = PyCown_reachable,
+    .tp_clear = PyCown_clear,
     .tp_methods = PyCown_methods,
     .tp_getset = PyCownObject_getset,
-    .tp_init = (initproc)PyCown_init,
+    .tp_init = PyCown_init,
     .tp_new = PyType_GenericNew,
 };
 

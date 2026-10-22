@@ -1265,8 +1265,9 @@ mermaid_visit_labeled(
 }
 
 static int
-mermaid_visit(PyObject *obj, mermaid_dump_state_t *state)
+mermaid_visit(PyObject *obj, void *arg)
 {
+    mermaid_dump_state_t *state = (mermaid_dump_state_t *)arg;
     return mermaid_visit_labeled(obj, state, NULL, NULL);
 }
 
@@ -1320,7 +1321,7 @@ mermaid_traverse(PyObject *obj, mermaid_dump_state_t *state)
         return mermaid_visit_sequence(obj, state);
     }
 
-    return _PyObject_VisitReachable(obj, (visitproc)mermaid_visit, (void *)state, false);
+    return _PyObject_VisitReachable(obj, mermaid_visit, (void *)state, false);
 }
 
 static void
@@ -1699,7 +1700,8 @@ static int _trace_visit_bridge_ref(PyObject* obj, region_trace_state_t* state) {
     return 0;
 }
 
-static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
+static int _trace_visit(PyObject* obj, void *arg) {
+    region_trace_state_t *state = (region_trace_state_t *)arg;
     // References to immutable objects are allowed
     if (_PyImmutability_CanViewAsDeepImmutable(obj)) {
         return 0;
@@ -1912,7 +1914,7 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         // Traverse item
         state.src = item;
         dbg("  - traversing %p", item);
-        SUCCEEDS(_PyObject_VisitReachable(item, (visitproc)_trace_visit, (void*)&state, true));
+        SUCCEEDS(_PyObject_VisitReachable(item, _trace_visit, (void*)&state, true));
 
         // FIXME(regions): tp_reachable should really have a different signature with
         // flags, that indicate if a reference is weak or strong. That would drop
@@ -2169,7 +2171,7 @@ TracingRegion_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
 }
 
 static int
-TracingRegion_init(TracingRegionObject *self, PyObject *args, PyObject *kwargs) {
+TracingRegion_init(PyObject *Py_UNUSED(self), PyObject *args, PyObject *kwargs) {
     // `tp_new()` already set the region up. Re-running the initialization here
     // would reset the GC list holding the contents of a closed region and drop
     // the reference count that `_region_close()` subtracted from the bridge
@@ -2245,7 +2247,8 @@ static void _region_delete_contents(TracingRegionObject *self) {
 }
 
 static int
-TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
+TracingRegion_traverse(PyObject *op, visitproc visit, void *arg) {
+    TracingRegionObject *self = _PyTRegion_CAST(op);
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     // If the region is closed, we know that everything inside the region is reachable.
     // There is no advantage of opening the region to double check. This would also
@@ -2260,7 +2263,8 @@ TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
 }
 
 static int
-TracingRegion_clear(TracingRegionObject *self) {
+TracingRegion_clear(PyObject *op) {
+    TracingRegionObject *self = _PyTRegion_CAST(op);
     // tp_clear is usually called from the GC during a STW so we don't
     // need to lock self
     _open_region_lock_held(self);
@@ -2293,8 +2297,8 @@ TracingRegion_finalize(PyObject *op) {
 }
 
 static void
-TracingRegion_dealloc(TracingRegionObject *self) {
-    PyObject *op = (PyObject *)self;
+TracingRegion_dealloc(PyObject *op) {
+    TracingRegionObject *self = _PyTRegion_CAST(op);
 
     // `PyObject_CallFinalizerFromDealloc()` requires a GC type to be tracked
     // while the finalizer runs, but the bridge object of a closed region may
@@ -2488,16 +2492,16 @@ PyTypeObject _PyTracingRegion_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "TracingRegion",
     .tp_basicsize = sizeof(TracingRegionObject),
-    .tp_dealloc = (destructor)TracingRegion_dealloc,
+    .tp_dealloc = TracingRegion_dealloc,
     .tp_repr = TracingRegion_repr,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE,
-    .tp_traverse = (traverseproc)TracingRegion_traverse,
-    .tp_clear = (inquiry)TracingRegion_clear,
+    .tp_traverse = TracingRegion_traverse,
+    .tp_clear = TracingRegion_clear,
     .tp_getset = TracingRegion_getset,
     .tp_methods = TracingRegion_methods,
     .tp_getattro = TracingRegion_getattro,
     .tp_setattro = TracingRegion_setattro,
-    .tp_init = (initproc)TracingRegion_init,
+    .tp_init = TracingRegion_init,
     .tp_new = TracingRegion_new,
     .tp_finalize = TracingRegion_finalize,
     .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
