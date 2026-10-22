@@ -1686,9 +1686,9 @@ error:
 static int
 is_immutable_by_construction_type(struct _Py_immutability_state *state, PyTypeObject *tp)
 {
-    PyMutex_Lock(&state->mutex);
+    _PyRWMutex_Lock(&state->mutex);
     int res = _Py_hashtable_get(state->immutable_by_construction_types, (void *)tp) != NULL;
-    PyMutex_Unlock(&state->mutex);
+    _PyRWMutex_Unlock(&state->mutex);
     return res;
 }
 
@@ -1700,13 +1700,13 @@ register_immutable_by_construction(struct _Py_immutability_state *state,
     // Registration must be idempotent: extension modules may re-run their
     // exec slot (e.g. on re-import) and init_state() may be retried.
     int res = 0;
-    PyMutex_Lock(&state->mutex);
+    _PyRWMutex_Lock(&state->mutex);
     if (_Py_hashtable_get(state->immutable_by_construction_types,
                           (void *)tp) == NULL) {
         res = _Py_hashtable_set(state->immutable_by_construction_types,
                                 (void *)tp, (void *)1);
     }
-    PyMutex_Unlock(&state->mutex);
+    _PyRWMutex_Unlock(&state->mutex);
     if (res < 0) {
         PyErr_NoMemory();
         return -1;

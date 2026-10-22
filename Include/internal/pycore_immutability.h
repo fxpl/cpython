@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 #include "pycore_cown.h"
+#include "pycore_lock.h"         // _PyRWMutex
 
 struct _PyRegionRefMetadata;
 
@@ -17,6 +18,7 @@ PyAPI_FUNC(int) _PyTracingRegion_IsClosed(PyObject* region);
 PyAPI_FUNC(void) _PyTracingRegion_Open(PyObject* region);
 PyAPI_FUNC(int) _PyTracingRegion_Detach(PyObject* region);
 PyAPI_FUNC(int) _PyTracingRegion_Attach(PyObject* region, _PyCown_owner_id_t owner);
+PyAPI_FUNC(void) _Py_ClearTracingFlag(PyObject* obj);
 
 /* Returns the region's metadata node, allocating it if this is the first
  * region reference the current close has found. Borrowed, and only valid while
@@ -36,8 +38,8 @@ PyAPI_FUNC(void) _PyTracingRegion_SetMetaOwner(
 
 struct _Py_immutability_state {
     _PyOnceFlag init_once;
-    // Guards immutable_by_construction_types and warned_types.
-    PyMutex mutex;
+    // Guards immutable_by_construction_types, warned_types and cleard_tracing_flags.
+    _PyRWMutex mutex;
     int late_init_done;  // Accessed atomically
     struct _Py_hashtable_t *immutable_by_construction_types;
     struct _Py_hashtable_t *warned_types;
@@ -46,6 +48,19 @@ struct _Py_immutability_state {
     // With the pre-freeze hook it can happen that freeze calls are
     // nested. This is stack of the enclosing freeze states.
     struct FreezeState *freeze_stack;
+
+#ifdef Py_GIL_DISABLED
+    // The size of the `cleared_tracing_flags` table, allowing atomic access
+    // without locking.
+    Py_ssize_t cleard_tracing_flags_len;
+    // Objects who's flags have been cleared. This map ensures that objects can't
+    // be reflagged by a different thread without the original flagger knowing
+    // about it.
+    //
+    // Mapping: (obj) -> (clear-count)
+    struct _Py_hashtable_t *cleard_tracing_flags;
+#endif
+
 #ifdef Py_DEBUG
     PyObject *traceback_func;  // For debugging purposes, can be NULL. Atomic.
 #endif

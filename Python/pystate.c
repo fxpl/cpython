@@ -675,6 +675,25 @@ init_interpreter(PyInterpreterState *interp,
     _Py_stackref_associate(interp, Py_True, PyStackRef_True);
 #endif
 
+#ifdef Py_GIL_DISABLED
+    interp->immutability.cleard_tracing_flags_len = 0;
+    // No thread state exists yet, so PyMem_Malloc can't be used.
+    _Py_hashtable_allocator_t raw_alloc = {
+        .malloc = PyMem_RawMalloc,
+        .free = PyMem_RawFree,
+    };
+    interp->immutability.cleard_tracing_flags = _Py_hashtable_new_full(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct,
+        NULL,
+        NULL,
+        &raw_alloc
+    );
+    if (interp->immutability.cleard_tracing_flags == NULL) {
+        return _PyStatus_NO_MEMORY();
+    }
+#endif
+
     interp->_initialized = 1;
     return _PyStatus_OK();
 }
@@ -869,6 +888,13 @@ interpreter_clear(PyInterpreterState *interp, PyThreadState *tstate)
         _Py_hashtable_destroy(interp->immutability.immutable_by_construction_types);
         interp->immutability.immutable_by_construction_types = NULL;
     }
+#ifdef Py_GIL_DISABLED
+    if (interp->immutability.cleard_tracing_flags != NULL) {
+        _Py_hashtable_destroy(interp->immutability.cleard_tracing_flags);
+        interp->immutability.cleard_tracing_flags = NULL;
+    }
+    interp->immutability.cleard_tracing_flags_len = 0;
+#endif
 #ifdef Py_DEBUG
     Py_CLEAR(interp->immutability.traceback_func);
 #endif
@@ -2823,13 +2849,6 @@ _Py_GetThreadLocal_Addr(void)
     return (uintptr_t)&_Py_tss_tstate;
 }
 
-static inline Py_ALWAYS_INLINE void
-_Py_CheckTracingFlag(PyObject *ob) {
-    if ((_Py_OB_FLAGS_LOAD(ob) & _Py_REGION_TRACE_FLAG) != 0) {
-        _Py_OB_FLAG_REMOVE(ob, _Py_REGION_TRACE_FLAG);
-    }
-}
-
 int _Py_IsOwnedByCurrentThread(PyObject *ob)
 {
     uintptr_t owner = _Py_atomic_load_uintptr(&ob->ob_tid);
@@ -2838,15 +2857,17 @@ int _Py_IsOwnedByCurrentThread(PyObject *ob)
         return 1;
     }
 
-    // If the object is not owned by us, it may be part of a concurrent trace,
-    // we clear the flag instead.
-    _Py_CheckTracingFlag(ob);
-
     // If the object is currently free, we try to claim ownership
     if (owner == _Py_FREE_TID
         && _Py_atomic_compare_exchange_uintptr(&ob->ob_tid, &owner, this)
     ) {
         return 1;
+    }
+
+    // If the object is not owned by us, it may be part of a concurrent trace,
+    // we clear the flag instead.
+    if ((_Py_OB_FLAGS_LOAD(ob) & _Py_REGION_TRACE_FLAG) != 0) {
+        _Py_ClearTracingFlag(ob);
     }
 
     return 0;

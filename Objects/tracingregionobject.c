@@ -798,6 +798,7 @@ static int _region_trace_state_free_visited(
 {
     PyObject* obj = _PyObject_CAST(key);
 
+    // TODO: This needs the WR lock and remove them from the list etc. FML
 #ifdef Py_GIL_DISABLED
     // Clear the flag we set during traversal, this is needed for the error
     // case if the validation code didn't clear the flag.
@@ -1746,7 +1747,26 @@ typedef struct {
     // close. NULL when the trace did not find any.
     _Py_hashtable_t *keep;
     PyObject *region;
+    // cleared_flags is only set if any flags have actually been cleared and
+    // if we hold the RW lock in write mode, meaning we can modify the content.
+    _Py_hashtable_t *cleared_flags;
 } prepare_region_close_state_t;
+
+static uintptr_t _dec_tracing_flag_cleared(_Py_hashtable_t *ht, PyObject *key) {
+    _Py_hashtable_entry_t *entry = _Py_hashtable_get_entry(ht, (void*)key);
+    if (entry == NULL) {
+        return 0;
+    }
+
+    uintptr_t old_value = (uintptr_t)entry->value;
+    if (old_value == 1) {
+        _Py_hashtable_steal(ht, (void*)key);
+    } else {
+        entry->value = (void*)(old_value - 1);
+    }
+
+    return old_value;
+}
 
 static int
 _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *value,
@@ -1778,10 +1798,13 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
     // first checks this flag and then clears it. If the flag has been
     // cleared we abort since a concurrent thread has/had access to
     // the traced objects.
-    if ((_Py_OB_FLAGS_LOAD(obj) & _Py_REGION_TRACE_FLAG) == 0) {
+    uint16_t ob_flags = _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
+    if (state->cleared_flags && _dec_tracing_flag_cleared(state->cleared_flags, obj)) {
+        // This assert can be false if a concurrent thread reflagged the object.
+        assert((ob_flags & _Py_REGION_TRACE_FLAG) == 0);
         goto error;
     }
-    _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
+    assert((ob_flags & _Py_REGION_TRACE_FLAG) != 0);
 
     // ### Soundness:
     // If the lock was acquired by a different thread during tracing the write
@@ -1850,17 +1873,38 @@ error:
 }
 
 static int prepare_region_close_closed(region_trace_state_t *trace_state) {
+    int result = 0;
+    struct _Py_immutability_state *imm_state = &_PyInterpreterState_GET()->immutability;
+    _Py_hashtable_t *cleared_flags = NULL;
+    _PyRWMutex_RLock(&imm_state->mutex);
+
+    // If objects had their flags cleared, we need to get the lock in write mode
+    // and check every object.
+    if (_Py_hashtable_len(imm_state->cleard_tracing_flags)) {
+        _PyRWMutex_RUnlock(&imm_state->mutex);
+        _PyRWMutex_Lock(&imm_state->mutex);
+        cleared_flags = imm_state->cleard_tracing_flags;
+        // We don't need to recheck the length, in the worst case, this validation
+        // pass is slightly slower. Which is fine since a race condition already
+        // happened somewhere
+    }
+
     prepare_region_close_state_t state = {
         .keep = trace_state->has_weak_refs ? trace_state->visited : NULL,
         .region = _PyObject_CAST(trace_state->bridge),
+        .cleared_flags = cleared_flags,
     };
 
-    if (_Py_hashtable_foreach(
-        trace_state->visited, _prepare_region_close_visit, (void*)&state)
-    ) {
-        return -1;
+    // FIXME: Use `_Py_hashtable_foreach_mut_func`, and use the value to indicate
+    // if the flag has been cleared and the decref already happend.
+    result = _Py_hashtable_foreach(trace_state->visited, _prepare_region_close_visit, (void*)&state);
+
+    if (cleared_flags) {
+        _PyRWMutex_Unlock(&imm_state->mutex);
+    } else {
+        _PyRWMutex_RUnlock(&imm_state->mutex);
     }
-    return 0;
+    return result;
 }
 
 static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trace_state) {
@@ -2583,5 +2627,35 @@ int _PyTracingRegion_Attach(PyObject* region, _PyCown_owner_id_t owner) {
     return 0;
 }
 
-// TODO(regions): Change thread-owner after close to be "Free"
-//
+void _Py_ClearTracingFlag(PyObject* obj) {
+    struct _Py_immutability_state *state = &_PyInterpreterState_GET()->immutability;
+    _PyRWMutex_Lock(&state->mutex);
+    uint16_t ob_flags = _Py_OB_FLAG_REMOVE(obj, _Py_REGION_TRACE_FLAG);
+
+    // Return if someone else has already reported and cleared
+    if ((ob_flags & _Py_REGION_TRACE_FLAG) == 0) {
+        goto finally;
+    }
+
+    _Py_hashtable_t *ht = state->cleard_tracing_flags;
+    _Py_hashtable_entry_t *entry = _Py_hashtable_get_entry(ht, obj);
+    if (entry != NULL) {
+        entry->value = (void *)((uintptr_t)entry->value + 1);
+    } else if (_Py_hashtable_set(ht, obj, (void *)(uintptr_t)1) < 0) {
+        // Out of Memory...
+        //
+        // This function can't fail since it's called from a unfailable RC macro.
+        // Instead, we pretend like everything is fine. The cleared flag will
+        // very likely still stop the validation. And it would basically be
+        // impossible to consistently abuse this out of memory without triggering
+        // other race detecting in region tracing code or out-of-memory errors.
+        // So, ostrich algorithm it is.
+        goto finally;
+    } else {
+        // On success we increment the atomic size
+        _Py_atomic_add_ssize(&state->cleard_tracing_flags_len, 1);
+    }
+
+finally:
+    _PyRWMutex_Unlock(&state->mutex);
+}

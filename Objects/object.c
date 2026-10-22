@@ -3678,7 +3678,7 @@ warn_missing_tp_reachable(PyTypeObject *tp)
 {
     struct _Py_immutability_state *state = &_PyInterpreterState_GET()->immutability;
     int warn = 0;
-    PyMutex_Lock(&state->mutex);
+    _PyRWMutex_Lock(&state->mutex);
     if (state->warned_types == NULL) {
         state->warned_types = _Py_hashtable_new(
             _Py_hashtable_hash_ptr,
@@ -3689,7 +3689,7 @@ warn_missing_tp_reachable(PyTypeObject *tp)
     {
         warn = _Py_hashtable_set(state->warned_types, (void *)tp, (void *)1) == 0;
     }
-    PyMutex_Unlock(&state->mutex);
+    _PyRWMutex_Unlock(&state->mutex);
     if (!warn) {
         return;
     }
