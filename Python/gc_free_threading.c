@@ -1000,6 +1000,20 @@ visit_decref(PyObject *op, void *arg)
     return 0;
 }
 
+// Push the region-owned objects below an escaped one, so that the whole
+// untracked part of a region is tracked at once instead of one level per
+// collection. A closed sub-region's bridge only visits itself, so this
+// stops there.
+static int
+visit_escaped(PyObject *op, void *arg)
+{
+    if (_PyObject_GC_IS_ENCAPSULATED(op)) {
+        // On OOM the rest is found again by `visit_decref()` next time.
+        (void)_PyObjectStack_Push((_PyObjectStack *)arg, op);
+    }
+    return 0;
+}
+
 // Compute the number of external references to objects in the heap
 // by subtracting internal references from the refcount. The difference is
 // computed in the ob_tid field (we restore it later).
@@ -2165,7 +2179,8 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
     }
 
     // Track the region-owned objects that `visit_decref()` reached from a
-    // tracked object: they are no longer encapsulated. This is done after
+    // tracked object: they are no longer encapsulated, and neither is
+    // anything region-owned below them. This is done after
     // `deduce_unreachable_heap()` so they take no part in this collection.
     // `escape_epoch` moves while the world is still stopped; see
     // `_PyGC_GetEscapeEpoch()`.
@@ -2173,8 +2188,10 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
     PyObject *op;
     while ((op = _PyObjectStack_Pop(&state->escaped)) != NULL) {
         if (_PyObject_GC_IS_ENCAPSULATED(op)) {  // the stack may hold duplicates
+            // Track before traversing, so that cycles end here.
             _PyObject_GC_TRACK(op);
             move_escape_epoch = true;
+            Py_TYPE(op)->tp_traverse(op, visit_escaped, &state->escaped);
         }
     }
     if (move_escape_epoch) {
