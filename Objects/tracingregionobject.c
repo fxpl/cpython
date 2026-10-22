@@ -1,4 +1,5 @@
 #include "Python.h"
+#include "pycore_hashtable.h"
 #include "pycore_interp.h"
 #include "pycore_gc.h"            // _PyObject_GC_IS_TRACKED()
 #include "pycore_dict.h"          // _PyObject_MaterializeManagedDict()
@@ -335,6 +336,9 @@ typedef struct {
     // NULL when nothing points into it. Only closed regions can have a meta,
     // opening restamps it
     _PyRegionRefMetadata *meta;
+#ifdef Py_GIL_DISABLED
+    _Py_hashtable_t *remset;
+#endif
 } TracingRegionObject;
 
 #define _PyTRegion_CAST(x) _Py_CAST(TracingRegionObject*, x)
@@ -446,6 +450,7 @@ static int _region_close_lock_held(
     bool has_weak_refs
 #ifdef Py_GIL_DISABLED
     , uint64_t escape_epoch
+    , _Py_hashtable_t *remset
 #endif
 ) {
     if (self->state == Py_REGION_STATUS_TRACING_FAILED) {
@@ -473,12 +478,20 @@ static int _region_close_lock_held(
     region_set_state(self, Py_REGION_STATUS_CLOSED);
 
 #ifdef Py_GIL_DISABLED
+    // Opening drops the remset, so a region being closed has none.
+    assert(self->remset == NULL);
+    self->remset = remset;
+#endif
+
+#ifdef Py_GIL_DISABLED
     // The closing thread may have detached (e.g. on a contended critical
     // section) after the first object was made FREE, letting a GC re-track
     // some of them through `visit_decref()`. A closed region must have no
     // tracked members, or the self-edges in `TracingRegion_traverse()` are
     // counted twice. Nothing below can detach, so no GC can follow the sweep.
-    if (_PyGC_GetEscapeEpoch(_PyInterpreterState_GET()) != escape_epoch) {
+    // A NULL remset means the contents stay tracked, so there is no sweep.
+    if (remset != NULL
+        && _PyGC_GetEscapeEpoch(_PyInterpreterState_GET()) != escape_epoch) {
         (void)_Py_hashtable_foreach(visited, _untrack_escaped, NULL);
     }
 #endif
@@ -492,6 +505,7 @@ static int _region_close(
     bool has_weak_refs
 #ifdef Py_GIL_DISABLED
     , uint64_t escape_epoch
+    , _Py_hashtable_t *remset
 #endif
 ) {
     int result;
@@ -499,6 +513,7 @@ static int _region_close(
     result = _region_close_lock_held(self, bridge_rc, visited, has_weak_refs
 #ifdef Py_GIL_DISABLED
                                      , escape_epoch
+                                     , remset
 #endif
                                      );
     Py_END_CRITICAL_SECTION();
@@ -534,6 +549,15 @@ static void _open_region_lock_held(TracingRegionObject *self) {
 
     _restore_internal_bridge_refs(self);
 
+#ifdef Py_GIL_DISABLED
+    // The contents are visible again and may change: the recorded edges no
+    // longer hold, and their targets may die.
+    if (self->remset != NULL) {
+        _Py_hashtable_destroy(self->remset);
+        self->remset = NULL;
+    }
+#endif
+
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     // This only dissolves this region, all sub-regions remain closed.
     gc_list_dissolve(&self->gc_list);
@@ -550,6 +574,10 @@ static void _open_region(TracingRegionObject *self) {
 }
 
 #define PER_REGION_TRACE_LIMIT 2
+
+// A closed region's contents are untracked only if its remset has at most
+// one entry per this many region objects; otherwise they stay tracked.
+#define REMSET_MAX_RATIO 4
 
 #ifdef Py_GIL_DISABLED
 // How long a tree close waits for another thread to merge the refcounts of a
@@ -792,6 +820,8 @@ typedef struct {
 #ifdef Py_GIL_DISABLED
     // To be able to tell if GC ran during close
     uint64_t escape_epoch;
+    // Map from external object to internal edges to that object
+    _Py_hashtable_t *remset;
 #endif
 } region_trace_state_t;
 
@@ -853,6 +883,13 @@ static void region_trace_state_destroy(region_trace_state_t* state) {
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
     }
+#ifdef Py_GIL_DISABLED
+    // Only set if the close failed; on success the region owns the remset.
+    if (state->remset != NULL) {
+        _Py_hashtable_destroy(state->remset);
+        state->remset = NULL;
+    }
+#endif
 }
 
 static int region_trace_state_init(
@@ -865,6 +902,9 @@ static int region_trace_state_init(
 ) {
     state->pending = NULL;
     state->visited = NULL;
+#ifdef Py_GIL_DISABLED
+    state->remset = NULL;
+#endif
 
     state->pending = PyList_New(0);
     if (state->pending == NULL) {
@@ -877,6 +917,15 @@ static int region_trace_state_init(
     if (state->visited == NULL) {
         goto error;
     }
+
+#ifdef Py_GIL_DISABLED
+    state->remset = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+    if (state->remset == NULL) {
+        goto error;
+    }
+#endif
 
     state->tree_trace_state = tree_trace_state;
     state->bridge = bridge;
@@ -1492,6 +1541,22 @@ error:
 }
 #pragma endregion // Error Reporting
 
+#ifdef Py_GIL_DISABLED
+// Count one more edge from inside the region to `obj`, which stays outside.
+static int add_to_remset(_Py_hashtable_t *remset, PyObject *obj) {
+    _Py_hashtable_entry_t *entry = _Py_hashtable_get_entry(remset, obj);
+    if (entry != NULL) {
+        entry->value = (void *)((uintptr_t)entry->value + 1);
+        return 0;
+    }
+    if (_Py_hashtable_set(remset, obj, (void *)1) < 0) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    return 0;
+}
+#endif
+
 // ###################################################################
 // Tracing Region Impl
 // ###################################################################
@@ -1519,6 +1584,20 @@ static int _move_obj(PyObject* obj, region_trace_state_t* state) {
         region_trace_state_set_restart(state);
         return 0;
     case Py_MOVABLE_COWN:
+#ifdef Py_GIL_DISABLED
+        // The edge leaves the region; the bridge reports it to the GC
+        // while the region is closed. Weak edges hold no reference.
+        //
+        // Edges to immutable objects are not recorded: a deeply immutable
+        // object only references immutable objects, so it cannot close a
+        // cycle back through the (mutable) bridge, and hiding the edge only
+        // keeps it alive while the region holds it. This stops being true
+        // once escape hatches let immutable objects reference mutable ones;
+        // then they can be part of cycles and have to be recorded too.
+        if (state->strong_ref && add_to_remset(state->remset, obj) < 0) {
+            return TRACE_RES_ERR;
+        }
+#endif
         return 0;
     default:
         Py_UNREACHABLE();
@@ -1746,7 +1825,7 @@ static int _trace_visit(PyObject* obj, region_trace_state_t* state) {
     return _move_obj(obj, state);
 }
 
-static void _make_object_free(PyObject *obj)
+static void _make_object_free(PyObject *obj, bool untrack)
 {
     // TODO: this keeps ob_tid during GC, but requires building a remset for the region
 
@@ -1766,7 +1845,10 @@ static void _make_object_free(PyObject *obj)
     // Make the object keep its owner during GC
     // If the object is tracked, we also untrack it.
     if (_PyObject_GC_IS_TRACKED(obj)) {
-        _PyObject_GC_UNTRACK(obj);
+        if (untrack) {
+            // Clears REGION_OWNED as well, so it is set below.
+            _PyObject_GC_UNTRACK(obj);
+        }
         _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_REGION_OWNED);
     }
 
@@ -1780,6 +1862,10 @@ typedef struct {
     // close. NULL when the trace did not find any.
     _Py_hashtable_t *keep;
     PyObject *region;
+#ifdef Py_GIL_DISABLED
+    // Whether the region's objects are untracked (they have a remset).
+    bool untrack;
+#endif
 } prepare_region_close_state_t;
 
 static int
@@ -1849,7 +1935,7 @@ _prepare_region_close_visit(_Py_hashtable_t *ht, const void *key, const void *va
     // here, but that will re-own them when we drop their pin's later!
     // An UGLY hack to test this would be dropping the reference count
     // prematurely in _make_object_free.
-    _make_object_free(obj);
+    _make_object_free(obj, state->untrack);
 
     // ### Soundness:
     // This catches RC updates that passed the flag but got paused before
@@ -1892,6 +1978,9 @@ static int prepare_region_close_closed(region_trace_state_t *trace_state) {
     prepare_region_close_state_t state = {
         .keep = trace_state->has_weak_refs ? trace_state->visited : NULL,
         .region = _PyObject_CAST(trace_state->bridge),
+#ifdef Py_GIL_DISABLED
+        .untrack = trace_state->remset != NULL,
+#endif
     };
 #ifdef Py_GIL_DISABLED
     // Read before the first object is made FREE; see `_region_close_lock_held()`.
@@ -2031,13 +2120,30 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         goto error;
     }
 
+#ifdef Py_GIL_DISABLED
+    // Untracking the contents hides their edges from the GC, and the remset
+    // has to report them instead. If the remset is large next to the region,
+    // keep the contents tracked and drop the remset. From here on, a NULL
+    // remset means "contents stay tracked".
+    if (_Py_hashtable_len(state.remset) * REMSET_MAX_RATIO
+        > _Py_hashtable_len(state.visited))
+    {
+        _Py_hashtable_destroy(state.remset);
+        state.remset = NULL;
+    }
+#endif
+
     SUCCEEDS(prepare_region_close_closed(&state));
 
     SUCCEEDS(_region_close(region, state.bridge_rc, state.visited, state.has_weak_refs
 #ifdef Py_GIL_DISABLED
                            , state.escape_epoch
+                           , state.remset
 #endif
                            ));
+#ifdef Py_GIL_DISABLED
+    state.remset = NULL;   // now owned by the region
+#endif
 
     goto finally;
 error:
@@ -2291,6 +2397,27 @@ static void _region_delete_contents(TracingRegionObject *self) {
 #endif
 }
 
+#ifdef Py_GIL_DISABLED
+typedef struct {
+    visitproc visit;
+    void *arg;
+} remset_visit_t;
+
+// Visit a remset entry once per recorded edge.
+static int _remset_visit(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *data)
+{
+    remset_visit_t *v = (remset_visit_t *)data;
+    for (uintptr_t i = 0; i < (uintptr_t)value; i++) {
+        int res = v->visit((PyObject *)key, v->arg);
+        if (res) {
+            return res;
+        }
+    }
+    return 0;
+}
+#endif
+
 static int
 TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
@@ -2301,8 +2428,11 @@ TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
         Py_VISIT(self->dict);
     }
 #else
-    // TODO: remset
-    if (region_is_open_unlocked(self)) {
+    // The GC (and gc.get_referents()) only traverses with the world stopped,
+    // and the remset only changes while it runs.
+    if (region_is_open_unlocked(self) || self->remset == NULL) {
+        // Open, or closed with tracked contents: the GC sees every edge
+        // through the dict.
         Py_VISIT(self->dict);
     }
     else {
@@ -2311,6 +2441,12 @@ TracingRegion_traverse(TracingRegionObject *self, visitproc visit, void *arg) {
         Py_ssize_t internal_refs = FT_ATOMIC_LOAD_SSIZE_RELAXED(self->internal_bridge_refs);
         for (Py_ssize_t i = 0; i < internal_refs; i++) {
             Py_VISIT(self);
+        }
+        // Likewise for their references to objects outside the region.
+        remset_visit_t v = {visit, arg};
+        int res = _Py_hashtable_foreach(self->remset, _remset_visit, &v);
+        if (res) {
+            return res;
         }
     }
 #endif
@@ -2372,6 +2508,13 @@ TracingRegion_dealloc(TracingRegionObject *self) {
     Py_END_CRITICAL_SECTION();
 
     PyObject_GC_UnTrack(self);
+#ifdef Py_GIL_DISABLED
+    // Normally dropped when the finalizer opens the region; this is a backstop.
+    if (self->remset != NULL) {
+        _Py_hashtable_destroy(self->remset);
+        self->remset = NULL;
+    }
+#endif
     Py_TYPE(self)->tp_free(op);
 }
 
