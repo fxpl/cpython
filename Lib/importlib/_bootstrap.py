@@ -44,9 +44,11 @@ def _wrap(new, old):
             setattr(new, replace, getattr(old, replace))
     new.__dict__.update(old.__dict__)
 
+# The module type, captured in _setup().
+_ModuleType = None
 
 def _new_module(name):
-    return type(sys)(name)
+    return _ModuleType(name)
 
 
 # Module-level locking ########################################################
@@ -1506,14 +1508,16 @@ def _setup(sys_module, _imp_module):
     modules, those two modules must be explicitly passed in.
 
     """
-    global _imp, sys, _blocking_on
+    global _imp, sys, _blocking_on, _ModuleType
     _imp = _imp_module
     sys = sys_module
+    # This runs at interpreter startup, before anything can be frozen, so
+    # `sys` is not an ImmutableModule proxy yet.
+    _ModuleType = type(sys)
 
     # Set up the spec for existing builtin/frozen modules.
-    module_type = type(sys)
     for name, module in sys.modules.items():
-        if isinstance(module, module_type):
+        if isinstance(module, _ModuleType):
             if name in sys.builtin_module_names:
                 loader = BuiltinImporter
             elif _imp.is_frozen(name):

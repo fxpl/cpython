@@ -55,16 +55,12 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - i686-pc-windows-msvc/msvc
           - x86_64-pc-windows-msvc/msvc
           - aarch64-pc-windows-msvc/msvc
         debug:
           - true
           - false
         include:
-          - target: i686-pc-windows-msvc/msvc
-            architecture: Win32
-            runner: windows-2025
           - target: x86_64-pc-windows-msvc/msvc
             architecture: x64
             runner: windows-2025
@@ -80,6 +76,8 @@ jobs:
           python-version: '3.11'
       # PCbuild downloads LLVM automatically:
       - name: Build
+        env:
+          PreferredToolArchitecture: ${{ matrix.architecture }}
         run: |
           ./PCbuild/build.bat --experimental-jit ${{ matrix.debug && '-d' || '' }} -p ${{ matrix.architecture }}
       - name: Test

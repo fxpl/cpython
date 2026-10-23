@@ -2253,6 +2253,13 @@ def with_mimalloc():
     return _testcapi.WITH_MIMALLOC
 
 
+def mimalloc_default_for_sharing():
+    # Sharing immutable objects between interpreters requires mimalloc,
+    # so it is the default allocator on GIL builds that enable sharing.
+    import immutable
+    return immutable._cross_interpreter_sharing
+
+
 class _ALWAYS_EQ:
     """
     Object that is equal to anything.

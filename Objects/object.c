@@ -45,6 +45,16 @@
 /* Defined in tracemalloc.c */
 extern void _PyMem_DumpTraceback(int fd, const void *ptr);
 
+uint16_t _Py_LoadOpFlags(PyObject *op) {
+    return _Py_OB_FLAGS_LOAD(op);
+}
+
+void _Py_OpFlagsAdd(PyObject *op, uint16_t flag) {
+    _Py_OB_FLAGS_ADD(op, flag);
+}
+void _Py_OpFlagsRmv(PyObject *op, uint16_t flag) {
+    _Py_OB_FLAGS_REMOVE(op, flag);
+}
 
 int
 _PyObject_CheckConsistency(PyObject *op, int check_content)
@@ -357,6 +367,63 @@ _Py_DecRef(PyObject *o)
     Py_DECREF(o);
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+// Artifact[Implementation]: The atomic RC branch for immutable objects in Py_INCREF.
+void _Py_SlowRefcntAdd(PyObject *op, Py_ssize_t n) {
+    if (_Py_NeedsImmutableRC(op)) {
+        _Py_RefcntAdd_Immutable(op, n);
+    } else if (_Py_NeedsAtomicRC(op)) {
+        _Py_atomic_add_uint32(&op->ob_refcnt, (uint32_t)n);
+    } else {
+        _Py_RefcntAdd(op, n);
+        // assert(false);
+    }
+}
+void _Py_SlowIncRef(PyObject *op) {
+    _Py_SlowRefcntAdd(op, 1);
+}
+void _Py_SlowDecRef(PyObject *op) {
+    if (_Py_NeedsImmutableRC(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_Dealloc(op);
+        }
+    } else if (_Py_NeedsAtomicRC(op)) {
+        // A previous value of 1 means the new value is now 0
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+        assert(old > 0);
+        if (old == 1) {
+            _Py_Dealloc(op);
+        }
+    } else {
+        // TODO: Why is this needed?
+        Py_DECREF(op);
+        // assert(false);
+    }
+}
+void _Py_SlowDecRefSpecialized(PyObject *op, const destructor destruct) {
+    if (_Py_NeedsImmutableRC(op)) {
+        if (_Py_DecRef_Immutable(op)) {
+            _Py_CLEAR_IMMUTABLE(op);
+            _PyReftracerTrack(op, PyRefTracer_DESTROY);
+            destruct(op);
+        }
+    } else if (_Py_NeedsAtomicRC(op)) {
+        // A previous value of 1 means the new value is now 0
+        uint32_t old = _Py_atomic_add_uint32(&op->ob_refcnt, -1);
+        assert(old > 0);
+        if (old == 1) {
+            _Py_CLEAR_IMMUTABLE(op);
+            _PyReftracerTrack(op, PyRefTracer_DESTROY);
+            destruct(op);
+        }
+    } else {
+        // TODO: Why is this needed?
+        _Py_DECREF_SPECIALIZED(op, destruct);
+        // assert(false);
+    }
+}
+#endif // _Py_PYRONA_INTERPRETER_SHARING
+
 #ifdef Py_GIL_DISABLED
 # ifdef Py_REF_DEBUG
 static int
@@ -423,6 +490,8 @@ void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
     if (_Py_DecRefSharedIsDead(o, filename, lineno)) {
+        // TODO(Immutable): Should make mutable here?
+        _Py_CLEAR_IMMUTABLE(o);
         _Py_Dealloc(o);
     }
 }
@@ -440,6 +509,8 @@ _Py_MergeZeroLocalRefcount(PyObject *op)
 
     Py_ssize_t shared = _Py_atomic_load_ssize_acquire(&op->ob_ref_shared);
     if (shared == 0) {
+        // TODO(Immutable):  Clear the immutable flag here.
+        _Py_CLEAR_IMMUTABLE(op);
         // Fast-path: shared refcount is zero (including flags)
         _Py_Dealloc(op);
         return;
@@ -458,6 +529,8 @@ _Py_MergeZeroLocalRefcount(PyObject *op)
                                                 &shared, new_shared));
 
     if (new_shared == _Py_REF_MERGED) {
+        // TODO(Immutable):  Clear the immutable flag here.
+        _Py_CLEAR_IMMUTABLE(op);
         // i.e., the shared refcount is zero (only the flags are set) so we
         // deallocate the object.
         _Py_Dealloc(op);
@@ -1530,7 +1603,13 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
 
     _PyUnicode_InternMortal(tstate->interp, &name);
     if (tp->tp_setattro != NULL) {
-        err = (*tp->tp_setattro)(v, name, value);
+        if(Py_CHECKWRITE(v)){
+            err = (*tp->tp_setattro)(v, name, value);
+        }else{
+            PyErr_WriteToImmutable(v);
+            err = -1;
+        }
+
         Py_DECREF(name);
         return err;
     }
@@ -1540,7 +1619,14 @@ PyObject_SetAttr(PyObject *v, PyObject *name, PyObject *value)
             Py_DECREF(name);
             return -1;
         }
-        err = (*tp->tp_setattr)(v, (char *)name_str, value);
+
+        if(Py_CHECKWRITE(v)){
+            err = (*tp->tp_setattr)(v, (char *)name_str, value);
+        }else{
+            PyErr_WriteToImmutable(v);
+            err = -1;
+        }
+
         Py_DECREF(name);
         return err;
     }
@@ -2033,6 +2119,11 @@ _PyObject_GenericSetAttrWithDict(PyObject *obj, PyObject *name,
         return -1;
     }
 
+    if(!Py_CHECKWRITE(obj)){
+        PyErr_WriteToImmutable(obj);
+        return -1;
+    }
+
     Py_INCREF(name);
     _Py_INCREF_TYPE(tp);
 
@@ -2394,6 +2485,7 @@ PyTypeObject _PyNone_Type = {
     0,                  /*tp_init */
     0,                  /*tp_alloc */
     none_new,           /*tp_new */
+    .tp_reachable = _PyObject_ReachableVisitType,
 };
 
 PyObject _Py_NoneStruct = _PyObject_HEAD_INIT(&_PyNone_Type);
@@ -2526,7 +2618,7 @@ extern PyTypeObject _PyMemoryIter_Type;
 extern PyTypeObject _PyPositionsIterator;
 extern PyTypeObject _Py_GenericAliasIterType;
 
-static PyTypeObject* static_types[_Py_NUM_MANAGED_PREINITIALIZED_TYPES] = {
+static PyTypeObject* static_types[] = {
     // The two most important base types: must be initialized first and
     // deallocated last.
     &PyBaseObject_Type,
@@ -2627,6 +2719,7 @@ static PyTypeObject* static_types[_Py_NUM_MANAGED_PREINITIALIZED_TYPES] = {
     &_PyHamt_BitmapNode_Type,
     &_PyHamt_CollisionNode_Type,
     &_PyHamt_Type,
+    &_PyImmModule_Type,
     &_PyInstructionSequence_Type,
     &_PyInterpolation_Type,
     &_PyLegacyEventHandler_Type,
@@ -2663,6 +2756,10 @@ static PyTypeObject* static_types[_Py_NUM_MANAGED_PREINITIALIZED_TYPES] = {
     &PyODictValues_Type,  // base=&PyDictValues_Type
     &PyODict_Type,        // base=&PyDict_Type
 };
+// A sized array would silently drop excess initializers (only a warning),
+// leaving the trailing types uninitialized per interpreter.
+static_assert(Py_ARRAY_LENGTH(static_types) == _Py_NUM_MANAGED_PREINITIALIZED_TYPES,
+              "update _Py_NUM_MANAGED_PREINITIALIZED_TYPES");
 
 
 PyStatus
@@ -2783,7 +2880,8 @@ _Py_SetImmortalUntracked(PyObject *op)
     _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, 0);
     _Py_atomic_or_uint8(&op->ob_gc_bits, _PyGC_BITS_DEFERRED);
 #elif SIZEOF_VOID_P > 4
-    op->ob_flags = _Py_IMMORTAL_FLAGS;
+    // Preserve existing flag
+    _Py_OB_FLAGS_ADD(op, _Py_IMMORTAL_FLAGS);
     op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;
 #else
     op->ob_refcnt = _Py_IMMORTAL_INITIAL_REFCNT;
@@ -2793,6 +2891,7 @@ _Py_SetImmortalUntracked(PyObject *op)
 void
 _Py_SetImmortal(PyObject *op)
 {
+    // TODO(Immutable) This will need some care with SCC work.
     if (PyObject_IS_GC(op) && _PyObject_GC_IS_TRACKED(op)) {
         _PyObject_GC_UNTRACK(op);
     }
@@ -3315,6 +3414,7 @@ _Py_Dealloc(PyObject *op)
 #ifdef Py_TRACE_REFS
     _Py_ForgetReference(op);
 #endif
+    _Py_RESET_IMMUTABLE(op);
     _PyReftracerTrack(op, PyRefTracer_DESTROY);
     (*dealloc)(op);
 
@@ -3505,6 +3605,158 @@ _PyObject_VisitType(PyObject *op, visitproc visit, void *arg)
     _PyObject_ASSERT((PyObject *)tp, PyType_HasFeature(tp, Py_TPFLAGS_HEAPTYPE));
     Py_VISIT(tp);
     return 0;
+}
+
+int
+_PyObject_ReachableVisitType(PyObject *op, reachablevisitproc visit, void *arg)
+{
+    assert(op != NULL);
+    Py_VISIT_REACHABLE(Py_TYPE(op), Py_REACHABLE_STRONG);
+    return 0;
+}
+
+// Lets a traverseproc report to a reachablevisitproc. Everything the GC
+// sees is a strong reference.
+typedef struct {
+    reachablevisitproc visit;
+    void *arg;
+} reachable_adapter_t;
+
+static int
+reachable_adapter_visit(PyObject *op, void *adapter_untyped)
+{
+    reachable_adapter_t *adapter = (reachable_adapter_t *)adapter_untyped;
+    return adapter->visit(op, Py_REACHABLE_STRONG, adapter->arg);
+}
+
+int
+_PyObject_ReachableFromTraverseproc(PyObject *op, traverseproc traverse,
+                                    reachablevisitproc visit, void *arg)
+{
+    reachable_adapter_t adapter = {visit, arg};
+    return traverse(op, reachable_adapter_visit, &adapter);
+}
+
+int
+_PyObject_ReachableVisitTypeAndTraverse(PyObject *op, reachablevisitproc visit, void *arg)
+{
+    assert(op != NULL);
+    Py_VISIT_REACHABLE(Py_TYPE(op), Py_REACHABLE_STRONG);
+
+    assert(Py_TYPE(op)->tp_traverse != NULL);
+    assert(Py_TYPE(op)->tp_traverse != _PyObject_VisitType);
+    return _PyObject_ReachableFromTraverseproc(op, Py_TYPE(op)->tp_traverse,
+                                               visit, arg);
+}
+
+// Forwards to the real visitproc, noting whether tp_traverse visited the type.
+typedef struct {
+    reachablevisitproc visit;
+    void *arg;
+    PyObject *type;
+    int type_visited;
+} type_visit_tracker_t;
+
+static int
+track_type_visit(PyObject *op, void *tracker_untyped)
+{
+    type_visit_tracker_t *tracker = (type_visit_tracker_t *)tracker_untyped;
+    if (op == tracker->type) {
+        tracker->type_visited = 1;
+    }
+    return tracker->visit(op, Py_REACHABLE_STRONG, tracker->arg);
+}
+
+int
+PyObject_ReachableFromTraverse(PyObject *op, reachablevisitproc visit, void *arg)
+{
+    PyTypeObject *tp = Py_TYPE(op);
+    type_visit_tracker_t tracker = {visit, arg, _PyObject_CAST(tp), 0};
+
+    traverseproc traverse = tp->tp_traverse;
+    if (traverse != NULL) {
+        int err = traverse(op, track_type_visit, &tracker);
+        if (err) {
+            return err;
+        }
+    }
+
+    // `tp_traverse` of heap types *should* include a `Py_VISIT(Py_TYPE(self))`
+    // since around Python 2.7, but plenty of types still don't. As part of the
+    // visit we also track if the type was found and manually visit it, if not.
+    //
+    // This must go through `visit`: only the caller's visitproc knows how to
+    // interpret `arg`.
+    if (!tracker.type_visited) {
+        return visit(_PyObject_CAST(tp), Py_REACHABLE_STRONG, arg);
+    }
+    return 0;
+}
+
+static void
+warn_missing_tp_reachable(PyTypeObject *tp)
+{
+    struct _Py_immutability_state *state = &_PyInterpreterState_GET()->immutability;
+    int warn = 0;
+    PyMutex_Lock(&state->mutex);
+    if (state->warned_types == NULL) {
+        state->warned_types = _Py_hashtable_new(
+            _Py_hashtable_hash_ptr,
+            _Py_hashtable_compare_direct);
+    }
+    if (state->warned_types != NULL
+        && _Py_hashtable_get(state->warned_types, (void *)tp) == NULL)
+    {
+        warn = _Py_hashtable_set(state->warned_types, (void *)tp, (void *)1) == 0;
+    }
+    PyMutex_Unlock(&state->mutex);
+    if (!warn) {
+        return;
+    }
+
+    if (tp->tp_traverse != NULL) {
+        PySys_FormatStderr(
+            "reachable: type '%.100s' has tp_traverse but no tp_reachable\n",
+            tp->tp_name);
+    }
+    else {
+        PySys_FormatStderr(
+            "reachable: type '%.100s' has no tp_traverse and no tp_reachable\n",
+            tp->tp_name);
+    }
+}
+
+int
+_PyObject_VisitReachable(PyObject *op, reachablevisitproc visit, void *arg)
+{
+    assert(op != NULL);
+    PyTypeObject *tp = Py_TYPE(op);
+    reachableproc reachable = tp->tp_reachable;
+    if (reachable == NULL) {
+        warn_missing_tp_reachable(tp);
+        // Even when tp_traverse is NULL, the wrapper still visits the type.
+        reachable = PyObject_ReachableFromTraverse;
+    }
+
+    int result;
+    if (PyType_Check(op)) {
+        // tp_mro, tp_bases and tp_base are guarded by the interpreter-wide
+        // type lock, not by the type's own mutex (see TYPE_LOCK in
+        // typeobject.c). The GC gets away without it by only traversing with
+        // the world stopped; callers may traverse with other threads live, so
+        // we need both locks. Holding them across the whole traversal is also
+        // what keeps the borrowed references handed to visit alive.
+        Py_BEGIN_CRITICAL_SECTION2_MUTEX(&_PyInterpreterState_GET()->types.mutex,
+                                         &op->ob_mutex);
+        result = reachable(op, visit, arg);
+        Py_END_CRITICAL_SECTION2();
+    }
+    else {
+        Py_BEGIN_CRITICAL_SECTION(op);
+        result = reachable(op, visit, arg);
+        Py_END_CRITICAL_SECTION();
+    }
+    return result;
 }
 
 // Implementations for the stable ABI

@@ -45,12 +45,30 @@ typedef struct {
         _PyTuple_CAST(op)->ob_hash = -1;    \
     } while (0)
 
+/* Whether a result tuple may be reused in place. */
+static inline int
+_PyTuple_CanRecycle(PyObject *op)
+{
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
+    // A tuple in a non-trivial SCC is counted through the SCC root, so its
+    // own reference count does not show whether it is uniquely referenced.
+    if (_Py_OB_FLAGS_LOAD(op) & _Py_IMMUTABLE_SCC_FLAG) {
+        return 0;
+    }
+#endif
+    return _PyObject_IsUniquelyReferenced(op);
+}
+
 /* bpo-42536: If reusing a tuple object, this should be called to re-track it
-   with the garbage collector and reset its hash cache. */
+   with the garbage collector and reset its hash cache. A frozen tuple is
+   made mutable again, it holds new items now. */
 static inline void
 _PyTuple_Recycle(PyObject *op)
 {
     _PyTuple_RESET_HASH_CACHE(op);
+    if (_Py_IsShallowImmutable(op)) {
+        _PyImmutability_ResetForReuse(op);
+    }
     if (!_PyObject_GC_IS_TRACKED(op)) {
         _PyObject_GC_TRACK(op);
     }

@@ -201,6 +201,7 @@ PyDoc_STRVAR(dictremover_doc, "deletes a key from a dictionary");
 static PyType_Slot dictremover_slots[] = {
     {Py_tp_dealloc, _DictRemover_dealloc},
     {Py_tp_traverse, _DictRemover_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, _DictRemover_clear},
     {Py_tp_call, _DictRemover_call},
     {Py_tp_doc, (void *)dictremover_doc},
@@ -441,6 +442,7 @@ StructParam_dealloc(PyObject *myself)
 
 static PyType_Slot structparam_slots[] = {
     {Py_tp_traverse, StructParam_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, StructParam_clear},
     {Py_tp_dealloc, StructParam_dealloc},
     {0, NULL},
@@ -638,6 +640,7 @@ static PyGetSetDef ctype_getsets[] = {
 static PyType_Slot ctype_type_slots[] = {
     {Py_tp_token, Py_TP_USE_SPEC},
     {Py_tp_traverse, CType_Type_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, CType_Type_clear},
     {Py_tp_dealloc, CType_Type_dealloc},
     {Py_tp_methods, ctype_methods},
@@ -1181,6 +1184,7 @@ static PyType_Slot pycstruct_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the CData Objects")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, PyCStructType_init},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {0, NULL},
 };
 
@@ -1196,6 +1200,7 @@ static PyType_Slot union_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the Union Objects")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, UnionType_init},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {0, NULL},
 };
 
@@ -1344,6 +1349,10 @@ PyCPointerType_set_type_impl(PyTypeObject *self, PyTypeObject *cls,
                              PyObject *type)
 /*[clinic end generated code: output=51459d8f429a70ac input=67e1e8df921f123e]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        return PyErr_WriteToImmutable(self);
+    }
+
     ctypes_state *st = get_module_state_by_class(cls);
     StgInfo *info;
     if (PyStgInfo_FromType(st, (PyObject *)self, &info) < 0) {
@@ -1452,6 +1461,7 @@ static PyType_Slot pycpointer_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the Pointer Objects")},
     {Py_tp_methods, PyCPointerType_methods},
     {Py_tp_init, PyCPointerType_init},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {0, NULL},
 };
 
@@ -1489,6 +1499,11 @@ _ctypes_PyCArrayType_Type_raw_set_impl(CDataObject *self, PyObject *value)
     char *ptr;
     Py_ssize_t size;
     Py_buffer view;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_AttributeError, "cannot delete attribute");
@@ -1559,6 +1574,11 @@ _ctypes_PyCArrayType_Type_value_set_impl(CDataObject *self, PyObject *value)
     const char *ptr;
     Py_ssize_t size;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "can't delete attribute");
@@ -1626,6 +1646,10 @@ WCharArray_set_value_lock_held(PyObject *op, PyObject *value)
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(op);
     CDataObject *self = _CDataObject_CAST(op);
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "can't delete attribute");
@@ -1840,6 +1864,7 @@ static PyType_Slot pycarray_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the Array Objects")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, PyCArrayType_init},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {0, NULL},
 };
 
@@ -2626,6 +2651,7 @@ static PyType_Slot pycsimple_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for the PyCSimpleType Objects")},
     {Py_tp_methods, PyCSimpleType_methods},
     {Py_tp_init, PyCSimpleType_init},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {0, NULL},
 };
 
@@ -2884,6 +2910,7 @@ static PyType_Slot pycfuncptr_type_slots[] = {
     {Py_tp_doc, PyDoc_STR("metatype for C function pointers")},
     {Py_tp_methods, CDataType_methods},
     {Py_tp_init, PyCFuncPtrType_init},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {0, NULL},
 };
 
@@ -3118,6 +3145,12 @@ PyCData_NewGetBuffer(PyObject *myself, Py_buffer *view, int flags)
 
     if (view == NULL) return 0;
 
+    int readonly = _Py_IsShallowImmutable(myself);
+    if (readonly && (flags & PyBUF_WRITABLE) == PyBUF_WRITABLE) {
+        PyErr_SetString(PyExc_BufferError, "Object is not writable.");
+        return -1;
+    }
+
     StgInfo *item_info;
     if (PyStgInfo_FromType(st, item_type, &item_info) < 0) {
         return -1;
@@ -3127,7 +3160,7 @@ PyCData_NewGetBuffer(PyObject *myself, Py_buffer *view, int flags)
     view->buf = self->b_ptr;
     view->obj = Py_NewRef(myself);
     view->len = self->b_size;
-    view->readonly = 0;
+    view->readonly = readonly;
     /* use default format character if not set */
     view->format = info->format ? info->format : "B";
     view->ndim = info->ndim;
@@ -3250,6 +3283,7 @@ static PyType_Slot pycdata_slots[] = {
     {Py_tp_hash, PyCData_nohash},
     {Py_tp_doc, PyDoc_STR("XXX to be provided")},
     {Py_tp_traverse, PyCData_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, PyCData_clear},
     {Py_tp_methods, PyCData_methods},
     {Py_tp_members, PyCData_members},
@@ -3341,6 +3375,14 @@ PyCData_FromBaseObj(ctypes_state *st,
         memcpy(cmem->b_ptr, adr, info->size);
         cmem->b_index = index;
     }
+
+    if(base && _Py_IsDeepImmutable(base)) {
+        if(_PyImmutability_DeepFreeze(_PyObject_CAST(cmem), 0) < 0){
+            Py_DECREF(cmem);
+            return NULL;
+        }
+    }
+
     return (PyObject *)cmem;
 }
 
@@ -3560,6 +3602,11 @@ PyCData_set(ctypes_state *st,
         return -1;
     }
 
+    if(!Py_CHECKWRITE(dst)){
+        PyErr_WriteToImmutable(dst);
+        return -1;
+    }
+
     result = _PyCData_set(st, mem, type, setfunc, value,
                         size, ptr);
     if (result == NULL)
@@ -3670,6 +3717,11 @@ static int
 _ctypes_CFuncPtr_errcheck_set_impl(PyCFuncPtrObject *self, PyObject *value)
 /*[clinic end generated code: output=6580cf1ffdf3b9fb input=84930bb16c490b33]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value && !PyCallable_Check(value)) {
         PyErr_SetString(PyExc_TypeError,
                         "the errcheck attribute must be callable");
@@ -3709,6 +3761,10 @@ _ctypes_CFuncPtr_restype_set_impl(PyCFuncPtrObject *self, PyObject *value)
 /*[clinic end generated code: output=0be0a086abbabf18 input=683c3bef4562ccc6]*/
 {
     PyObject *checker;
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
     if (value == NULL) {
         atomic_xsetref(&self->restype, NULL);
         atomic_xsetref(&self->checker, NULL);
@@ -3771,6 +3827,11 @@ static int
 _ctypes_CFuncPtr_argtypes_set_impl(PyCFuncPtrObject *self, PyObject *value)
 /*[clinic end generated code: output=596a36e2ae89d7d1 input=c4627573e980aa8b]*/
 {
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL || value == Py_None) {
         atomic_xsetref(&self->argtypes, NULL);
         atomic_xsetref(&self->converters, NULL);
@@ -4819,6 +4880,7 @@ static PyType_Slot pycfuncptr_slots[] = {
     {Py_tp_call, PyCFuncPtr_call},
     {Py_tp_doc, PyDoc_STR("Function Pointer")},
     {Py_tp_traverse, PyCFuncPtr_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, PyCFuncPtr_clear},
     {Py_tp_getset, PyCFuncPtr_getsets},
     {Py_tp_new, PyCFuncPtr_new},
@@ -4961,6 +5023,7 @@ static PyType_Slot pycstruct_slots[] = {
     {Py_tp_doc, PyDoc_STR("Structure base class")},
     {Py_tp_init, Struct_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {0, NULL},
 };
@@ -4976,6 +5039,7 @@ static PyType_Slot pycunion_slots[] = {
     {Py_tp_doc, PyDoc_STR("Union base class")},
     {Py_tp_init, Struct_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {0, NULL},
 };
@@ -5191,6 +5255,11 @@ Array_ass_item_lock_held(PyObject *myself, Py_ssize_t index, PyObject *value)
     Py_ssize_t size, offset;
     char *ptr;
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "Array does not support item deletion");
@@ -5232,6 +5301,11 @@ static int
 Array_ass_subscript_lock_held(PyObject *myself, PyObject *item, PyObject *value)
 {
     CDataObject *self = _CDataObject_CAST(myself);
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -5324,6 +5398,7 @@ static PyType_Slot pycarray_slots[] = {
     {Py_tp_methods, Array_methods},
     {Py_tp_init, Array_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {Py_sq_length, Array_length},
     {Py_sq_item, Array_item},
@@ -5420,6 +5495,10 @@ _ctypes_Simple_value_set_impl(CDataObject *self, PyObject *value)
 /*[clinic end generated code: output=f267186118939863 input=977af9dc9e71e857]*/
 {
     PyObject *result;
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -5548,6 +5627,7 @@ static PyType_Slot pycsimple_slots[] = {
     {Py_tp_getset, Simple_getsets},
     {Py_tp_init, Simple_init},
     {Py_tp_new, GenericPyCData_new},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {Py_nb_bool, Simple_bool},
     {0, NULL},
@@ -5623,6 +5703,11 @@ Pointer_ass_item_lock_held(PyObject *myself, Py_ssize_t index, PyObject *value)
     Py_ssize_t size;
     Py_ssize_t offset;
     PyObject *proto;
+
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
 
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
@@ -5710,6 +5795,11 @@ Pointer_set_contents_lock_held(PyObject *op, PyObject *value, void *closure)
     PyObject *keep;
     CDataObject *self = _CDataObject_CAST(op);
 
+    if(!Py_CHECKWRITE(self)){
+        PyErr_WriteToImmutable(self);
+        return -1;
+    }
+
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError,
                         "Pointer does not support item deletion");
@@ -5752,7 +5842,15 @@ Pointer_set_contents_lock_held(PyObject *op, PyObject *value, void *closure)
         return -1;
 
     Py_INCREF(keep);
-    return KeepRef(self, 0, keep);
+    if (KeepRef(self, 0, keep) < 0) {
+        return -1;
+    }
+
+    // A pointer to frozen memory must not allow writes through it.
+    if (_Py_IsShallowImmutable(value)) {
+        return _PyImmutability_DeepFreeze(op, 0);
+    }
+    return 0;
 }
 
 static int
@@ -5803,6 +5901,10 @@ copy_pointer_to_list_lock_held(PyObject *myself, PyObject *np, Py_ssize_t len,
                                Py_ssize_t start, Py_ssize_t step)
 {
     _Py_CRITICAL_SECTION_ASSERT_OBJECT_LOCKED(myself);
+    if(!Py_CHECKWRITE(np)){
+        PyErr_WriteToImmutable(np);
+        return -1;
+    }
     Py_ssize_t i;
     size_t cur;
     for (cur = start, i = 0; i < len; cur += step, i++) {
@@ -5988,6 +6090,7 @@ static PyType_Slot pycpointer_slots[] = {
     {Py_tp_getset, Pointer_getsets},
     {Py_tp_init, Pointer_init},
     {Py_tp_new, Pointer_new},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {Py_bf_getbuffer, PyCData_NewGetBuffer},
     {Py_nb_bool, Pointer_bool},
     {Py_mp_subscript, Pointer_subscript},
@@ -6078,6 +6181,7 @@ static PyType_Slot comerror_slots[] = {
     {Py_tp_doc, (void *)PyDoc_STR(comerror_doc)},
     {Py_tp_init, comerror_init},
     {Py_tp_traverse, comerror_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_dealloc, comerror_dealloc},
     {Py_tp_clear, comerror_clear},
     {0, NULL},
@@ -6152,13 +6256,34 @@ cast_lock_held(void *ptr, PyObject *src, PyObject *ctype)
     if (result == NULL)
         return NULL;
 
+    // A pointer to frozen memory must not allow writes through it.
+    PyObject *target = src;
+    if (PyCArg_CheckExact(st, src)) {
+        target = ((PyCArgObject *)src)->obj;
+    }
+    int frozen_src = target != NULL && _Py_IsShallowImmutable(target);
+
     /*
       The casted objects '_objects' member:
 
       It must certainly contain the source objects one.
       It must contain the source object itself.
      */
-    if (CDataObject_Check(st, src)) {
+    if (frozen_src && CDataObject_Check(st, src)) {
+        // The source's '_objects' cannot be shared (or created) once frozen;
+        // keep the source alive through a fresh dict instead.
+        result->b_objects = PyDict_New();
+        if (result->b_objects == NULL)
+            goto failed;
+        PyObject *index = PyLong_FromVoidPtr((void *)src);
+        if (index == NULL)
+            goto failed;
+        int rc = PyDict_SetItem(result->b_objects, index, src);
+        Py_DECREF(index);
+        if (rc == -1)
+            goto failed;
+    }
+    else if (CDataObject_Check(st, src)) {
         CDataObject *obj = (CDataObject *)src;
         CDataObject *container;
 
@@ -6190,6 +6315,9 @@ cast_lock_held(void *ptr, PyObject *src, PyObject *ctype)
     }
     /* Should we assert that result is a pointer type? */
     memcpy(result->b_ptr, &ptr, sizeof(void *));
+    if (frozen_src && _PyImmutability_DeepFreeze((PyObject *)result, 0) < 0) {
+        goto failed;
+    }
     return (PyObject *)result;
 
   failed:
@@ -6243,6 +6371,14 @@ _ctypes_add_types(PyObject *mod)
     if (PyType_Ready(TYPE) < 0) { \
         return -1; \
     }
+#define REGISTER_FREEZEABLE(TYPE_EXPR) \
+do { \
+    PyTypeObject *type = (TYPE_EXPR); \
+    if(_PyImmutability_SetFreezable(_PyObject_CAST(type), _Py_FREEZABLE_YES) < 0){ \
+        return -1; \
+    } \
+} while (0)
+
 #define CREATE_TYPE(TP, SPEC, META, BASE) do {                      \
     PyObject *type = PyType_FromMetaclass(META, mod, SPEC,          \
                                           (PyObject *)BASE);        \
@@ -6290,6 +6426,14 @@ _ctypes_add_types(PyObject *mod)
     CREATE_TYPE(st->PyCFuncPtrType_Type, &pycfuncptr_type_spec,
                 NULL, st->PyCType_Type);
 
+    // Metaclasses are freezable.
+    REGISTER_FREEZEABLE(st->PyCStructType_Type);
+    REGISTER_FREEZEABLE(st->UnionType_Type);
+    REGISTER_FREEZEABLE(st->PyCPointerType_Type);
+    REGISTER_FREEZEABLE(st->PyCArrayType_Type);
+    REGISTER_FREEZEABLE(st->PyCSimpleType_Type);
+    REGISTER_FREEZEABLE(st->PyCFuncPtrType_Type);
+
     /*************************************************
      *
      * Classes using a custom metaclass
@@ -6314,6 +6458,7 @@ _ctypes_add_types(PyObject *mod)
      */
 
     MOD_ADD_TYPE(st->PyCField_Type, &cfield_spec, NULL, NULL);
+    REGISTER_FREEZEABLE(st->PyCField_Type);
 
     /*************************************************
      *

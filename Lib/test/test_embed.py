@@ -2097,6 +2097,9 @@ class MiscTests(EmbeddingTestsMixin, unittest.TestCase):
                          '-X showrefcount requires a Python debug build')
     def test_no_memleak(self):
         # bpo-1635741: Python must release all memory at exit
+        if support.mimalloc_default_for_sharing():
+            # mimalloc reports leftover blocks at exit on GIL builds
+            self.skipTest('mimalloc is the default allocator instead of pymalloc')
         tests = (
             ('off', 'pass'),
             ('on', 'pass'),

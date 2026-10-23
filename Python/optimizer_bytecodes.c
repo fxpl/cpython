@@ -956,8 +956,10 @@ dummy_func(void) {
         (void)index;
         attr = PyJitRef_NULL;
         if (sym_is_const(ctx, owner)) {
-            PyModuleObject *mod = (PyModuleObject *)sym_get_const(ctx, owner);
-            if (PyModule_CheckExact(mod)) {
+
+            PyModuleObject *mod = _PyInterpreterState_LookupModuleState(
+                sym_get_const(ctx, owner));
+            if (mod != NULL && PyModule_CheckExact(mod)) {
                 PyObject *dict = mod->md_dict;
                 uint64_t watched_mutations = get_mutations(dict);
                 if (watched_mutations < _Py_MAX_ALLOWED_GLOBALS_MODIFICATIONS) {
