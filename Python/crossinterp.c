@@ -492,12 +492,11 @@ _get_xidata(PyThreadState *tstate,
 
     // Artifact[Implementation]: The branch that allows direct sharing for immutable object across sub-interpreters
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
-    int sharable_by_ref = _PyImmutability_CanViewAsDeepImmutable(obj)
-        || _PyMutexObject_Check(obj);
-    if (sharable_by_ref < 0) {
+    int deep_immutable = _PyImmutability_CanViewAsDeepImmutable(obj);
+    if (deep_immutable < 0) {
         return -1;
     }
-    if (sharable_by_ref) {
+    if (deep_immutable || _PyMutexObject_Check(obj)) {
         // `data` is only a marker: the object itself is handed over, so there
         // is nothing to free and `free` stays NULL. This still has to go
         // through _PyXIData_Init() to record the owning interpreter, which

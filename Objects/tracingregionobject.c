@@ -358,8 +358,10 @@ static int region_set_tracing_mark(TracingRegionObject *self) {
         res = 1;
     } else if (self->state == Py_REGION_STATUS_OPEN) {
         self->state = Py_REGION_STATUS_TRACING;
-    } else if (self->state == Py_REGION_STATUS_TRACING) {
+    } else {
         // Someone else is tracing the region, mark it as failed.
+        assert(self->state == Py_REGION_STATUS_TRACING
+               || self->state == Py_REGION_STATUS_TRACING_FAILED);
         self->state = Py_REGION_STATUS_TRACING_FAILED;
         res = -1;
     }
@@ -609,11 +611,14 @@ static void tree_trace_state_destroy(tree_trace_state_t* state) {
 }
 
 static int tree_trace_state_init(tree_trace_state_t* state) {
-    // Both fields have to be cleared up front, so that the error path below can
+    // All fields have to be cleared up front, so that the error path below can
     // call `tree_trace_state_destroy()` before they have all been assigned.
     state->tracing_counts = NULL;
     state->pending = NULL;
     state->hierarchy = NULL;
+#ifdef Py_GIL_DISABLED
+    state->non_local_objs = NULL;
+#endif
 
     state->tracing_counts = _Py_hashtable_new(
         _Py_hashtable_hash_ptr,
@@ -1720,7 +1725,11 @@ static int _trace_visit_bridge_ref(PyObject* obj, int ref_flags, region_trace_st
 static int _trace_visit(PyObject* obj, int ref_flags, void *arg) {
     region_trace_state_t *state = (region_trace_state_t *)arg;
     // References to immutable objects are allowed
-    if (_PyImmutability_CanViewAsDeepImmutable(obj)) {
+    int immutable = _PyImmutability_CanViewAsDeepImmutable(obj);
+    if (immutable < 0) {
+        return -1;
+    }
+    if (immutable) {
         return 0;
     }
 
@@ -1921,6 +1930,10 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
 
     int mark_res = region_set_tracing_mark(region);
     if (mark_res < 0) {
+        PyErr_Format(
+            PyExc_RuntimeError,
+            "the region %p is part of a concurrent trace",
+            (void *)region_obj);
         return TRACE_RES_ERR;
     } else if (mark_res > 0) {
         assert(region->state == Py_REGION_STATUS_CLOSED);
@@ -2136,6 +2149,9 @@ static int try_close_region_tree(PyObject *root) {
         // A restarted trace leaves the region open on purpose. It keeps its slot
         // on the stack and is retried once the sub-regions that its trace pushed
         // on top of it have been closed.
+        //
+        // This assert can fail, if the close was successful, but another thread
+        // re-opens the region just in time for this assert.
         assert(res == TRACE_RES_RESTART || _PyTracingRegion_IsClosed(region));
 
 #ifdef Py_GIL_DISABLED

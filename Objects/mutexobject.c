@@ -90,7 +90,11 @@ static int mutex_set_value(_PyMutexObject* self, PyObject* value) {
     }
 
     // Immutable objects are allowed
-    if (_PyImmutability_CanViewAsDeepImmutable(value)) {
+    int immutable = _PyImmutability_CanViewAsDeepImmutable(value);
+    if (immutable < 0) {
+        return -1;
+    }
+    if (immutable) {
         return mutex_set_value_unchecked(self, value);
     }
 
@@ -184,15 +188,21 @@ _PyPyrona_owner_id_t _PyPyrona_ThisOwnerId(void) {
 #endif
 }
 
-static int PyMutex_init(PyObject *op, PyObject *args, PyObject *kwds) {
-    _PyMutexObject *self = _PyMutexObject_CAST(op);
+// All setup happens here instead of `tp_init`: a shared mutex must not be
+// re-initialized by whoever calls `__init__` on it.
+static PyObject *PyMutex_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
     // See if we got a value as a keyword argument
     static char *kwlist[] = {"value", NULL};
     PyObject *value = Py_None;
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", kwlist, &value)) {
-        return -1;
+        return NULL;
     }
-    self->value = Py_None;
+
+    _PyMutexObject *self = _PyMutexObject_CAST(type->tp_alloc(type, 0));
+    if (self == NULL) {
+        return NULL;
+    }
+    self->value = Py_NewRef(Py_None);
 
     // Init the mutex as being acquired by this owner
     _PyPyrona_owner_id_t this_owner = _PyPyrona_ThisOwnerId();
@@ -202,7 +212,7 @@ static int PyMutex_init(PyObject *op, PyObject *args, PyObject *kwds) {
             PyExc_RuntimeError,
             "Newly created mutex couldn't be acquired by this owner %lld",
             this_owner);
-        return -1;
+        goto error;
     }
 
     // Set the mutex value using the internal function for full validation
@@ -213,11 +223,11 @@ static int PyMutex_init(PyObject *op, PyObject *args, PyObject *kwds) {
     _Py_EnableAtomicRC(self);
     PyObject_GC_UnTrack(self);
 #endif
-    SUCCEEDS(_PyImmutability_CanViewAsDeepImmutable(_PyObject_CAST(Py_TYPE(self))));
 
-    return 0;
+    return _PyObject_CAST(self);
 error:
-    return -1;
+    Py_DECREF(self);
+    return NULL;
 }
 
 static int PyMutex_traverse(PyObject *op, visitproc visit, void *arg) {
@@ -252,7 +262,9 @@ static int PyMutex_reachable(PyObject *op, reachablevisitproc visit, void *arg) 
 
 static int PyMutex_clear(PyObject *op) {
     _PyMutexObject *self = _PyMutexObject_CAST(op);
-    if (self->value != NULL && _PyImmutability_CanViewAsDeepImmutable(self->value)) {
+    // Regions are the only mutable values, see `mutex_set_value`. Checking that
+    // instead of immutability can't fail, which `tp_clear` has no way to report.
+    if (self->value != NULL && !Region_Check(self->value)) {
         Py_CLEAR(self->value);
         return 0;
     }
@@ -467,7 +479,11 @@ static int mutex_release(_PyMutexObject *self, _PyPyrona_owner_id_t unlocking_ow
     }
 
     // Immutable objects are safe to share, the mutex can be release directly
-    if (_PyImmutability_CanViewAsDeepImmutable(self->value)) {
+    int immutable = _PyImmutability_CanViewAsDeepImmutable(self->value);
+    if (immutable < 0) {
+        return -1;
+    }
+    if (immutable) {
         return mutex_release_unchecked(self, unlocking_owner);
     }
     assert(Region_Check(self->value));
@@ -589,7 +605,6 @@ PyTypeObject _PyMutex_Type = {
     .tp_clear = PyMutex_clear,
     .tp_methods = PyMutex_methods,
     .tp_getset = PyMutexObject_getset,
-    .tp_init = PyMutex_init,
-    .tp_new = PyType_GenericNew,
+    .tp_new = PyMutex_new,
 };
 

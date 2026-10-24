@@ -1495,6 +1495,8 @@ class TestConcurrentClose(unittest.TestCase):
         r"could not be closed after \d+ tracing attempts$",
         r"cannot be closed since a concurrent thread accessed during tracing$",
         r"couldn't be detached due to a concurrent access$",
+        # A concurrent thread may hold the bridge while it is detached
+        r"couldn't be detached, due to incoming references to the bridge$",
     )
 
     def assert_concurrent_error(self, exc):
@@ -1560,6 +1562,40 @@ class TestConcurrentClose(unittest.TestCase):
             self.assertEqual(len(errors), 2)
             for e in errors:
                 self.assert_concurrent_error(e)
+
+    @threading_helper.reap_threads
+    def test_many_closes_of_one_region(self):
+        # A third close must not slip in while a failed trace is still running
+        @freezable
+        class A:
+            pass
+
+        for _ in range(self.ITERATIONS):
+            r = Region()
+            r.objs = [A() for _ in range(100)]
+            threads_n = 4
+            barrier = threading.Barrier(threads_n)
+            errors = []
+
+            def close():
+                barrier.wait()
+                try:
+                    Region.close(r)
+                except RuntimeError as e:
+                    errors.append(e)
+
+            threads = [threading.Thread(target=close) for _ in range(threads_n)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            for e in errors:
+                self.assert_concurrent_error(e)
+            if len(errors) == threads_n:
+                self.assertFalse(Region.is_closed(r))
+                Region.close(r)
+            self.assertTrue(Region.is_closed(r))
 
     @threading_helper.reap_threads
     def test_refcount_changes_during_close(self):
@@ -1645,6 +1681,44 @@ class TestMutex(unittest.TestCase):
         m = Mutex()
         self.assertIsNone(m.value)
         self.assertEqual(Mutex(value=(1, 2)).value, (1, 2))
+
+    def test_new_without_init(self):
+        m = Mutex.__new__(Mutex)
+        self.assertTrue(m.owned())
+        self.assertIsNone(m.value)
+        m.release()
+        self.assertFalse(m.locked())
+        self.assertEqual(Mutex.__new__(Mutex, (1, 2)).value, (1, 2))
+
+    def test_reinit_is_noop(self):
+        r = Region()
+        m = Mutex(r)
+        m.__init__(None)
+        self.assertTrue(m.owned())
+        self.assertIs(m.value, r)
+        del r
+        m.release()
+        self.assertFalse(m.locked())
+
+    @unittest.skipIf(immutable._cross_interpreter_sharing,
+        "mutexes are owned by interpreters, not threads")
+    @threading_helper.reap_threads
+    def test_reinit_from_other_thread_is_noop(self):
+        r = Region()
+        m = Mutex(r)
+        t = threading.Thread(target=m.__init__, args=(None,))
+        t.start()
+        t.join()
+        self.assertTrue(m.owned())
+        self.assertIs(m.value, r)
+        del r
+        m.release()
+        self.assertFalse(m.locked())
+
+    def test_type_is_frozen(self):
+        self.assertTrue(is_deep_frozen(Mutex))
+        deep_freeze(Mutex)
+        self.assertIsNone(Mutex().value)
 
     def test_reject_local_mutable(self):
         msg = "attempted to store a local mutable object in a mutex"

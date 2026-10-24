@@ -721,6 +721,10 @@ immutable_exec(PyObject *module) {
     if (_PyImmutability_SetFreezable((PyObject*)&_PyMutex_Type, _Py_FREEZABLE_YES) < 0) {
         return -1;
     }
+    // Mutexes are shared across threads and interpreters, so is their type.
+    if (_PyImmutability_DeepFreeze((PyObject*)&_PyMutex_Type, 0) < 0) {
+        return -1;
+    }
 
     if (PyModule_AddType(module, &_PyRegionref_RefType) != 0) {
         return -1;
