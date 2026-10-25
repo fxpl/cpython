@@ -86,7 +86,7 @@ _Py_brc_queue_object(PyObject *ob)
 
     uintptr_t ob_tid = _Py_atomic_load_uintptr(&ob->ob_tid);
     while (ob_tid == _Py_FREE_TID || ob_tid == _Py_ThreadId()) {
-        if (_Py_IsOwnedByCurrentThreadDecRef(ob)) {
+        if (_Py_IsOwnedByCurrentThread(ob) || _Py_TryClaimFreeObjectDecRef(ob)) {
             // A plain Py_DECREF would leave `_Py_REF_QUEUED` set, which stops
             // any future owner from being asked to merge. Merging clears it.
             Py_ssize_t refcount = _Py_ExplicitMergeRefcount(ob, -1);

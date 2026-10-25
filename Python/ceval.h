@@ -136,7 +136,7 @@
             break; \
         } \
         _Py_DECREF_STAT_INC(); \
-        if (_Py_IsOwnedByCurrentThreadFast(op)) { \
+        if (_Py_IsOwnedByCurrentThread(op)) { \
             local--; \
             _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local); \
             if (local == 0) { \

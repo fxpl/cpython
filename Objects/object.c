@@ -494,7 +494,7 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
 void
 _Py_IncRefShared(PyObject *o)
 {
-    if (_Py_IsOwnedByCurrentThreadSlow(o)) {
+    if (_Py_TryClaimFreeObject(o)) {
         _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, o->ob_ref_local + 1);
     }
     else {
@@ -505,7 +505,7 @@ _Py_IncRefShared(PyObject *o)
 void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
-    if (_Py_IsOwnedByCurrentThreadDecRefSlow(o)) {
+    if (_Py_TryClaimFreeObjectDecRef(o)) {
         uint32_t local = o->ob_ref_local - 1;
         _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, local);
         if (local == 0) {
@@ -596,7 +596,7 @@ _PyObject_ResurrectEndSlow(PyObject *op)
     if (_Py_IsImmortal(op)) {
         return 1;
     }
-    if (_Py_IsOwnedByCurrentThread(op)) {
+    if (_Py_IsOwnedByCurrentThread(op) || _Py_TryClaimFreeObject(op)) {
         // If the object is owned by the current thread, give up ownership and
         // merge the refcount. This isn't necessary in all cases, but it
         // simplifies the implementation.

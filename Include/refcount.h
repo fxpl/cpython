@@ -406,7 +406,7 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     ob->ob_refcnt = refcnt;
 #endif
 #else
-    if (_Py_IsOwnedByCurrentThread(ob)) {
+    if (_Py_IsOwnedByCurrentThread(ob) || _Py_TryClaimFreeObject(ob)) {
         if ((size_t)refcnt > (size_t)UINT32_MAX) {
             // On overflow, make the object immortal
             _Py_atomic_store_uintptr(&ob->ob_tid, _Py_UNOWNED_TID);
@@ -518,7 +518,7 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         // local is equal to _Py_IMMORTAL_REFCNT_LOCAL: do nothing
         return;
     }
-    if (_Py_IsOwnedByCurrentThreadFast(op)) {
+    if (_Py_IsOwnedByCurrentThread(op)) {
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, new_local);
     }
     else {
@@ -605,7 +605,7 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
     }
     _Py_DECREF_STAT_INC();
     _Py_DECREF_DecRefTotal();
-    if (_Py_IsOwnedByCurrentThreadFast(op)) {
+    if (_Py_IsOwnedByCurrentThread(op)) {
         if (local == 0) {
             _Py_NegativeRefcount(filename, lineno, op);
         }
@@ -630,7 +630,7 @@ static inline void Py_DECREF(PyObject *op)
         return;
     }
     _Py_DECREF_STAT_INC();
-    if (_Py_IsOwnedByCurrentThreadFast(op)) {
+    if (_Py_IsOwnedByCurrentThread(op)) {
         local--;
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local);
         if (local == 0) {

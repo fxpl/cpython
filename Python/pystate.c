@@ -2831,7 +2831,7 @@ _Py_CheckTracingFlag(PyObject *ob) {
 }
 
 static inline Py_ALWAYS_INLINE int
-_owned_by_thread_internal(PyObject *ob, bool check_flag) {
+try_claim_free_object(PyObject *ob, bool check_flag) {
     uintptr_t owner = _Py_atomic_load_uintptr(&ob->ob_tid);
     uintptr_t this = _Py_ThreadId();
     if (owner == this) {
@@ -2858,11 +2858,11 @@ _owned_by_thread_internal(PyObject *ob, bool check_flag) {
     return 0;
 }
 
-int _Py_IsOwnedByCurrentThreadSlow(PyObject *ob) {
-    return _owned_by_thread_internal(ob, true);
+int _Py_TryClaimFreeObject(PyObject *ob) {
+    return try_claim_free_object(ob, true);
 }
-int _Py_IsOwnedByCurrentThreadDecRefSlow(PyObject *ob) {
-    return _owned_by_thread_internal(ob, false);
+int _Py_TryClaimFreeObjectDecRef(PyObject *ob) {
+    return try_claim_free_object(ob, false);
 }
 #endif
 
