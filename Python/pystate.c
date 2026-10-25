@@ -2858,10 +2858,10 @@ _owned_by_thread_internal(PyObject *ob, bool check_flag) {
     return 0;
 }
 
-int _Py_IsOwnedByCurrentThread(PyObject *ob) {
+int _Py_IsOwnedByCurrentThreadSlow(PyObject *ob) {
     return _owned_by_thread_internal(ob, true);
 }
-int _Py_IsOwnedByCurrentThreadDecRef(PyObject *ob) {
+int _Py_IsOwnedByCurrentThreadDecRefSlow(PyObject *ob) {
     return _owned_by_thread_internal(ob, false);
 }
 #endif

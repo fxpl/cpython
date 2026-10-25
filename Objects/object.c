@@ -489,9 +489,30 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
     return 0;
 }
 
+// Py_INCREF/Py_DECREF only inline the `ob_tid == this` check; claiming free
+// objects and clearing the region RC flag live here to keep call sites small.
+void
+_Py_IncRefShared(PyObject *o)
+{
+    if (_Py_IsOwnedByCurrentThreadSlow(o)) {
+        _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, o->ob_ref_local + 1);
+    }
+    else {
+        _Py_atomic_add_ssize(&o->ob_ref_shared, (1 << _Py_REF_SHARED_SHIFT));
+    }
+}
+
 void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
+    if (_Py_IsOwnedByCurrentThreadDecRefSlow(o)) {
+        uint32_t local = o->ob_ref_local - 1;
+        _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, local);
+        if (local == 0) {
+            _Py_MergeZeroLocalRefcount(o);
+        }
+        return;
+    }
     if (_Py_DecRefSharedIsDead(o, filename, lineno)) {
         // TODO(Immutable): Should make mutable here?
         _Py_CLEAR_IMMUTABLE(o);
@@ -2837,7 +2858,7 @@ new_reference(PyObject *op)
 #else
     op->ob_flags = 0;
     op->ob_mutex = (PyMutex){ 0 };
-    _Py_atomic_store_uintptr(&op->ob_tid, _Py_ThreadId());
+    _Py_atomic_store_uintptr_relaxed(&op->ob_tid, _Py_ThreadId());
 #ifdef _Py_THREAD_SANITIZER
     _Py_atomic_store_uint8_relaxed(&op->ob_gc_bits, 0);
     _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, 1);

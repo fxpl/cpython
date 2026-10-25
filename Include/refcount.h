@@ -179,6 +179,10 @@ static_assert(
 #endif
 
 
+#if defined(Py_GIL_DISABLED) && !defined(Py_LIMITED_API)
+PyAPI_FUNC(void) _Py_IncRefShared(PyObject *);
+#endif
+
 // Py_GIL_DISABLED builds indicate immortal objects using `ob_ref_local`, which is
 // always 32-bits.
 #ifdef Py_GIL_DISABLED
@@ -514,11 +518,11 @@ static inline Py_ALWAYS_INLINE void Py_INCREF(PyObject *op)
         // local is equal to _Py_IMMORTAL_REFCNT_LOCAL: do nothing
         return;
     }
-    if (_Py_IsOwnedByCurrentThread(op)) {
+    if (_Py_IsOwnedByCurrentThreadFast(op)) {
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, new_local);
     }
     else {
-        _Py_atomic_add_ssize(&op->ob_ref_shared, (1 << _Py_REF_SHARED_SHIFT));
+        _Py_IncRefShared(op);
     }
 #elif SIZEOF_VOID_P > 4
     // Using ob_refcnt_full allows us to check if a flag has been set for immutable too.
@@ -601,7 +605,7 @@ static inline void Py_DECREF(const char *filename, int lineno, PyObject *op)
     }
     _Py_DECREF_STAT_INC();
     _Py_DECREF_DecRefTotal();
-    if (_Py_IsOwnedByCurrentThreadDecRef(op)) {
+    if (_Py_IsOwnedByCurrentThreadFast(op)) {
         if (local == 0) {
             _Py_NegativeRefcount(filename, lineno, op);
         }
@@ -626,7 +630,7 @@ static inline void Py_DECREF(PyObject *op)
         return;
     }
     _Py_DECREF_STAT_INC();
-    if (_Py_IsOwnedByCurrentThreadDecRef(op)) {
+    if (_Py_IsOwnedByCurrentThreadFast(op)) {
         local--;
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local);
         if (local == 0) {
