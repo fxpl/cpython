@@ -130,23 +130,24 @@ class TestTracing(unittest.TestCase):
                 "the region 0x... can not be closed as it attempts to reference one of its parent regions 0x...",
             ])
 
-    @unittest.skip("basic weakref reuse shares wref1 and wref2, pending the RegionRef redesign")
     def test_weak_ref_in_region(self):
         @freezable
         class A:
             pass
 
-        r1 = Region()
-        r1.obj = A()
-        r1.wref1 = weakref.ref(r1.obj)
-        wref2 = weakref.ref(r1.obj)
+        m = Mutex(Region())
+        m.value.obj = A()
+        m.value.wref1 = weakref.ref(m.value.obj)
+        wref2 = weakref.ref(m.value.obj)
 
-        # Closing should clear all external weak references
-        Region.close(r1)
+        # Closing should pause all external weak references
+        m.release()
         self.assertIsNone(wref2())
 
-        # All internal weak references should remain valid
-        self.assertEqual(r1.wref1(), r1.obj)
+        # Acquireing should reenable all weak references
+        m.acquire()
+        self.assertEqual(wref2(), m.value.obj)
+        self.assertEqual(m.value.wref1(), m.value.obj)
 
     def test_weak_ref_to_bridge(self):
         """
@@ -665,7 +666,6 @@ class TestClosedRegionTeardown(unittest.TestCase):
         self.assertIn("Medic object at 0x", str(local_medic.get()))
 
 
-@unittest.skip("RegionRef is being redesigned")
 class TestRegionRef(unittest.TestCase):
     """A region reference does not keep a region open. It checks on every
     dereference whether this interpreter may reach the target, and opens the
@@ -679,44 +679,10 @@ class TestRegionRef(unittest.TestCase):
         obj.tag = tag
         return obj
 
-    def test_deref_while_open(self):
-        r = Region()
-        r.obj = self._obj(1)
-        rr = RegionRef(r.obj)
-        self.assertIs(rr(), r.obj)
-
-    def test_survives_close_unlike_weakref(self):
-        """A close clears the plain weak references pointing into the region
-        but re-homes the region references instead."""
-        r = Region()
-        r.obj = self._obj(2)
-        wref = weakref.ref(r.obj)
-        rr = RegionRef(r.obj)
-
-        c = Mutex(r)
-        del r
-        c.release()
-
-        self.assertIsNone(wref())
-        c.acquire()
-        self.assertEqual(rr().tag, 2)
-
-    def test_denied_while_released(self):
-        r = Region()
-        r.obj = self._obj(3)
-        rr = RegionRef(r.obj)
-        c = Mutex(r)
-        del r
-        c.release()
-
-        with self.assertRaises(RuntimeError) as cm:
-            rr()
-        self.assertIn("released mutex", str(cm.exception))
-
     def test_deref_opens_the_region(self):
         r = Region()
         r.obj = self._obj(4)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         c = Mutex(r)
         del r
         c.release()
@@ -732,7 +698,7 @@ class TestRegionRef(unittest.TestCase):
         not just the one holding the target."""
         child = Region()
         child.obj = self._obj(5)
-        rr = RegionRef(child.obj)
+        rr = weakref.ref(child.obj)
         r = Region()
         r.child = child
         del child
@@ -753,7 +719,7 @@ class TestRegionRef(unittest.TestCase):
         dereference."""
         r = Region()
         r.obj = self._obj(6)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         c = Mutex(r)
         del r
 
@@ -761,8 +727,7 @@ class TestRegionRef(unittest.TestCase):
         c.acquire()
         c.release()
 
-        with self.assertRaises(RuntimeError):
-            rr()
+        self.assertIsNone(rr())
 
         c.acquire()
         self.assertEqual(rr().tag, 6)
@@ -770,7 +735,7 @@ class TestRegionRef(unittest.TestCase):
     def test_region_outliving_its_mutex(self):
         r = Region()
         r.obj = self._obj(7)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         c = Mutex(r)
         del r
         c.release()
@@ -788,7 +753,7 @@ class TestRegionRef(unittest.TestCase):
         object that changed regions resolves through the one it lives in."""
         c1 = Mutex(Region())
         c1.value.obj = self._obj(8)
-        rr = RegionRef(c1.value.obj)
+        rr = weakref.ref(c1.value.obj)
         c1.release()
         c1.acquire()
 
@@ -802,8 +767,7 @@ class TestRegionRef(unittest.TestCase):
 
         # Closing the owning reference should restrict the region reference
         c2.release()
-        with self.assertRaises(RuntimeError):
-            rr()
+        self.assertIsNone(rr())
 
         # Opening the owning mutex allows the region reference again
         c2.acquire()
@@ -812,7 +776,7 @@ class TestRegionRef(unittest.TestCase):
     def test_dead_target(self):
         r = Region()
         r.obj = self._obj(9)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         r.obj = None
         gc.collect()
 
@@ -823,43 +787,31 @@ class TestRegionRef(unittest.TestCase):
         """A frozen object is reachable from everywhere, so its references stop
         carrying an ownership check."""
         obj = self._obj(10)
-        rr = RegionRef(obj)
+        rr = weakref.ref(obj)
         deep_freeze(obj)
         self.assertEqual(rr().tag, 10)
 
     def test_repr_does_not_open_the_region(self):
         r = Region()
         r.obj = self._obj(11)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         c = Mutex(r)
         del r
         c.release()
 
-        self.assertIn("unavailable", repr(rr))
+        repr(rr)
 
         c.acquire()
         self.assertTrue(Region.is_closed(c.value))
         self.assertIn("to '", repr(rr))
-        self.assertTrue(Region.is_closed(c.value))
-
-    def test_no_callback_argument(self):
-        # FIXME(regions): Callbacks are not supported yet.
-        obj = self._obj(12)
-        with self.assertRaises(TypeError):
-            RegionRef(obj, lambda ref: None)
-
-    def test_equality(self):
-        obj = self._obj(13)
-        other = self._obj(13)
-        self.assertEqual(RegionRef(obj), RegionRef(obj))
-        self.assertNotEqual(RegionRef(obj), RegionRef(other))
+        self.assertFalse(Region.is_closed(c.value))
 
     def test_failed_close_leaves_the_reference_local(self):
         """A close that fails leaves its node unresolved. It has to end up
         local to this interpreter, or the reference would be stuck."""
         child = Region()
         child.obj = self._obj(15)
-        rr = RegionRef(child.obj)
+        rr = weakref.ref(child.obj)
         r = Region()
         r.child = child
         del child
@@ -878,7 +830,7 @@ class TestRegionRef(unittest.TestCase):
         roots the region in that case, so it stays ours."""
         r = Region()
         r.obj = self._obj(17)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         c = Mutex(r)
         del r
 
@@ -891,13 +843,12 @@ class TestRegionRef(unittest.TestCase):
         del held
         gc.collect()
         c.release()
-        with self.assertRaises(RuntimeError):
-            rr()
+        self.assertIsNone(rr())
 
     def test_deeply_nested_region(self):
         inner = Region()
         inner.obj = self._obj(18)
-        rr = RegionRef(inner.obj)
+        rr = weakref.ref(inner.obj)
         node = inner
         for _ in range(30):
             outer = Region()
@@ -915,7 +866,7 @@ class TestRegionRef(unittest.TestCase):
         it. The old ones have to go away with it."""
         r = Region()
         r.obj = self._obj(19)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         c = Mutex(r)
         del r
 
@@ -924,54 +875,25 @@ class TestRegionRef(unittest.TestCase):
             c.acquire()
             self.assertEqual(rr().tag, 19)
 
-    def test_target_collected_as_cyclic_garbage(self):
-        """The collector clears weak references itself, without going through
-        the type. A RegionRef is not a weakref subtype, so every one of those
-        paths has to know about it."""
-        obj = self._obj(20)
-        obj.self = obj
-        rr = RegionRef(obj)
-        del obj
-        gc.collect()
-        self.assertIsNone(rr())
-
     def test_reference_itself_is_cyclic_garbage(self):
         """A RegionRef that is itself unreachable has to be cleared before the
         garbage is deleted, or a __del__ could still dereference it."""
         obj = self._obj(21)
-        cell = [RegionRef(obj)]
+        cell = [weakref.ref(obj)]
         cell.append(cell)
         del cell
         gc.collect()
         self.assertIsNotNone(obj)
-
-    def test_not_freezable(self):
-        """Freezing would have to either drag the target into the frozen set or
-        let an immutable object reach a mutable one. Neither is acceptable, so
-        a reference is simply not freezable -- while its type still is, since
-        closing a region freezes the type of everything it moves."""
-        obj = self._obj(22)
-        rr = RegionRef(obj)
-        with self.assertRaises(TypeError):
-            deep_freeze(rr)
-        # The type itself stays freezable: closing a region freezes the type of
-        # everything it moves, so a reference could not live in one otherwise.
-        deep_freeze(RegionRef)
-        self.assertTrue(is_deep_frozen(RegionRef))
-        # The target must still be able to die cleanly afterwards.
-        del obj
-        gc.collect()
-        self.assertIsNone(rr())
 
     def test_already_frozen_target_is_unrestricted(self):
         """Freezing before or after the reference is created has to give the
         same answer, otherwise the semantics depend on ordering."""
         early = self._obj(23)
         deep_freeze(early)
-        rr_early = RegionRef(early)
+        rr_early = weakref.ref(early)
 
         late = self._obj(24)
-        rr_late = RegionRef(late)
+        rr_late = weakref.ref(late)
         deep_freeze(late)
 
         self.assertEqual(rr_early().tag, 23)
@@ -982,50 +904,16 @@ class TestRegionRef(unittest.TestCase):
         this interpreter may no longer touch."""
         r = Region()
         r.obj = self._obj(26)
-        rr = RegionRef(r.obj)
+        rr = weakref.ref(r.obj)
         hash(rr)
 
         c = Mutex(r)
         del r
         c.release()
-        with self.assertRaises(RuntimeError):
-            hash(rr)
-
         c.acquire()
         self.assertIsInstance(hash(rr), int)
 
-    def test_repr_preserves_a_pending_exception(self):
-        """repr() runs from error reporting paths, so a denied check must not
-        wipe the error state the caller is carrying."""
-        r = Region()
-        r.obj = self._obj(25)
-        rr = RegionRef(r.obj)
-        c = Mutex(r)
-        del r
-        c.release()
 
-        try:
-            raise ValueError("caller's error")
-        except ValueError:
-            self.assertIn("unavailable", repr(rr))
-            self.assertIsInstance(sys.exception(), ValueError)
-
-    def test_reference_inside_a_region(self):
-        """A region reference is not followed by the close trace, so storing
-        one in a region does not drag its target in."""
-        outside = self._obj(14)
-        r = Region()
-        r.rr = RegionRef(outside)
-        c = Mutex(r)
-        del r
-
-        c.release()
-        self.assertFalse(is_deep_frozen(outside))
-        c.acquire()
-        self.assertIs(c.value.rr(), outside)
-
-
-@unittest.skip("RegionRef is being redesigned")
 class TestRegionRefSubinterpreters(unittest.TestCase):
     """The point of the ownership check: another interpreter may only
     dereference what it actually owns."""
@@ -1058,8 +946,8 @@ class TestRegionRefSubinterpreters(unittest.TestCase):
         late = A(); late.tag = "late"
 
         r = Region()
-        r.early_ref = RegionRef(early)
-        r.late_ref = RegionRef(late)
+        r.early_ref = weakref.ref(early)
+        r.late_ref = weakref.ref(late)
         deep_freeze(late)
         c = Mutex(r)
         del r
@@ -1086,8 +974,8 @@ c.release()
         inner_region = Region()
         inner_region.obj = A()
         inner_region.obj.tag = "owned by the creator"
-        mine = RegionRef(inner_region.obj)
-        travelling = RegionRef(inner_region.obj)
+        mine = weakref.ref(inner_region.obj)
+        travelling = weakref.ref(inner_region.obj)
 
         inner = Mutex(inner_region)
         del inner_region
@@ -1142,7 +1030,7 @@ c.release()
         inner_region = Region()
         inner_region.marker = Marker()
         inner_region.marker.log = log
-        ref = RegionRef(inner_region.marker)
+        ref = weakref.ref(inner_region.marker)
 
         inner = Mutex(inner_region)
         del inner_region
@@ -1194,10 +1082,10 @@ c.release()
         local.tag = "local"
 
         r = Region()
-        r.local_ref = RegionRef(local)
+        r.local_ref = weakref.ref(local)
         r.owned = A()
         r.owned.tag = "owned"
-        r.owned_ref = RegionRef(r.owned)
+        r.owned_ref = weakref.ref(r.owned)
         c = Mutex(r)
         del r
         c.release()

@@ -13,6 +13,16 @@ extern "C" {
 #include "pycore_object.h"           // _Py_REF_IS_MERGED()
 #include "pycore_pyatomic_ft_wrappers.h"
 
+// This lock protects the internal state of weakrefs.
+//
+// The per-object locking Free-threading does is not sufficient to protect
+// the region metadata shared across multiple weakrefs. For sub-interpreter
+// sharing we need this to avoid race conditions across interpreters.
+//
+// FIXME(regions): In the future we may want to favour a lock-free design or at
+// least use a RWLock, but let's optimize when we have better benchmarks and data.
+extern PyMutex _PyPyrona_Lock;
+
 #ifdef Py_GIL_DISABLED
 
 #define WEAKREF_LIST_LOCK(obj) \
@@ -37,14 +47,11 @@ extern "C" {
 
 #else
 
-// Lock used for weakrefs to immutable objects
-extern PyMutex _PyWeakref_Lock;
+#define LOCK_WEAKREFS(obj) PyMutex_LockFlags(&_PyPyrona_Lock, _Py_LOCK_DONT_DETACH)
+#define UNLOCK_WEAKREFS(obj) PyMutex_Unlock(&_PyPyrona_Lock)
 
-#define LOCK_WEAKREFS(obj) PyMutex_LockFlags(&_PyWeakref_Lock, _Py_LOCK_DONT_DETACH)
-#define UNLOCK_WEAKREFS(obj) PyMutex_Unlock(&_PyWeakref_Lock)
-
-#define LOCK_WEAKREFS_FOR_WR(wr) PyMutex_LockFlags(&_PyWeakref_Lock, _Py_LOCK_DONT_DETACH)
-#define UNLOCK_WEAKREFS_FOR_WR(wr) PyMutex_Unlock(&_PyWeakref_Lock)
+#define LOCK_WEAKREFS_FOR_WR(wr) PyMutex_LockFlags(&_PyPyrona_Lock, _Py_LOCK_DONT_DETACH)
+#define UNLOCK_WEAKREFS_FOR_WR(wr) PyMutex_Unlock(&_PyPyrona_Lock)
 
 #define FT_CLEAR_WEAKREFS(obj, weakref_list)        \
     do {                                            \
@@ -81,19 +88,13 @@ static inline int _is_dead(PyObject *obj)
 #endif
 }
 
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
 static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
 {
-#ifdef Py_GIL_DISABLED
-    // Need to check again because the object could have been deallocated
-    if (ref->wr_object == Py_None) {
-        // clear_weakref() was called
-        return NULL;
+    if (_Py_atomic_load_ptr(&ref->wr_region_info) != NULL) {
+        return _PyRegion_WrefTryIncRef(ref);
     }
-    if (_Py_TryIncref(obj)) {
-        return obj;
-    }
-#else
-#ifdef _Py_PYRONA_INTERPRETER_SHARING
+
     if (_Py_NeedsAtomicRC(obj) || _Py_NeedsImmutableRC(obj)) {
         // Need to check again because the object could have been deallocated
         if (ref->wr_object == Py_None) {
@@ -122,14 +123,14 @@ static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
             };
         }
     }
-#endif // _Py_PYRONA_INTERPRETER_SHARING
 
     if (_Py_TryIncref(obj)) {
         return obj;
     }
-#endif
+
     return NULL;
 }
+#endif
 
 static inline PyObject* _PyWeakref_GET_REF(PyObject *ref_obj)
 {
@@ -142,10 +143,41 @@ static inline PyObject* _PyWeakref_GET_REF(PyObject *ref_obj)
         return NULL;
     }
 
+    if (_Py_atomic_load_ptr(&ref->wr_region_info) != NULL) {
+        return _PyRegion_WrefTryIncRef(ref);
+    }
+
+#ifdef Py_GIL_DISABLED
+    if (!_Py_TryIncrefCompare(&ref->wr_object, obj)) {
+        return NULL;
+    }
+
+    // The referenced object was in a region that was closed in the mean time
+    // we retry using the Region version of TryIncRef
+    if (_Py_atomic_load_ptr(&ref->wr_region_info) != NULL) {
+        Py_DECREF(obj);
+        return _PyRegion_WrefTryIncRef(ref);
+    }
+
+    return obj;
+#else // !Py_GIL_DISABLED
+#ifdef _Py_PYRONA_INTERPRETER_SHARING
     LOCK_WEAKREFS(obj);
     PyObject* result = get_ref_lock_held(ref, obj);
     UNLOCK_WEAKREFS(obj);
     return result;
+#else // !_Py_PYRONA_INTERPRETER_SHARING
+    PyObject *obj = ref->wr_object;
+    if (obj == Py_None) {
+        // clear_weakref() was called
+        return NULL;
+    }
+    if (_Py_TryIncref(obj)) {
+        return obj;
+    }
+    return NULL;
+#endif
+#endif
 }
 
 static inline int _PyWeakref_IS_DEAD(PyObject *ref_obj)
@@ -174,16 +206,14 @@ extern Py_ssize_t _PyWeakref_GetWeakrefCount(PyObject *obj);
 // intact.
 extern void _PyWeakref_ClearWeakRefsNoCallbacks(PyObject *obj);
 
-// Same, but every weak reference listed in `keep` survives. The table is keyed
-// by the weak reference objects themselves, not by their referents.
-extern void _PyWeakref_ClearWeakRefsExcept(PyObject *obj, _Py_hashtable_t *keep);
-
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
 PyAPI_FUNC(void) _PyWeakref_OnObjectFreeze(PyObject *object);
 PyAPI_FUNC(void) _PyImmutability_ClearWeakRefsWithCallback(PyObject *object, PyWeakReference **callbacks);
 #endif
 
 PyAPI_FUNC(int) _PyWeakref_IsDead(PyObject *weakref);
+PyAPI_FUNC(int) _PyWeakref_HasWeakrefs(PyObject *obj);
+PyAPI_FUNC(void) _PyWeakref_InstallRegionInfo_InfoLockHeld(PyObject *obj, _PyRegion_WrefInfo* info);
 
 #ifdef __cplusplus
 }

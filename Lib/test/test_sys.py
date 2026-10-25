@@ -1947,9 +1947,9 @@ class SizeofTest(unittest.TestCase):
         # weakref
         import weakref
         if support.Py_GIL_DISABLED:
-            expected = size('2Pln4P')
+            expected = size('2Pln5P')
         else:
-            expected = size('2Pln3P')
+            expected = size('2Pln4P')
         check(weakref.ref(int), expected)
         # weakproxy
         # XXX

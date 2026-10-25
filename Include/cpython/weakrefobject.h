@@ -43,6 +43,8 @@ struct _PyWeakReference {
      */
     PyMutex *weakrefs_lock;
 #endif
+
+    struct _PyRegion_WrefInfo *wr_region_info;
 };
 
 PyAPI_FUNC(void) _PyWeakref_ClearRef(PyWeakReference *self);

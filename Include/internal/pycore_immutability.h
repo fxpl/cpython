@@ -16,6 +16,12 @@ PyAPI_FUNC(void) _PyTracingRegion_Open(PyObject* region);
 PyAPI_FUNC(int) _PyTracingRegion_Detach(PyObject* region);
 PyAPI_FUNC(int) _PyTracingRegion_Attach(PyObject* region, _PyPyrona_owner_id_t owner);
 
+typedef struct _PyRegion_WrefInfo _PyRegion_WrefInfo;
+PyAPI_FUNC(void) _PyRegion_WrefInfoDecRef(_PyRegion_WrefInfo*);
+PyAPI_FUNC(void) _PyRegion_WrefInfoIncRefLockHeld(_PyRegion_WrefInfo*);
+PyAPI_FUNC(PyObject*) _PyRegion_WrefTryIncRef(PyWeakReference*);
+
+
 struct _Py_immutability_state {
     _PyOnceFlag init_once;
     // Guards immutable_by_construction_types and warned_types.

@@ -37,6 +37,7 @@
 #define SUCCEEDS(x) do { int r = (x); if (r != 0) goto error; } while (0)
 
 #define Region_Check(x) Py_IS_TYPE((x), &_PyTracingRegion_Type)
+#define Region_CAST(x) _Py_CAST(TracingRegionObject *, x)
 #define Mutex_Check(x) Py_IS_TYPE((x), &_PyMutex_Type)
 
 // ###################################################################
@@ -288,6 +289,220 @@ static void throw_region_error(
 }
 
 // ###################################################################
+// Weak Reference Handling
+// ###################################################################
+
+#define LOCK_WREF_INFO()   PyMutex_LockFlags(&_PyPyrona_Lock, _Py_LOCK_DONT_DETACH)
+#define UNLOCK_WREF_INFO() PyMutex_Unlock(&_PyPyrona_Lock)
+
+typedef enum {
+    /* A close is in progress. The referenced data is unavailable but should be
+     * soon; dereferencing fails and the caller may retry. */
+    _Py_WREF_INFO_KIND_WIP,
+    /* Delegates to `value.parent`, the node of the enclosing region. */
+    _Py_WREF_INFO_KIND_CHILD,
+    /* Terminal, the region is closed and but may belong to an owner. This
+     * can be restampt */
+    _Py_WREF_INFO_KIND_CLOSED,
+    /* Terminal, owned by the stored owner. */
+    _Py_WREF_INFO_KIND_OPEN,
+} wref_info_kind;
+
+/* Weak references pointing to an object, that is/was in a region have a
+ * `_PyRegion_WrefInfo` installed to check if dereferenceing is allowed.
+ * Multiple info nodes form a tree that mirrors the region hierarchy: a nested
+ * region's node delegates to the node of its parent, and the outermost node
+ * region's node names the owner if there is one.
+ *
+ * All weakrefs pointing into a region during one trace share a single node.
+ * As long as the region hasn't been opened this node can just be restamped. If
+ * a region was opened, the node will stay marked as opened until all weakrefs
+ * have droped their reference to it.
+ *
+ * All operations should be protected by `_PyPyrona_Lock` this can be optimized
+ * later if needed.
+ */
+struct _PyRegion_WrefInfo {
+    uint32_t rc;
+    wref_info_kind kind;
+    /* Borrowed. Set only on region nodes, and only while that region is closed.
+     *
+     * Borrowing is safe because the pointer is only followed after the terminal
+     * check established that this interpreter owns the region, and a region can
+     * only be deallocated by its owner. */
+    PyObject *region;
+    union {
+        struct _PyRegion_WrefInfo *parent;
+        _PyPyrona_owner_id_t owner;
+    } value;
+};
+
+static void
+_wref_info_incref_lock_held(_PyRegion_WrefInfo *info)
+{
+    assert(info != NULL);
+    assert(info->rc > 0);
+    info->rc += 1;
+}
+static void
+_wref_info_decref_lock_held(_PyRegion_WrefInfo *info)
+{
+    assert(info != NULL);
+    while (info != NULL) {
+        assert(info->rc > 0);
+        if (--info->rc > 0) {
+            return;
+        }
+        _PyRegion_WrefInfo *parent = NULL;
+        if (info->kind == _Py_WREF_INFO_KIND_CHILD) {
+            parent = info->value.parent;
+        }
+        PyMem_RawFree(info);
+        info = parent;
+    }
+}
+
+_PyRegion_WrefInfo* _wref_info_new(PyObject *region) {
+    // Raw allocation on purpose: a node can outlive the interpreter that
+    // created it, when a chain reaching it is still held elsewhere.
+    _PyRegion_WrefInfo *info = PyMem_RawCalloc(1, sizeof(_PyRegion_WrefInfo));
+    if (info == NULL) {
+        return NULL;
+    }
+    info->rc = 1;
+    info->kind = _Py_WREF_INFO_KIND_WIP;
+    info->region = region;
+    memset(&info->value, 0, sizeof(info->value));
+    return info;
+}
+void _wref_info_set_open_lock_held(_PyRegion_WrefInfo *info, _PyPyrona_owner_id_t owner) {
+    assert(info->kind == _Py_WREF_INFO_KIND_WIP || info->kind == _Py_WREF_INFO_KIND_CLOSED);
+    info->region = NULL;
+    info->value.owner = owner;
+    info->kind = _Py_WREF_INFO_KIND_OPEN;
+}
+void _wref_info_set_open(_PyRegion_WrefInfo *info, _PyPyrona_owner_id_t owner) {
+    LOCK_WREF_INFO();
+    _wref_info_set_open_lock_held(info, owner);
+    UNLOCK_WREF_INFO();
+}
+void _wref_info_set_closed_lock_held(_PyRegion_WrefInfo *info, _PyPyrona_owner_id_t owner) {
+    assert(info->kind == _Py_WREF_INFO_KIND_WIP || info->kind == _Py_WREF_INFO_KIND_CLOSED);
+    info->value.owner = owner;
+    info->kind = _Py_WREF_INFO_KIND_CLOSED;
+}
+void _wref_info_set_parent_lock_held(_PyRegion_WrefInfo *info, _PyRegion_WrefInfo *parent) {
+    assert(info != NULL && parent != NULL);
+    assert(info->kind == _Py_WREF_INFO_KIND_CLOSED);
+    assert(parent->kind == _Py_WREF_INFO_KIND_WIP);
+    _wref_info_incref_lock_held(parent);
+    info->value.parent = parent;
+    info->kind = _Py_WREF_INFO_KIND_CHILD;
+}
+// This should only be called on closed regions, it will unparent the node
+// if it has a parent and make it owned by the current owner.
+void _wref_info_unparent_lock_held(_PyRegion_WrefInfo *info) {
+    assert(info != NULL);
+    assert(_PyTracingRegion_IsClosed(info->region));
+    if (info->kind != _Py_WREF_INFO_KIND_CHILD) {
+        return;
+    }
+
+    _wref_info_decref_lock_held(info->value.parent);
+    // We could resolve the owner from the parent, however, this might
+    // be several layers deep and in the end, it should always return the
+    // current owner that is calling this function anyways.
+    info->value.owner = _PyPyrona_ThisOwnerId();
+    info->kind = _Py_WREF_INFO_KIND_CLOSED;
+}
+PyObject* _wref_info_try_inc_ref_lock_held(PyWeakReference *wref) {
+retry:
+    LOCK_WREF_INFO();
+    // The region info was cleared while we acquired the lock. Let's retry
+    // a stack overflow is very very unlikely as it would require several
+    // racy closes to restamp the wref before succeeding on either path.
+    if (wref->wr_region_info == NULL) {
+        UNLOCK_WREF_INFO();
+        return _PyWeakref_GET_REF(_PyObject_CAST(wref));
+    }
+
+    // In a perfect world, we could build a stack of all regions, that need
+    // to be opened and open them all in one go, thereby only traversing the
+    // wref-info tree once. However, opening a region requires two locks, the
+    // lock of the bridge object and the wref-info lock. This can quickly end
+    // in a deadlock. For now we walk the tree several times. This can be
+    // optimized later if needed.
+    _PyRegion_WrefInfo *info = wref->wr_region_info;
+    while (info->kind == _Py_WREF_INFO_KIND_CHILD) {
+        _PyRegion_WrefInfo* parent = info->value.parent;
+        if (parent->kind == _Py_WREF_INFO_KIND_OPEN) {
+            _wref_info_unparent_lock_held(info);
+            break;
+        }
+        info = parent;
+    }
+
+    // The region is currently being traced, we return None
+    if (info->kind == _Py_WREF_INFO_KIND_WIP) {
+        UNLOCK_WREF_INFO();
+        return NULL;
+    }
+
+    // The object is owned by someone else, we just stop what we're doing
+    if (info->value.owner != _PyPyrona_ThisOwnerId()) {
+        UNLOCK_WREF_INFO();
+        return NULL;
+    }
+
+    if (info->kind == _Py_WREF_INFO_KIND_CLOSED) {
+        // A concurrent thread may be about to deallocate the region
+        // in that case, the try-inc-ref will fail but everything should
+        // become local, so we just retry
+        PyObject *region = info->region;
+        if (_Py_TryIncref(region)) {
+            UNLOCK_WREF_INFO();
+            _PyTracingRegion_Open(region);
+            Py_DECREF(region);
+        } else {
+            UNLOCK_WREF_INFO();
+        }
+        goto retry;
+    }
+
+    // If the root leaf region is open and owned by us, we're (basically) done
+    if (info->kind == _Py_WREF_INFO_KIND_OPEN) {
+        assert(info == wref->wr_region_info);
+        PyObject *obj = _Py_atomic_load_ptr(&wref->wr_object);
+        if (obj == Py_None) {
+            UNLOCK_WREF_INFO();
+            // clear_weakref() was called
+            return NULL;
+        }
+        if (_Py_TryIncrefCompare(&wref->wr_object, obj)) {
+            UNLOCK_WREF_INFO();
+            return obj;
+        }
+        UNLOCK_WREF_INFO();
+        return NULL;
+    }
+
+    Py_UNREACHABLE();
+    return NULL;
+}
+
+void _PyRegion_WrefInfoDecRef(_PyRegion_WrefInfo *info) {
+    LOCK_WREF_INFO();
+    _wref_info_decref_lock_held(info);
+    UNLOCK_WREF_INFO();
+}
+void _PyRegion_WrefInfoIncRefLockHeld(_PyRegion_WrefInfo *info) {
+    _wref_info_incref_lock_held(info);
+}
+PyObject* _PyRegion_WrefTryIncRef(PyWeakReference *wref) {
+    return _wref_info_try_inc_ref_lock_held(wref);
+}
+
+// ###################################################################
 // Tracing Impl
 // ###################################################################
 
@@ -330,6 +545,8 @@ typedef struct {
     // Indicates if the region is open or closed. Additional values are used
     // to track active traces and detect concurrent accesses.
     int32_t state;
+
+    _PyRegion_WrefInfo *wref_info;
 } TracingRegionObject;
 
 #define _PyTRegion_CAST(x) _Py_CAST(TracingRegionObject*, x)
@@ -439,6 +656,12 @@ static int _region_close_lock_held(
 
     dbg("Closing region %p", self);
 
+    if (self->wref_info) {
+        LOCK_WREF_INFO();
+        _wref_info_set_closed_lock_held(self->wref_info, _PyPyrona_ThisOwnerId());
+        UNLOCK_WREF_INFO();
+    }
+
     // See comment on `self->internal_bridge_refs`
     assert(self->internal_bridge_refs == 0);
     if (bridge_rc != 0) {
@@ -503,6 +726,14 @@ static void _open_region_lock_held(TracingRegionObject *self) {
 #endif
 
     self->state = Py_REGION_STATUS_OPEN;
+
+    if (self->wref_info != NULL) {
+        LOCK_WREF_INFO();
+        _wref_info_set_open_lock_held(self->wref_info, _PyPyrona_ThisOwnerId());
+        _wref_info_decref_lock_held(self->wref_info);
+        self->wref_info = NULL;
+        UNLOCK_WREF_INFO();
+    }
 }
 
 static void _open_region(TracingRegionObject *self) {
@@ -1620,6 +1851,12 @@ static int _trace_visit_bridge_ref(PyObject* obj, int ref_flags, region_trace_st
 
     // If the child region is closed we can move it directly
     if (_PyTracingRegion_IsClosed(obj)) {
+        TracingRegionObject *region = Region_CAST(obj);
+        if (region->wref_info != NULL) {
+            LOCK_WREF_INFO();
+            _wref_info_unparent_lock_held(region->wref_info);
+            UNLOCK_WREF_INFO();
+        }
         return _move_obj(obj, ref_flags, state);
     }
 
@@ -1715,6 +1952,26 @@ typedef struct {
     PyObject *region;
 } prepare_region_close_state_t;
 
+// Runs BODY with INFO bound to the region's wref info and the wref info lock
+// held. Returns -1 from the enclosing function if the info can't be allocated.
+#define WITH_REGION_WREF_INFO(REGION, INFO, BODY)                             \
+    do {                                                                      \
+        TracingRegionObject *_wri_region = Region_CAST(REGION);               \
+        if (_wri_region->wref_info == NULL) {                                 \
+            _wri_region->wref_info = _wref_info_new(_PyObject_CAST(_wri_region)); \
+            if (_wri_region->wref_info == NULL) {                             \
+                PyErr_NoMemory();                                                 \
+                return -1;                                                        \
+            } else {                                                          \
+                _PyRegion_WrefInfo *INFO = _wri_region->wref_info;            \
+                LOCK_WREF_INFO();                                             \
+                BODY;                                                         \
+                UNLOCK_WREF_INFO();                                           \
+            }                                                                 \
+        }                                                                     \
+    } while (0)
+
+// The bridge of the traversed region must be held for this function
 static int
 _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_entry,
                     void *state_void)
@@ -1722,16 +1979,10 @@ _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_ent
     PyObject *obj = _PyObject_CAST(key);
     prepare_region_close_state_t *state = _Py_CAST(prepare_region_close_state_t*, state_void);
 
-    // ### Soundness
-    // We have to prevent weakrefs from dereferencing the object after we validated it.
-    //
-    // FIXME(regions): In theory it is possible to build out-of-tree weakrefs using
-    //      `PyUnstable_TryIncRef`. We could steal a bit in the shared RC to indicate
-    //      that any try-inc-ref attempts should fail while the region is closed. But
-    //      this would require a second pass during opening. Since `PyUnstable_TryIncRef`
-    //      is not even stable, we'll ignore this for now.
-    if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
-        _PyWeakref_ClearWeakRefsExcept(obj, state->keep);
+    // We make all weak-references region aware.
+    if (_PyWeakref_HasWeakrefs(obj)) {
+        WITH_REGION_WREF_INFO(state->region, info,
+            _PyWeakref_InstallRegionInfo_InfoLockHeld(obj, info));
     }
 
     // With the GIL we know that an isolated trace is valid, however on
@@ -1804,6 +2055,13 @@ _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_ent
                 (void*)obj);
             return -1;
         }
+        TracingRegionObject *child = Region_CAST(obj);
+        Py_BEGIN_CRITICAL_SECTION(child);
+        if (child->wref_info) {
+            WITH_REGION_WREF_INFO(state->region, info,
+                _wref_info_set_parent_lock_held(child->wref_info, info));
+        }
+        Py_END_CRITICAL_SECTION();
     }
 
     // ### Cleanup
@@ -1827,6 +2085,15 @@ error:
     return -1;
 
 #else // !Py_GIL_DISABLED
+    if (Region_Check(obj)) {
+        assert(!region_is_open(_PyTRegion_CAST(obj)));
+        TracingRegionObject *child = Region_CAST(obj);
+        if (child->wref_info) {
+            WITH_REGION_WREF_INFO(state->region, info,
+                _wref_info_set_parent_lock_held(child->wref_info, info));
+        }
+    }
+
     // Balances the `Py_INCREF(obj)` taken when the object was marked visited.
     Py_DECREF(obj);
     PyMem_Free(*value_entry);
@@ -1841,9 +2108,24 @@ static int _validate_isolation(region_trace_state_t *trace_state) {
         .region = _PyObject_CAST(trace_state->bridge),
     };
 
+    int result = 0;
+    Py_BEGIN_CRITICAL_SECTION(trace_state->bridge);
     if (_Py_hashtable_foreach_mut(
         trace_state->visited, _validate_isolation_visit, (void*)&state)
     ) {
+        if (Region_CAST(trace_state->bridge)->wref_info) {
+            LOCK_WREF_INFO();
+            _wref_info_set_open_lock_held(
+                Region_CAST(trace_state->bridge)->wref_info,
+                _PyPyrona_ThisOwnerId());
+            _wref_info_decref_lock_held(Region_CAST(trace_state->bridge)->wref_info);
+            Region_CAST(trace_state->bridge)->wref_info = NULL;
+            UNLOCK_WREF_INFO();
+        }
+        result = -1;
+    }
+    Py_END_CRITICAL_SECTION();
+    if (result < 0) {
         return -1;
     }
 
@@ -2475,6 +2757,15 @@ int _PyTracingRegion_Detach(PyObject* region) {
         return -1;
     }
 
+    // Since we keep the lock past the `is_open` check it should be impossible
+    // to dereference a weak-ref from this point until the region is reattached.
+    LOCK_WREF_INFO();
+    Py_BEGIN_CRITICAL_SECTION(region);
+    if (Region_CAST(region)->wref_info) {
+        _wref_info_set_closed_lock_held(Region_CAST(region)->wref_info, _Py_PYRONA_RELEASED_OWNER_ID);
+    }
+    Py_END_CRITICAL_SECTION();
+
     // Confirm that no other thread has opened the region again before the
     // singe external reference check above.
     if (region_is_open(self)) {
@@ -2483,6 +2774,7 @@ int _PyTracingRegion_Detach(PyObject* region) {
             "the region couldn't be detached due to a concurrent access");
         return -1;
     }
+    UNLOCK_WREF_INFO();
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     // The region is closed and this is the only owner of the bridge. We untrack
@@ -2496,6 +2788,12 @@ int _PyTracingRegion_Detach(PyObject* region) {
 int _PyTracingRegion_Attach(PyObject* region, _PyPyrona_owner_id_t owner) {
     assert(Region_Check(region));
 
+    Py_BEGIN_CRITICAL_SECTION(region);
+    if (Region_CAST(region)->wref_info) {
+        _wref_info_set_closed_lock_held(Region_CAST(region)->wref_info, owner);
+    }
+    Py_END_CRITICAL_SECTION();
+
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     assert(!PyObject_GC_IsTracked(region));
     PyObject_GC_Track(region);
@@ -2503,3 +2801,8 @@ int _PyTracingRegion_Attach(PyObject* region, _PyPyrona_owner_id_t owner) {
 
     return 0;
 }
+
+// TODO(regions): Weakrefs attached to objects shared across sub-interpreters need:
+// - Atomic RC enabled for them
+// - On deallocation call the callback on the "right" interpreter. For wrefs
+//   moved as part of regions, this may be... interesting

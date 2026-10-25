@@ -77,7 +77,13 @@
  */
 #endif
 
-PyMutex _PyWeakref_Lock;
+// FIXME(region): Reusing the same weakref easily breaks region isolation
+// without a simple way out for programmers. For now we disable the optimization.
+// in the future, we may create a new object every time, but make sure that
+// the internal metadata is shared until this is no longer possible due to regions.
+#define WEAKREF_REUSE_BASIC_REFS 0
+
+PyMutex _PyPyrona_Lock;
 
 #define GET_WEAKREFS_LISTPTR(o) \
         ((PyWeakReference **) _PyObject_GET_WEAKREFS_LISTPTR(o))
@@ -391,7 +397,7 @@ static PyWeakReference *
 try_reuse_basic_ref(PyWeakReference *list, PyTypeObject *type,
                     PyObject *callback)
 {
-    if (callback != NULL) {
+    if (!WEAKREF_REUSE_BASIC_REFS || callback != NULL) {
         return NULL;
     }
 
@@ -1278,12 +1284,6 @@ _PyStaticType_ClearWeakRefs(PyInterpreterState *interp, PyTypeObject *type)
 void
 _PyWeakref_ClearWeakRefsNoCallbacks(PyObject *obj)
 {
-    _PyWeakref_ClearWeakRefsExcept(obj, NULL);
-}
-
-void
-_PyWeakref_ClearWeakRefsExcept(PyObject *obj, _Py_hashtable_t *keep)
-{
     /* Modeled after GET_WEAKREFS_LISTPTR().
 
        This is never triggered for static types so we can avoid the
@@ -1291,11 +1291,7 @@ _PyWeakref_ClearWeakRefsExcept(PyObject *obj, _Py_hashtable_t *keep)
     PyWeakReference **list = _PyObject_GET_WEAKREFS_LISTPTR_FROM_OFFSET(obj);
     LOCK_WEAKREFS(obj);
     while (*list) {
-        if (keep != NULL && _Py_hashtable_get_entry(keep, *list)) {
-            list = &((*list)->wr_next);
-        } else {
-            _PyWeakref_ClearRef(*list);
-        }
+        _PyWeakref_ClearRef(*list);
     }
     UNLOCK_WEAKREFS(obj);
 }
@@ -1304,4 +1300,38 @@ int
 _PyWeakref_IsDead(PyObject *weakref)
 {
     return _PyWeakref_IS_DEAD(weakref);
+}
+
+int _PyWeakref_HasWeakrefs(PyObject *obj) {
+    if (!_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
+        return 0;
+    }
+
+    PyWeakReference **list = GET_WEAKREFS_LISTPTR(obj);
+    return FT_ATOMIC_LOAD_PTR(*list) != NULL;
+}
+
+void _PyWeakref_InstallRegionInfo_InfoLockHeld(PyObject *obj, _PyRegion_WrefInfo* info) {
+    if (obj == NULL || !_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
+        PyErr_BadInternalCall();
+        return;
+    }
+
+    PyWeakReference **list = GET_WEAKREFS_LISTPTR(obj);
+    if (_Py_atomic_load_ptr(list) == NULL) {
+        // Fast path for the common case
+        return;
+    }
+
+    LOCK_WEAKREFS(obj);
+    PyWeakReference *next = *list;
+    while (next != NULL) {
+        PyWeakReference *current = next;
+
+        _PyRegion_WrefInfoIncRefLockHeld(info);
+        current->wr_region_info = info;
+
+        next = next->wr_next;
+    }
+    UNLOCK_WEAKREFS(obj);
 }
