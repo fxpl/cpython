@@ -285,7 +285,6 @@ static void mutex_dealloc_owned(_PyMutexObject *self) {
         assert(res >= 0);
     }
 
-    // Clearing hands the region off, so no region reference points here any more.
     PyMutex_clear(_PyObject_CAST(self));
     PyObject_GC_Del(self);
 }
@@ -303,10 +302,6 @@ static int mutex_pending_dealloc(void *arg) {
  * interpreter that never owned it. Its region can not be dropped there: while
  * the mutex is acquired, the region is reference counted non-atomically and
  * tracked in the owner's GC list, so touching it would race with the owner.
- *
- * The mutex itself is handed over as well, instead of only its region, because a
- * region reference resolving through this mutex borrows the pointer. Freeing the
- * mutex here would leave that pointer dangling until the scheduled call runs.
  *
  * A mutex waiting for its owner is unreachable: its reference count is zero, it
  * supports no weak references, and `_Py_TryIncref_Immutable` refuses to

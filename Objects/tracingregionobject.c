@@ -8,7 +8,6 @@
 #include "pycore_modsupport.h"    // _PyArg_NoPositional()
 #include "pycore_weakref.h"
 #include "pycore_mutexobject.h"
-#include "pycore_regionref.h"
 #include <stdint.h>
 #ifdef Py_GIL_DISABLED
 #include "pycore_parking_lot.h"   // _PyParkingLot_Park()
@@ -331,10 +330,6 @@ typedef struct {
     // Indicates if the region is open or closed. Additional values are used
     // to track active traces and detect concurrent accesses.
     int32_t state;
-    // The node every region reference into this region resolves through, or
-    // NULL when nothing points into it. Only closed regions can have a meta,
-    // opening restamps it
-    _PyRegionRefMetadata *meta;
 } TracingRegionObject;
 
 #define _PyTRegion_CAST(x) _Py_CAST(TracingRegionObject*, x)
@@ -376,38 +371,6 @@ static int region_clear_tracing_mark(TracingRegionObject *self) {
     self->state = Py_REGION_STATUS_OPEN;
     Py_END_CRITICAL_SECTION();
     return res;
-}
-
-/* Returns this region's node, allocating it if this is the first reference the
- * current close has found. Borrowed. The caller must hold `_PyWeakref_Lock`. */
-static _PyRegionRefMetadata *
-region_meta_lock_held(TracingRegionObject *self)
-{
-    if (self->meta == NULL) {
-        self->meta = _PyRegionRef_NewRegionMetaLockHeld(_PyObject_CAST(self));
-    }
-    return self->meta;
-}
-
-static void
-region_meta_release_lock_held(TracingRegionObject *self)
-{
-    if (self->meta != NULL) {
-        _PyRegionRef_MetaRegionOpened(self->meta);
-        _PyRegionRef_MetaDecref(self->meta);
-        self->meta = NULL;
-    }
-}
-
-/* Hands the node over to the references still holding it: it becomes local to
- * this interpreter with nothing left to open. Used whenever a region stops
- * being closed, including when its contents are being deleted. */
-static void
-region_meta_release(TracingRegionObject *self)
-{
-    Py_BEGIN_CRITICAL_SECTION(self);
-    region_meta_release_lock_held(self);
-    Py_END_CRITICAL_SECTION();
 }
 
 #ifdef Py_GIL_DISABLED
@@ -530,8 +493,6 @@ static void _open_region_lock_held(TracingRegionObject *self) {
     }
 
     dbg("Opening region %p", self);
-
-    region_meta_release_lock_held(self);
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     _restore_internal_bridge_refs(self);
@@ -1659,29 +1620,7 @@ static int _trace_visit_bridge_ref(PyObject* obj, int ref_flags, region_trace_st
 
     // If the child region is closed we can move it directly
     if (_PyTracingRegion_IsClosed(obj)) {
-        int res = _move_obj(obj, ref_flags, state);
-        // Update the region reference meta of the child, if it has one
-        if (res == 0) {
-            TracingRegionObject *child = (TracingRegionObject *)obj;
-            bool no_memory = false;
-            LOCK_REGION_REF_META();
-            if (child->meta != NULL) {
-                _PyRegionRefMetadata *parent =
-                    region_meta_lock_held((TracingRegionObject *)state->bridge);
-                if (parent == NULL) {
-                    no_memory = true;
-                }
-                else {
-                    _PyRegionRef_MetaSetParentLockHeld(child->meta, parent);
-                }
-            }
-            UNLOCK_REGION_REF_META();
-            if (no_memory) {
-                PyErr_NoMemory();
-                return TRACE_RES_ERR;
-            }
-        }
-        return res;
+        return _move_obj(obj, ref_flags, state);
     }
 
     _Py_hashtable_entry_t *entry = _Py_hashtable_get_entry(tree_state->hierarchy, (void*)obj);
@@ -1792,7 +1731,7 @@ _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_ent
     //      this would require a second pass during opening. Since `PyUnstable_TryIncRef`
     //      is not even stable, we'll ignore this for now.
     if (_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
-        _PyRegionRef_CloseWeakRefs(obj, state->keep, state->region);
+        _PyWeakref_ClearWeakRefsExcept(obj, state->keep);
     }
 
     // With the GIL we know that an isolated trace is valid, however on
@@ -2033,27 +1972,6 @@ finally:
 }
 #pragma endregion
 
-/* Resolves the region reference meta of every region this trace touched.
- */
-static int
-resolve_region_meta(_Py_hashtable_t *ht, const void *key, const void *value,
-                    void *user_data)
-{
-    TracingRegionObject *region = (TracingRegionObject *)key;
-    if (region->meta == NULL) {
-        return 0;
-    }
-    // The region remains open, therefore we mark it as being local to the IP
-    if (region_is_open(region)) {
-        region_meta_release(region);
-        return 0;
-    }
-
-    // The region was closed, we resolve the WIP state
-    _PyRegionRef_MetaResolveWip(region->meta);
-    return 0;
-}
-
 /* This method traces the region and closes it, if there are no references
  * pointing into the region. References to the bridge are allowed.
  *
@@ -2167,8 +2085,6 @@ static int try_close_region_tree(PyObject *root) {
 error:
     tree_trace_res = TRACE_RES_ERR;
 finally:
-    // `resolve_region_meta()` never fails, so the result can be ignored.
-    (void)_Py_hashtable_foreach(state.tracing_counts, resolve_region_meta, NULL);
     tree_trace_state_destroy(&state);
 
     return tree_trace_res;
@@ -2192,7 +2108,6 @@ TracingRegion_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
     gc_list_init(&self->gc_list);
 #endif
 
-    self->meta = NULL;
     // We make the region open by default, this ensures that the first close
     // will handle the region type correctly. Alternatively, we could make them
     // closed in the beginning, but then handle the cases specifically.
@@ -2452,25 +2367,13 @@ int _PyTracingRegion_IsClosed(PyObject* region) {
     return !region_is_open(self);
 }
 
-/* Opens the region, so that a region reference can hand out a strong reference
- * into it. Only the sub-regions of this region stay closed.
+/* Opens the region. Only the sub-regions of this region stay closed.
  *
  * This function requires the GIL to be held, and the caller to have established
  * that this interpreter owns the region.
  */
 void _PyTracingRegion_Open(PyObject* region) {
     _open_region(_PyTRegion_CAST(region));
-}
-
-_PyRegionRefMetadata *_PyTracingRegion_MetaLockHeld(PyObject* region) {
-    return region_meta_lock_held(_PyTRegion_CAST(region));
-}
-
-void _PyTracingRegion_SetMetaOwner(PyObject* region, _PyPyrona_owner_id_t owner) {
-    TracingRegionObject *self = _PyTRegion_CAST(region);
-    if (self->meta != NULL) {
-        _PyRegionRef_MetaSetIpid(self->meta, owner);
-    }
 }
 
 static PyObject *
@@ -2587,29 +2490,16 @@ int _PyTracingRegion_Detach(PyObject* region) {
     PyObject_GC_UnTrack(region);
 #endif
 
-    // This is safe, assuming the region references respect the thread ID,
-    // as that one prevents other threads and IPs from opening the chain under foot.
-    if (self->meta != NULL) {
-        _PyRegionRef_MetaSetReleased(self->meta);
-    }
-
     return 0;
 }
 
 int _PyTracingRegion_Attach(PyObject* region, _PyPyrona_owner_id_t owner) {
     assert(Region_Check(region));
-    TracingRegionObject *self = _PyTRegion_CAST(region);
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     assert(!PyObject_GC_IsTracked(region));
     PyObject_GC_Track(region);
 #endif
-
-    Py_BEGIN_CRITICAL_SECTION(self);
-    if (self->meta != NULL) {
-        _PyRegionRef_MetaSetIpid(self->meta, owner);
-    }
-    Py_END_CRITICAL_SECTION();
 
     return 0;
 }

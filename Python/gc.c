@@ -967,11 +967,10 @@ clear_weakrefs(PyGC_Head *unreachable)
         PyObject *op = FROM_GC(gc);
         next = GC_NEXT(gc);
 
-        if (_PyWeakrefOrRegionRef_Check(op)) {
+        if (PyWeakref_Check(op)) {
             /* A weakref inside the unreachable set is always cleared. See
              * the comments above handle_weakref_callbacks() for why these
-             * must be cleared. Region references reuse the same struct
-             * without being a weakref subtype, and need it just as much.
+             * must be cleared.
              */
             _PyWeakref_ClearRef((PyWeakReference *)op);
         }

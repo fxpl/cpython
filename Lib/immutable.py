@@ -47,7 +47,6 @@ InterpreterLocal = _c.InterpreterLocal
 SharedField = _c.SharedField
 TracingRegion = _c.TracingRegion
 Mutex = _c.Mutex
-RegionRef = _c.RegionRef
 
 # True when this build can share deeply frozen objects between interpreters.
 _cross_interpreter_sharing = _c._cross_interpreter_sharing
@@ -172,7 +171,6 @@ __all__ = [
     "SharedField",
     "TracingRegion",
     "Mutex",
-    "RegionRef",
     "freezable",
     "unfreezable",
     "explicitly_freezable",
