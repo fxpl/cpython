@@ -116,6 +116,7 @@ init_weakref(PyWeakReference *self, PyObject *ob, PyObject *callback)
     self->wr_object = ob;
     self->wr_prev = NULL;
     self->wr_next = NULL;
+    self->wr_region_info = NULL;
     self->wr_callback = Py_XNewRef(callback);
     if (callback == NULL) {
         self->callback_ipid = -1;
@@ -175,6 +176,17 @@ clear_weakref(PyObject *op)
 }
 
 
+// Must run after `clear_weakref`, which unlinks the weakref so no install can reach it
+static void
+release_region_info(PyObject *op)
+{
+    PyWeakReference *self = _PyWeakref_CAST(op);
+    if (self->wr_region_info != NULL) {
+        _PyRegion_WrefInfoDecRef(self->wr_region_info);
+        self->wr_region_info = NULL;
+    }
+}
+
 /* Cyclic gc uses this to *just* clear the passed-in reference, leaving
  * the callback intact and uncalled.  It must be possible to call self's
  * tp_dealloc() after calling this, so self has to be left in a sane enough
@@ -199,6 +211,7 @@ weakref_dealloc(PyObject *self)
 {
     PyObject_GC_UnTrack(self);
     clear_weakref(self);
+    release_region_info(self);
     Py_TYPE(self)->tp_free(self);
 }
 
@@ -811,6 +824,7 @@ proxy_dealloc(PyObject *self)
 {
     PyObject_GC_UnTrack(self);
     clear_weakref(self);
+    release_region_info(self);
     PyObject_GC_Del(self);
 }
 
@@ -1312,11 +1326,7 @@ int _PyWeakref_HasWeakrefs(PyObject *obj) {
 }
 
 void _PyWeakref_InstallRegionInfo_InfoLockHeld(PyObject *obj, _PyRegion_WrefInfo* info) {
-    if (obj == NULL || !_PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj))) {
-        PyErr_BadInternalCall();
-        return;
-    }
-
+    assert(obj != NULL && _PyType_SUPPORTS_WEAKREFS(Py_TYPE(obj)));
     PyWeakReference **list = GET_WEAKREFS_LISTPTR(obj);
     if (_Py_atomic_load_ptr(list) == NULL) {
         // Fast path for the common case
@@ -1328,8 +1338,12 @@ void _PyWeakref_InstallRegionInfo_InfoLockHeld(PyObject *obj, _PyRegion_WrefInfo
     while (next != NULL) {
         PyWeakReference *current = next;
 
+        _PyRegion_WrefInfo *old = current->wr_region_info;
         _PyRegion_WrefInfoIncRefLockHeld(info);
-        current->wr_region_info = info;
+        _Py_atomic_store_ptr_release(&current->wr_region_info, info);
+        if (old != NULL) {
+            _PyRegion_WrefInfoDecRefLockHeld(old);
+        }
 
         next = next->wr_next;
     }

@@ -18,6 +18,7 @@ PyAPI_FUNC(int) _PyTracingRegion_Attach(PyObject* region, _PyPyrona_owner_id_t o
 
 typedef struct _PyRegion_WrefInfo _PyRegion_WrefInfo;
 PyAPI_FUNC(void) _PyRegion_WrefInfoDecRef(_PyRegion_WrefInfo*);
+PyAPI_FUNC(void) _PyRegion_WrefInfoDecRefLockHeld(_PyRegion_WrefInfo*);
 PyAPI_FUNC(void) _PyRegion_WrefInfoIncRefLockHeld(_PyRegion_WrefInfo*);
 PyAPI_FUNC(PyObject*) _PyRegion_WrefTryIncRef(PyWeakReference*);
 

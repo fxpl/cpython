@@ -130,24 +130,22 @@ class TestTracing(unittest.TestCase):
                 "the region 0x... can not be closed as it attempts to reference one of its parent regions 0x...",
             ])
 
-    def test_weak_ref_in_region(self):
+    def test_weak_ref_into_region(self):
         @freezable
         class A:
             pass
 
         m = Mutex(Region())
         m.value.obj = A()
-        m.value.wref1 = weakref.ref(m.value.obj)
-        wref2 = weakref.ref(m.value.obj)
+        wref = weakref.ref(m.value.obj)
 
         # Closing should pause all external weak references
         m.release()
-        self.assertIsNone(wref2())
+        self.assertIsNone(wref())
 
         # Acquireing should reenable all weak references
         m.acquire()
-        self.assertEqual(wref2(), m.value.obj)
-        self.assertEqual(m.value.wref1(), m.value.obj)
+        self.assertEqual(wref(), m.value.obj)
 
     def test_weak_ref_to_bridge(self):
         """
@@ -162,7 +160,7 @@ class TestTracing(unittest.TestCase):
 
         self.assertEqual(str(err.exception), "cannot create weak reference to 'TracingRegion' object")
 
-    def test_weak_ref_to_outside_object(self):
+    def test_weak_ref_not_movable(self):
         @freezable
         class A:
             pass
@@ -174,17 +172,11 @@ class TestTracing(unittest.TestCase):
             with self.subTest(make_ref=make_ref):
                 r = Region()
                 r.wref = make_ref(outside)
-                # The referent is pulled into the region, but it is also
-                # referenced from the outside
-                with self.assertRaises(RuntimeError) as cm:
+                with self.assertRaisesRegex(RuntimeError, "are not movable"):
                     Region.close(r)
-                self.assertEqual(
-                    str(cm.exception),
-                    "The region could not be closed due to:\n"
-                    f"- 1 incoming reference to A '{outside!r}'\n")
                 self.assertFalse(Region.is_closed(r))
 
-    def test_dead_weak_ref_in_region(self):
+    def test_dead_weak_ref_not_movable(self):
         @freezable
         class A:
             pass
@@ -193,9 +185,9 @@ class TestTracing(unittest.TestCase):
         tmp = A()
         r.wref = weakref.ref(tmp)
         del tmp
-        Region.close(r)
-        self.assertTrue(Region.is_closed(r))
-        self.assertIsNone(r.wref())
+        with self.assertRaisesRegex(RuntimeError, "are not movable"):
+            Region.close(r)
+        self.assertFalse(Region.is_closed(r))
 
 
     def test_release_error_with_failing_repr(self):
@@ -713,6 +705,56 @@ class TestRegionRef(unittest.TestCase):
         self.assertFalse(Region.is_closed(c.value))
         self.assertEqual(c.value.child.obj.tag, 5)
 
+    def test_open_sub_region_directly(self):
+        child = Region()
+        child.obj = self._obj(5)
+        rr = weakref.ref(child.obj)
+        r = Region()
+        r.child = child
+        del child
+        Region.close(r)
+
+        self.assertEqual(r.child.obj.tag, 5)
+        self.assertEqual(rr().tag, 5)
+
+    def test_release_former_sub_region(self):
+        child = Region()
+        child.obj = self._obj(5)
+        rr = weakref.ref(child.obj)
+        r = Region()
+        r.child = child
+        del child
+        Region.close(r)
+
+        child = r.child
+        r.child = None
+        c = Mutex(child)
+        del child
+        c.release()
+        self.assertIsNone(rr())
+        c.acquire()
+        self.assertEqual(rr().tag, 5)
+
+    def test_release_guards_every_target(self):
+        r = Region()
+        objs = [self._obj(i) for i in range(3)]
+        r.a, r.b, r.c = objs
+        r.child1, r.child2 = Region(), Region()
+        r.child1.obj = self._obj(3)
+        r.child2.obj = self._obj(4)
+        objs += [r.child1.obj, r.child2.obj]
+        refs = [weakref.ref(obj) for obj in objs]
+        del objs
+        c = Mutex(r)
+        del r
+        c.release()
+
+        for rr in refs:
+            self.assertIsNone(rr())
+
+        c.acquire()
+        self.assertEqual([rr().tag for rr in refs], [0, 1, 2, 3, 4])
+
     def test_release_after_acquire_without_opening(self):
         """A release does not re-trace an already closed region, so nothing
         re-stamps its node. The mutex node is what keeps the next owner able to
@@ -912,6 +954,72 @@ class TestRegionRef(unittest.TestCase):
         c.release()
         c.acquire()
         self.assertIsInstance(hash(rr), int)
+
+    @unittest.skipUnless(support.Py_GIL_DISABLED,
+                         "threads only have distinct owners on free threading")
+    @threading_helper.reap_threads
+    def test_sub_region_of_parent_opened_by_other_thread(self):
+        child = Region()
+        child.obj = self._obj(9)
+        rr = weakref.ref(child.obj)
+        r = Region()
+        r.child = child
+        del child
+        c = Mutex(r)
+        del r
+        c.release()
+
+        opened = threading.Event()
+        done = threading.Event()
+
+        def open_parent():
+            c.acquire()
+            c.value.child
+            opened.set()
+            done.wait()
+            c.release()
+
+        t = threading.Thread(target=open_parent)
+        t.start()
+        try:
+            self.assertTrue(opened.wait(support.SHORT_TIMEOUT))
+            self.assertIsNone(rr())
+        finally:
+            done.set()
+            t.join()
+
+        c.acquire()
+        self.assertEqual(rr().tag, 9)
+
+    @unittest.skipUnless(support.Py_GIL_DISABLED,
+                         "only free threading has biased reference counts")
+    @threading_helper.reap_threads
+    def test_bridge_biased_to_other_thread(self):
+        made = threading.Event()
+        done = threading.Event()
+        box = []
+
+        def make_region():
+            r = Region()
+            r.obj = self._obj(4)
+            # A tuple hands out plain increfs, unlike a list, which would
+            # mark `r` as maybe-weakref
+            box.append((r, weakref.ref(r.obj)))
+            made.set()
+            done.wait()
+
+        t = threading.Thread(target=make_region)
+        t.start()
+        try:
+            self.assertTrue(made.wait(support.SHORT_TIMEOUT))
+            r, rr = box[0]
+            Region.close(r)
+            # The bridge's shared refcount is back to 0, while `t` still owns it
+            del r
+            self.assertEqual(rr().tag, 4)
+        finally:
+            done.set()
+            t.join()
 
 
 class TestRegionRefSubinterpreters(unittest.TestCase):
@@ -1180,7 +1288,7 @@ class TestCrossThreadClose(unittest.TestCase):
             # reference this thread holds, so only the region reaches them.
             objs = handoff.pop()
             c.value.objs = objs
-            c.value.wref = weakref.ref(objs[0])
+            wref = weakref.ref(objs[0])
             del objs
 
             c.release()
@@ -1506,6 +1614,36 @@ class TestConcurrentClose(unittest.TestCase):
 
             if self.release_while(c, touch):
                 c.acquire()
+
+    @threading_helper.reap_threads
+    def test_failed_close_leaves_weak_refs_usable(self):
+        @freezable
+        class A:
+            pass
+
+        for _ in range(self.ITERATIONS):
+            r = Region()
+            r.objs = [A() for _ in range(100)]
+            wref = weakref.ref(r.objs[50])
+            stop = threading.Event()
+            started = threading.Event()
+
+            def touch():
+                started.set()
+                while not stop.is_set():
+                    r.objs
+
+            t = threading.Thread(target=touch)
+            t.start()
+            try:
+                self.assertTrue(started.wait(support.SHORT_TIMEOUT))
+                Region.close(r)
+            except RuntimeError as e:
+                self.assert_concurrent_error(e)
+                self.assertIs(wref(), r.objs[50])
+            finally:
+                stop.set()
+                t.join()
 
     @threading_helper.reap_threads
     def test_locked_mutation_during_close(self):
