@@ -1333,7 +1333,10 @@ void _PyWeakref_InstallRegionInfo_InfoLockHeld(PyObject *obj, _PyRegion_WrefInfo
         return;
     }
 
+    // On GIL builds the held wref-info lock is already the weakref lock
+#ifdef Py_GIL_DISABLED
     LOCK_WEAKREFS(obj);
+#endif
     PyWeakReference *next = *list;
     while (next != NULL) {
         PyWeakReference *current = next;
@@ -1347,5 +1350,7 @@ void _PyWeakref_InstallRegionInfo_InfoLockHeld(PyObject *obj, _PyRegion_WrefInfo
 
         next = next->wr_next;
     }
+#ifdef Py_GIL_DISABLED
     UNLOCK_WEAKREFS(obj);
+#endif
 }

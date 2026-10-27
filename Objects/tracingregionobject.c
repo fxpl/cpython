@@ -493,12 +493,16 @@ retry:
             // clear_weakref() was called
             return NULL;
         }
-        if (_Py_TryIncrefCompare(&wref->wr_object, obj)) {
-            UNLOCK_WREF_INFO();
-            return obj;
+#ifdef Py_GIL_DISABLED
+        if (!_Py_TryIncrefCompare(&wref->wr_object, obj)) {
+            obj = NULL;
         }
+#else
+        // On GIL builds the wref-info lock is also the weakref lock
+        obj = _PyWeakref_get_ref_lock_held(wref, obj);
+#endif
         UNLOCK_WREF_INFO();
-        return NULL;
+        return obj;
     }
 
     Py_UNREACHABLE();
@@ -2125,7 +2129,7 @@ error:
 #else // !Py_GIL_DISABLED
     if (Region_Check(obj)) {
         assert(!region_is_open(_PyTRegion_CAST(obj)));
-        if (_validate_isolation_child_wref_info(state, Region_CAST(obj)) < 0) {
+        if (_update_child_wref_info(state, Region_CAST(obj)) < 0) {
             return -1;
         }
     }

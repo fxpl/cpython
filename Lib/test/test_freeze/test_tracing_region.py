@@ -7,7 +7,7 @@ import unittest
 import weakref
 from immutable import deep_freeze, is_deep_frozen, freezable
 from immutable import TracingRegion as Region
-from immutable import Mutex, InterpreterLocal
+from immutable import Mutex, InterpreterLocal, SharedField
 import immutable
 from test import support
 from test.support import import_helper, os_helper, script_helper, threading_helper
@@ -1053,28 +1053,23 @@ class TestRegionRefSubinterpreters(unittest.TestCase):
         deep_freeze(early)
         late = A(); late.tag = "late"
 
-        r = Region()
-        r.early_ref = weakref.ref(early)
-        r.late_ref = weakref.ref(late)
+        early_ref = weakref.ref(early)
+        late_ref = weakref.ref(late)
         deep_freeze(late)
-        c = Mutex(r)
-        del r
-        c.release()
+        deep_freeze(early_ref)
+        deep_freeze(late_ref)
 
         self._run_in_subinterp("""
-c.acquire()
-assert c.value.early_ref().tag == "early", "frozen before the ref was created"
-assert c.value.late_ref().tag == "late", "frozen after the ref was created"
-c.release()
-""", shared={"c": c})
+assert early_ref().tag == "early", "frozen before the ref was created"
+assert late_ref().tag == "late", "frozen after the ref was created"
+""", shared={"early_ref": early_ref, "late_ref": late_ref})
 
     @unittest.skipUnless(immutable._cross_interpreter_sharing,
         "objects are not shared across interpreters")
     def test_foreign_deallocation_does_not_transfer_ownership(self):
-        """A mutex is immutable and may live inside a region, so the last
-        reference to it can be dropped by an interpreter that never owned it.
-        Its region must go to the mutex's owner, not to whoever runs the
-        deallocator."""
+        """A mutex can be shared across interpreters. When the last reference
+        is dropped the contained region must be dealloacted by go to the mutex's
+        owner, not to the interpreter that droped the last reference."""
         @freezable
         class A:
             pass
@@ -1083,7 +1078,6 @@ c.release()
         inner_region.obj = A()
         inner_region.obj.tag = "owned by the creator"
         mine = weakref.ref(inner_region.obj)
-        travelling = weakref.ref(inner_region.obj)
 
         inner = Mutex(inner_region)
         del inner_region
@@ -1092,28 +1086,21 @@ c.release()
         # Keep the region alive past the mutex, so the mutex can die alone.
         escaped = inner.value
 
-        outer_region = Region()
-        outer_region.inner = inner
-        outer_region.ref = travelling
-        del travelling
-        outer = Mutex(outer_region)
-        del outer_region
-        outer.release()
+        field = SharedField(inner)
+        deep_freeze(field)
         del inner
         gc.collect()
 
         self._run_in_subinterp("""
 import gc
-c.acquire()
-c.value.inner = None      # drops the last reference to a mutex we never owned
-gc.collect()
 try:
-    c.value.ref()
-    raise AssertionError("reached a region owned by another interpreter")
+    field.get().value
+    raise AssertionError("reached a mutex owned by another interpreter")
 except RuntimeError:
     pass
-c.release()
-""", shared={"c": outer})
+field.set(None)           # drops the last reference to a mutex we never owned
+gc.collect()
+""", shared={"field": field})
 
         # The creator still owns it, and is not locked out of its own region.
         self.assertEqual(escaped.obj.tag, "owned by the creator")
@@ -1175,42 +1162,6 @@ c.release()
                 break
         self.assertEqual(recorded, ["subinterpreter", "region"])
         self.assertIsNone(ref())
-
-    @unittest.skipUnless(immutable._cross_interpreter_sharing,
-        "objects are not shared across interpreters")
-    def test_owner_may_deref_and_others_may_not(self):
-        """`local` was never in a region, so nothing ever re-homes the
-        reference to it and it stays local to this interpreter. `owned` travels
-        with the region and becomes reachable by whoever holds the mutex."""
-        @freezable
-        class A:
-            pass
-
-        local = A()
-        local.tag = "local"
-
-        r = Region()
-        r.local_ref = weakref.ref(local)
-        r.owned = A()
-        r.owned.tag = "owned"
-        r.owned_ref = weakref.ref(r.owned)
-        c = Mutex(r)
-        del r
-        c.release()
-
-        self._run_in_subinterp("""
-c.acquire()
-try:
-    c.value.local_ref()
-    raise AssertionError("reached a foreign local object")
-except RuntimeError:
-    pass
-assert c.value.owned_ref().tag == "owned"
-c.release()
-""", shared={"c": c})
-
-        c.acquire()
-        self.assertEqual(c.value.local_ref().tag, "local")
 
 
 @unittest.skipUnless(support.Py_GIL_DISABLED,

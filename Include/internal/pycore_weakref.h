@@ -89,7 +89,7 @@ static inline int _is_dead(PyObject *obj)
 }
 
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
-static inline PyObject* get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
+static inline PyObject* _PyWeakref_get_ref_lock_held(PyWeakReference *ref, PyObject *obj)
 {
     if (_Py_NeedsAtomicRC(obj) || _Py_NeedsImmutableRC(obj)) {
         // Need to check again because the object could have been deallocated
@@ -164,7 +164,7 @@ static inline PyObject* _PyWeakref_GET_REF(PyObject *ref_obj)
         UNLOCK_WEAKREFS(obj);
         return _PyRegion_WrefTryIncRef(ref);
     }
-    PyObject* result = get_ref_lock_held(ref, obj);
+    PyObject* result = _PyWeakref_get_ref_lock_held(ref, obj);
     UNLOCK_WEAKREFS(obj);
     return result;
 #else // !_Py_PYRONA_INTERPRETER_SHARING
