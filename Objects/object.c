@@ -489,12 +489,12 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
     return 0;
 }
 
-// Py_INCREF only inlines the `ob_tid == this` check; clearing the region RC
-// flag lives here to keep call sites small.
+// Py_INCREF/Py_DECREF only inline the `ob_tid == this` check; claiming free
+// objects and clearing the region RC flag live here to keep call sites small.
 void
 _Py_IncRefShared(PyObject *o)
 {
-    if (_Py_IsOwnedOrClearRcFlag(o)) {
+    if (_Py_TryClaimFreeObject(o)) {
         _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, o->ob_ref_local + 1);
     }
     else {
@@ -505,6 +505,14 @@ _Py_IncRefShared(PyObject *o)
 void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
+    if (_Py_TryClaimFreeObjectDecRef(o)) {
+        uint32_t local = o->ob_ref_local - 1;
+        _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, local);
+        if (local == 0) {
+            _Py_MergeZeroLocalRefcount(o);
+        }
+        return;
+    }
     if (_Py_DecRefSharedIsDead(o, filename, lineno)) {
         // TODO(Immutable): Should make mutable here?
         _Py_CLEAR_IMMUTABLE(o);
@@ -535,7 +543,7 @@ _Py_MergeZeroLocalRefcount(PyObject *op)
     // gh-121794: This must be before the store to `ob_ref_shared` (gh-119999),
     // but should outside the fast-path to maintain the invariant that
     // a zero `ob_tid` implies a merged refcount.
-    _Py_atomic_store_uintptr_relaxed(&op->ob_tid, 0);
+    _Py_atomic_store_uintptr(&op->ob_tid, 0);
 
     // Slow-path: atomically set the flags (low two bits) to _Py_REF_MERGED.
     Py_ssize_t new_shared;
@@ -565,7 +573,7 @@ _Py_ExplicitMergeRefcount(PyObject *op, Py_ssize_t extra)
     // gh-119999: Write to ob_ref_local and ob_tid before merging the refcount.
     Py_ssize_t local = (Py_ssize_t)op->ob_ref_local;
     _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, 0);
-    _Py_atomic_store_uintptr_relaxed(&op->ob_tid, 0);
+    _Py_atomic_store_uintptr(&op->ob_tid, 0);
 
     Py_ssize_t refcnt;
     Py_ssize_t new_shared;
@@ -588,7 +596,7 @@ _PyObject_ResurrectEndSlow(PyObject *op)
     if (_Py_IsImmortal(op)) {
         return 1;
     }
-    if (_Py_IsOwnedByCurrentThread(op) || _Py_IsOwnedOrClearRcFlag(op)) {
+    if (_Py_IsOwnedByCurrentThread(op) || _Py_TryClaimFreeObject(op)) {
         // If the object is owned by the current thread, give up ownership and
         // merge the refcount. This isn't necessary in all cases, but it
         // simplifies the implementation.
@@ -2850,13 +2858,12 @@ new_reference(PyObject *op)
 #else
     op->ob_flags = 0;
     op->ob_mutex = (PyMutex){ 0 };
-#ifdef _Py_THREAD_SANITIZER
     _Py_atomic_store_uintptr_relaxed(&op->ob_tid, _Py_ThreadId());
+#ifdef _Py_THREAD_SANITIZER
     _Py_atomic_store_uint8_relaxed(&op->ob_gc_bits, 0);
     _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, 1);
     _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, 0);
 #else
-    op->ob_tid = _Py_ThreadId();
     op->ob_gc_bits = 0;
     op->ob_ref_local = 1;
     op->ob_ref_shared = 0;
@@ -2891,7 +2898,7 @@ _Py_SetImmortalUntracked(PyObject *op)
         return;
     }
 #ifdef Py_GIL_DISABLED
-    _Py_atomic_store_uintptr_relaxed(&op->ob_tid, _Py_UNOWNED_TID);
+    _Py_atomic_store_uintptr(&op->ob_tid, _Py_UNOWNED_TID);
     _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, _Py_IMMORTAL_REFCNT_LOCAL);
     _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, 0);
     _Py_atomic_or_uint8(&op->ob_gc_bits, _PyGC_BITS_DEFERRED);
@@ -3304,7 +3311,7 @@ _PyTrash_thread_deposit_object(PyThreadState *tstate, PyObject *op)
     }
     uintptr_t tagged_ptr = ((uintptr_t)tstate->delete_later) | tracked;
 #ifdef Py_GIL_DISABLED
-    op->ob_tid = tagged_ptr;
+    _Py_atomic_store_uintptr(&op->ob_tid, tagged_ptr);
 #else
     _Py_AS_GC(op)->_gc_next = tagged_ptr;
 #endif
@@ -3321,8 +3328,8 @@ _PyTrash_thread_destroy_chain(PyThreadState *tstate)
         destructor dealloc = Py_TYPE(op)->tp_dealloc;
 
 #ifdef Py_GIL_DISABLED
-        uintptr_t tagged_ptr = op->ob_tid;
-        op->ob_tid = 0;
+        uintptr_t tagged_ptr = _Py_atomic_load_uintptr(&op->ob_tid);
+        _Py_atomic_store_uintptr(&op->ob_tid, 0);
         _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, _Py_REF_MERGED);
 #else
         uintptr_t tagged_ptr = _Py_AS_GC(op)->_gc_next;

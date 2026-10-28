@@ -2830,15 +2830,39 @@ _Py_CheckTracingFlag(PyObject *ob) {
     }
 }
 
-int _Py_IsOwnedOrClearRcFlag(PyObject *ob) {
-    if (_Py_IsOwnedByCurrentThread(ob)) {
+static inline Py_ALWAYS_INLINE int
+try_claim_free_object(PyObject *ob, bool check_flag) {
+    uintptr_t owner = _Py_atomic_load_uintptr(&ob->ob_tid);
+    uintptr_t this = _Py_ThreadId();
+    if (owner == this) {
         return 1;
     }
 
-    // If the object is not owned by us, it may be part of a concurrent trace, so we
-    // clear the RC change flag.
-    _Py_CheckTracingFlag(ob);
+    if (check_flag) {
+        // If the object is not owned by us, it may be part of a concurrent trace, so we
+        // clear the RC change flag.
+        //
+        // If the GC ran during a trace it may happen that the object is marked
+        // as FREE again. Therefore we need to check and clear the flag before checking
+        // for free.
+        _Py_CheckTracingFlag(ob);
+    }
+
+    // If the object is currently free, we try to claim ownership
+    if (owner == _Py_FREE_TID
+        && _Py_atomic_compare_exchange_uintptr(&ob->ob_tid, &owner, this)
+    ) {
+        return 1;
+    }
+
     return 0;
+}
+
+int _Py_TryClaimFreeObject(PyObject *ob) {
+    return try_claim_free_object(ob, true);
+}
+int _Py_TryClaimFreeObjectDecRef(PyObject *ob) {
+    return try_claim_free_object(ob, false);
 }
 #endif
 

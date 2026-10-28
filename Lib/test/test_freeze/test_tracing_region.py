@@ -1518,6 +1518,148 @@ class TestCrossThreadClose(unittest.TestCase):
 
 
 @unittest.skipUnless(support.Py_GIL_DISABLED,
+                     "the FREE owner only exists on free threading")
+class TestFreeOwner(unittest.TestCase):
+    """A successful close marks the closing thread's objects as FREE, so the
+    next thread that touches them takes over the biased refcount."""
+
+    N = 8
+
+    def setUp(self):
+        # Items are only inspected through their container: passing an object
+        # directly would incref it and claim it for the calling thread.
+        self.item_owner = import_helper.import_module(
+            '_testinternalcapi').get_item_owner
+
+    def owners(self, objs):
+        return [self.item_owner(objs, i) for i in range(len(objs))]
+
+    def make_closed_mutex(self):
+        @freezable
+        class A:
+            pass
+
+        c = Mutex(Region())
+        c.value.objs = [A() for _ in range(self.N)]
+        c.release()
+        return c
+
+    def run_in_thread(self, func):
+        result = []
+        t = threading.Thread(target=lambda: result.append(func()))
+        t.start()
+        t.join()
+        self.assertEqual(len(result), 1, "thread raised an exception")
+        return result[0]
+
+    def test_close_marks_objects_free(self):
+        c = self.make_closed_mutex()
+        c.acquire()
+        self.assertEqual(self.owners(c.value.objs), ["free"] * self.N)
+
+    def test_gc_keeps_objects_free(self):
+        c = self.make_closed_mutex()
+        c.acquire()
+        gc.collect()
+        self.assertEqual(self.owners(c.value.objs), ["free"] * self.N)
+
+    @threading_helper.reap_threads
+    def test_other_thread_claims_touched_objects(self):
+        c = self.make_closed_mutex()
+
+        def claim():
+            c.acquire()
+            objs = c.value.objs
+            x, y = objs[0], objs[1]
+            owners = self.owners(objs)
+            del x, y, objs
+            c.release()
+            return owners
+
+        owners = self.run_in_thread(claim)
+        self.assertEqual(owners, ["self"] * 2 + ["free"] * (self.N - 2))
+
+    @threading_helper.reap_threads
+    def test_gc_resets_claimed_objects_to_free(self):
+        # The FREE owner GC bit is never cleared, so the GC hands a claimed
+        # object back to FREE. This asserts the current behaviour.
+        c = self.make_closed_mutex()
+
+        def claim_and_collect():
+            c.acquire()
+            objs = c.value.objs
+            x = objs[0]
+            x.tag = "claimed"
+            claimed = self.item_owner(objs, 0)
+            rc_before = sys.getrefcount(x)
+            gc.collect()
+            after_gc = self.item_owner(objs, 0)
+            rc_after = sys.getrefcount(x)
+            del x, objs
+            c.release()
+            return claimed, after_gc, rc_before, rc_after
+
+        claimed, after_gc, rc_before, rc_after = \
+            self.run_in_thread(claim_and_collect)
+        self.assertEqual(claimed, "self")
+        self.assertEqual(after_gc, "free")
+        self.assertEqual(rc_before, rc_after)
+
+        c.acquire()
+        self.assertEqual(c.value.objs[0].tag, "claimed")
+
+    @threading_helper.reap_threads
+    def test_reclose_from_other_thread(self):
+        c = self.make_closed_mutex()
+
+        def touch_and_reclose():
+            c.acquire()
+            objs = c.value.objs
+            for i in range(len(objs)):
+                objs[i].tag = i
+            del objs
+            c.release()
+            return True
+
+        self.assertTrue(self.run_in_thread(touch_and_reclose))
+
+        c.acquire()
+        objs = c.value.objs
+        self.assertEqual(self.owners(objs), ["free"] * self.N)
+        self.assertEqual([o.tag for o in objs], list(range(self.N)))
+
+    @threading_helper.reap_threads
+    def test_objects_of_other_threads_stay_unowned(self):
+        @freezable
+        class A:
+            pass
+
+        handoff = []
+        allocated = threading.Event()
+        stop = threading.Event()
+
+        def allocate():
+            handoff.append([A() for _ in range(self.N)])
+            allocated.set()
+            while not stop.is_set():
+                pass
+
+        owner = threading.Thread(target=allocate)
+        owner.start()
+        try:
+            self.assertTrue(allocated.wait(support.SHORT_TIMEOUT))
+            c = Mutex(Region())
+            c.value.objs = handoff.pop()
+            c.release()
+            c.acquire()
+            # Merged refcounts are left alone, only our own objects become FREE
+            self.assertEqual(self.owners(c.value.objs), ["unowned"] * self.N)
+        finally:
+            stop.set()
+            owner.join()
+
+
+@unittest.skipUnless(support.Py_GIL_DISABLED,
                      "concurrent traces only exist on free threading")
 class TestConcurrentClose(unittest.TestCase):
     """Races against a close. These are not deterministic: each close may

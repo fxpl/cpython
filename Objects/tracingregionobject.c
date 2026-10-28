@@ -632,6 +632,57 @@ static int region_clear_tracing_mark(TracingRegionObject *self) {
     return res;
 }
 
+#ifdef Py_GIL_DISABLED
+// This marks the given object as free. For this to be safe,
+static void _decref_and_set_free_owner(PyObject *obj)
+{
+    // These asserts can fail if a concurrent thread broke isolation, on this
+    // will be caught by the validation pass of the respective objects.
+    //
+    // Immortal should never be passed to this, since they're frozen.
+    assert(!_Py_IsImmortal(obj));
+    // Objects can only be queued if a concurrent thread touched the RC
+    assert(!_Py_REF_IS_QUEUED(_Py_atomic_load_ssize(&obj->ob_ref_shared)));
+
+    // We want to mark objects as free, to allow the receiving thread to
+    // take brc ownership. However, we haven't proven full isolation yet, so
+    // we have to account for other threads calling DECREF on the object and
+    // maybe enqueuing it with the owner, which can only be us.
+    //
+    // While the object is owned by us, we can safely manipulate `ob_ref_local`.
+    // We do a manual DECREF if this is known to be safe, otherwise we keep the
+    // current owner.
+    //
+    // This could be avoided, if we mark the objects as free, once we've proven
+    // isolation, however, this would require a second traversal. Also, this
+    // should (hopefully) cover most of the cases.
+    Py_uintptr_t owner = _Py_atomic_load_uintptr(&obj->ob_tid);
+    if (owner != _Py_ThreadId()) {
+        // The object is either merged or marked as free a gain by the GC.
+        // We simply keep it in the current state.
+        assert(owner == _Py_UNOWNED_TID || owner == _Py_FREE_TID);
+        Py_DECREF(obj);
+        return;
+    }
+
+    // If the local RC is one or les, this may deallocate the object. We just
+    // delegate to the normal DECREF and avoid handling all possible edge cases.
+    uint32_t local_rc = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local);
+    if (local_rc <= 1) {
+        Py_DECREF(obj);
+        return;
+    }
+    _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local_rc - 1);
+
+    // Notify the GC that the owner should be set to free and not the allocating
+    // thread.
+    _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_FREE_OWNER);
+
+    dbg("  - The ob_tid of %p is set to free from %lu", obj, obj->ob_tid);
+    _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
+}
+#endif
+
 static int _region_close_lock_held(
     TracingRegionObject *self,
     Py_ssize_t bridge_rc,
@@ -866,7 +917,8 @@ static int tree_trace_state_wait_non_local_objects(tree_trace_state_t* state, Py
                 // The owner may have detached with `obj` still in its merge
                 // queue; merge it on the owner's behalf if so.
                 uintptr_t owner = _Py_atomic_load_uintptr_relaxed(&obj->ob_tid);
-                if (owner != _Py_UNOWNED_TID && owner != _Py_ThreadId())
+                if (owner != _Py_UNOWNED_TID && owner != _Py_FREE_TID
+                    && owner != _Py_ThreadId())
                 {
                     _Py_brc_merge_for_detached_owner(owner);
                 }
@@ -1830,7 +1882,20 @@ static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) 
 
 #ifdef Py_GIL_DISABLED
     uintptr_t this_tid = _Py_ThreadId();
-    if (owner != this_tid && owner != _Py_UNOWNED_TID) {
+    if (owner == _Py_FREE_TID) {
+        // The object was marked as free, the INCREF for the visited set will have
+        // claimed ownership of the object for this thread. If not, we have a
+        // concurrent access and fail.
+        if (_Py_atomic_load_uintptr(&obj->ob_tid) ==  this_tid) {
+            owner = this_tid;
+        } else {
+            PyErr_Format(
+                PyExc_RuntimeError,
+                "the region cannot be closed due to a concurrent access to the object at %p",
+                obj);
+            return -1;
+        }
+    } else if (owner != this_tid && owner != _Py_UNOWNED_TID) {
         Py_INCREF(obj);
         _Py_brc_queue_object(obj);
         dbg("      - requesting RC ownership for %p from %lu", obj, owner);
@@ -2116,10 +2181,10 @@ _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_ent
     }
 
     // ### Cleanup
-    // This cleans up the entry. We set the entry to NULL, to indicate that this
-    // entry has been cleaned up. This is checked by the cleanup code, if the
-    // validation fails in the middle.
-    Py_DECREF(obj);
+    // This cleans up the entry and sets the object owner to free. We set the
+    // entry to NULL, to indicate that this entry has been cleaned up. This is
+    // checked by the cleanup code, if the validation fails in the middle.
+    _decref_and_set_free_owner(obj);
     PyMem_Free(*value_entry);
     *value_entry = NULL;
 

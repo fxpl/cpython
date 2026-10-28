@@ -158,7 +158,7 @@ static inline void _Py_RefcntAdd(PyObject* op, Py_ssize_t n)
     _Py_AddRefTotal(_PyThreadState_GET(), new_refcnt - refcnt);
 #  endif
 #else
-    if (_Py_IsOwnedByCurrentThread(op) || _Py_IsOwnedOrClearRcFlag(op)) {
+    if (_Py_IsOwnedByCurrentThread(op) || _Py_TryClaimFreeObject(op)) {
         uint32_t local = op->ob_ref_local;
         Py_ssize_t refcnt = (Py_ssize_t)local + n;
 #  if PY_SSIZE_T_MAX > UINT32_MAX
@@ -195,7 +195,7 @@ _PyObject_IsUniquelyReferenced(PyObject *ob)
     // NOTE: the entire ob_ref_shared field must be zero, including flags, to
     // ensure that other threads cannot concurrently create new references to
     // this object.
-    return ((_Py_IsOwnedByCurrentThread(ob) || _Py_IsOwnedOrClearRcFlag(ob)) &&
+    return ((_Py_IsOwnedByCurrentThread(ob) || _Py_TryClaimFreeObject(ob)) &&
             _Py_atomic_load_uint32_relaxed(&ob->ob_ref_local) == 1 &&
             _Py_atomic_load_ssize_relaxed(&ob->ob_ref_shared) == 0);
 #endif
@@ -211,8 +211,7 @@ static inline void _Py_SetMortal(PyObject *op, short refcnt)
     if (op) {
         assert(_Py_IsImmortal(op));
 #ifdef Py_GIL_DISABLED
-        // TODO(Immutable): Do we need to do something here?
-        op->ob_tid = _Py_UNOWNED_TID;
+        _Py_atomic_store_uintptr(&op->ob_tid, _Py_UNOWNED_TID);
         op->ob_ref_local = 0;
         op->ob_ref_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED);
 #else
@@ -607,7 +606,7 @@ _Py_TryIncrefFast(PyObject *op) {
         _Py_INCREF_IMMORTAL_STAT_INC();
         return 1;
     }
-    if (_Py_IsOwnedByCurrentThread(op) || _Py_IsOwnedOrClearRcFlag(op)) {
+    if (_Py_IsOwnedByCurrentThread(op) || _Py_TryClaimFreeObject(op)) {
         _Py_INCREF_STAT_INC();
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local);
 #ifdef Py_REF_DEBUG
@@ -759,7 +758,7 @@ _PyObject_ResurrectStart(PyObject *op)
     _Py_IncRefTotal(_PyThreadState_GET());
 #endif
 #ifdef Py_GIL_DISABLED
-    _Py_atomic_store_uintptr_relaxed(&op->ob_tid, _Py_ThreadId());
+    _Py_atomic_store_uintptr(&op->ob_tid, _Py_ThreadId());
     _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, 1);
     _Py_atomic_store_ssize_relaxed(&op->ob_ref_shared, 0);
 #else
@@ -791,7 +790,7 @@ _PyObject_ResurrectEnd(PyObject *op)
 #else
     uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
     Py_ssize_t shared = _Py_atomic_load_ssize_acquire(&op->ob_ref_shared);
-    if ((_Py_IsOwnedByCurrentThread(op) || _Py_IsOwnedOrClearRcFlag(op))
+    if ((_Py_IsOwnedByCurrentThread(op) || _Py_TryClaimFreeObject(op))
         && local == 1 && shared == 0)
     {
         // Fast-path: object has a single refcount and is owned by this thread
