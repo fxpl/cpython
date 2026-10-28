@@ -210,7 +210,7 @@ test_py_set_immortal(PyObject *self, PyObject *unused)
     // reason we cannot call PyObject_Init() on it.
     PyObject object = {0};
 #ifdef Py_GIL_DISABLED
-    object.ob_tid = _Py_ThreadId();
+    _Py_atomic_store_uintptr(&object.ob_tid, _Py_ThreadId());
     object.ob_gc_bits = 0;
     object.ob_ref_local = 1;
     object.ob_ref_shared = 0;

@@ -406,10 +406,10 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     ob->ob_refcnt = refcnt;
 #endif
 #else
-    if (_Py_IsOwnedByCurrentThread(ob) || _Py_IsOwnedOrClearRcFlag(ob)) {
+    if (_Py_IsOwnedByCurrentThread(ob) || _Py_TryClaimFreeObject(ob)) {
         if ((size_t)refcnt > (size_t)UINT32_MAX) {
             // On overflow, make the object immortal
-            ob->ob_tid = _Py_UNOWNED_TID;
+            _Py_atomic_store_uintptr(&ob->ob_tid, _Py_UNOWNED_TID);
             ob->ob_ref_local = _Py_IMMORTAL_REFCNT_LOCAL;
             ob->ob_ref_shared = 0;
         }
@@ -423,7 +423,7 @@ static inline void Py_SET_REFCNT(PyObject *ob, Py_ssize_t refcnt) {
     else {
         // Set local refcount to zero and shared refcount to desired refcount.
         // Mark the object as merged.
-        ob->ob_tid = _Py_UNOWNED_TID;
+        _Py_atomic_store_uintptr(&ob->ob_tid, _Py_UNOWNED_TID);
         ob->ob_ref_local = 0;
         ob->ob_ref_shared = _Py_REF_SHARED(refcnt, _Py_REF_MERGED);
     }

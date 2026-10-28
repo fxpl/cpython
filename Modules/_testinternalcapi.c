@@ -2820,6 +2820,45 @@ get_py_thread_id(PyObject *self, PyObject *Py_UNUSED(ignored))
     return PyLong_FromUnsignedLongLong(tid);
 }
 
+// Reads the item from the container, since passing it directly would incref it
+// and thereby claim a FREE object.
+static PyObject *
+get_item_owner(PyObject *self, PyObject *args)
+{
+    PyObject *container;
+    Py_ssize_t index;
+    if (!PyArg_ParseTuple(args, "On", &container, &index)) {
+        return NULL;
+    }
+    PyObject *item;
+    if (PyList_CheckExact(container) && index >= 0
+        && index < PyList_GET_SIZE(container))
+    {
+        item = PyList_GET_ITEM(container, index);
+    }
+    else if (PyTuple_CheckExact(container) && index >= 0
+             && index < PyTuple_GET_SIZE(container))
+    {
+        item = PyTuple_GET_ITEM(container, index);
+    }
+    else {
+        PyErr_SetString(PyExc_ValueError, "expected a list or tuple and a valid index");
+        return NULL;
+    }
+
+    uintptr_t owner = _Py_atomic_load_uintptr(&item->ob_tid);
+    if (owner == _Py_ThreadId()) {
+        return PyUnicode_FromString("self");
+    }
+    if (owner == _Py_FREE_TID) {
+        return PyUnicode_FromString("free");
+    }
+    if (owner == _Py_UNOWNED_TID) {
+        return PyUnicode_FromString("unowned");
+    }
+    return PyUnicode_FromString("other");
+}
+
 // Rotates the list behind the weakref under its lock, without touching any
 // refcount. Only a write watch can observe this. The referent is borrowed, so
 // the caller has to keep it alive.
@@ -3425,6 +3464,7 @@ static PyMethodDef module_functions[] = {
 
 #ifdef Py_GIL_DISABLED
     {"py_thread_id", get_py_thread_id, METH_NOARGS},
+    {"get_item_owner", get_item_owner, METH_VARARGS},
     {"rotate_list_via_weakref", rotate_list_via_weakref, METH_O},
     {"get_tlbc", get_tlbc, METH_O, NULL},
     {"get_tlbc_id", get_tlbc_id, METH_O, NULL},
