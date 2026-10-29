@@ -1557,6 +1557,79 @@ class TestFreeOwner(unittest.TestCase):
         self.assertEqual(self.owners(c.value.objs), ["free"] * self.N)
 
     @threading_helper.reap_threads
+    def test_close_frees_objects_of_exited_thread(self):
+        # The close merges the RCs of objects owned by other threads. The
+        # validation then has to adopt the merged objects to mark them free.
+        @freezable
+        class A:
+            pass
+
+        c = Mutex(Region())
+        c.value.objs = self.run_in_thread(lambda: [A() for _ in range(self.N)])
+        c.release()
+
+        c.acquire()
+        self.assertEqual(self.owners(c.value.objs), ["free"] * self.N)
+
+    @threading_helper.reap_threads
+    def test_close_frees_objects_of_blocked_thread(self):
+        @freezable
+        class A:
+            pass
+
+        handoff = []
+        allocated = threading.Event()
+        release_owner = threading.Event()
+
+        def allocate():
+            handoff.append([A() for _ in range(self.N)])
+            allocated.set()
+            # The owner is detached, so the close merges its RCs for it.
+            release_owner.wait(support.LONG_TIMEOUT)
+
+        owner = threading.Thread(target=allocate)
+        owner.start()
+        try:
+            self.assertTrue(allocated.wait(support.SHORT_TIMEOUT))
+            c = Mutex(Region())
+            c.value.objs = handoff.pop()
+            c.release()
+            c.acquire()
+            self.assertEqual(self.owners(c.value.objs), ["free"] * self.N)
+        finally:
+            release_owner.set()
+            owner.join()
+
+    @threading_helper.reap_threads
+    def test_adopted_objects_keep_their_rc(self):
+        # Adopting a merged object moves its RC from `ob_ref_shared` to
+        # `ob_ref_local`. Losing a reference would free the objects early,
+        # keeping one would leak them.
+        @freezable
+        class A:
+            pass
+
+        c = Mutex(Region())
+        c.value.objs = self.run_in_thread(lambda: [A() for _ in range(self.N)])
+        # A second reference to the first object
+        c.value.objs.append(c.value.objs[0])
+        refs = [weakref.ref(o) for o in c.value.objs[:self.N]]
+        c.release()
+
+        c.acquire()
+        self.assertEqual(self.owners(c.value.objs), ["free"] * (self.N + 1))
+        gc.collect()
+        self.assertTrue(all(r() is not None for r in refs))
+
+        c.value.objs.pop()
+        gc.collect()
+        self.assertTrue(all(r() is not None for r in refs))
+
+        c.value.objs = None
+        gc.collect()
+        self.assertTrue(all(r() is None for r in refs))
+
+    @threading_helper.reap_threads
     def test_other_thread_claims_touched_objects(self):
         c = self.make_closed_mutex()
 
@@ -1622,7 +1695,7 @@ class TestFreeOwner(unittest.TestCase):
         self.assertEqual([o.tag for o in objs], list(range(self.N)))
 
     @threading_helper.reap_threads
-    def test_objects_of_other_threads_stay_unowned(self):
+    def test_objects_of_running_thread_become_free(self):
         @freezable
         class A:
             pass
@@ -1645,8 +1718,9 @@ class TestFreeOwner(unittest.TestCase):
             c.value.objs = handoff.pop()
             c.release()
             c.acquire()
-            # Merged refcounts are left alone, only our own objects become FREE
-            self.assertEqual(self.owners(c.value.objs), ["unowned"] * self.N)
+            # The owner merges the RCs via its eval breaker, the validation
+            # then adopts the merged objects and marks them as free.
+            self.assertEqual(self.owners(c.value.objs), ["free"] * self.N)
         finally:
             stop.set()
             owner.join()

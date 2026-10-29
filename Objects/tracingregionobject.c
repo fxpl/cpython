@@ -633,46 +633,118 @@ static int region_clear_tracing_mark(TracingRegionObject *self) {
 }
 
 #ifdef Py_GIL_DISABLED
-// This marks the given object as free. For this to be safe,
+// Takes biased RC ownership of a merged object by moving its shared RC into
+// `ob_ref_local`. Returns 0 and leaves the object merged and unowned, if the
+// RC doesn't fit into `ob_ref_local`.
+//
+// This doesn't require isolation. Other threads never compare `ob_tid` with
+// our ID, so their RC operations keep going to `ob_ref_shared`:
+// - Until the CAS succeeds, the object stays merged and the caller's reference
+//   prevents the shared RC from reaching zero.
+// - After the CAS, a DECREF can queue the object with us. Merging our queue
+//   forwards it to the new owner, once the object has been made free.
+//
+// The caller must not hit a safepoint before it publishes a new owner, since
+// the GC expects `ob_tid == 0` for merged objects.
+static int _adopt_merged_object(PyObject *obj)
+{
+    Py_ssize_t shared = _Py_atomic_load_ssize(&obj->ob_ref_shared);
+    if (!_Py_REF_IS_MERGED(shared)) {
+        // `ob_tid == 0` implies a merged RC
+        return 0;
+    }
+
+    _Py_atomic_store_uintptr_relaxed(&obj->ob_tid, _Py_ThreadId());
+    uint32_t local = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local);
+    for (;;) {
+        Py_ssize_t total = (Py_ssize_t)local
+            + Py_ARITHMETIC_RIGHT_SHIFT(Py_ssize_t, shared, _Py_REF_SHARED_SHIFT);
+        if (total >= (Py_ssize_t)_Py_IMMORTAL_REFCNT_LOCAL) {
+            // Nothing has been committed yet, so the object can be given back.
+            _Py_atomic_store_uintptr_relaxed(&obj->ob_tid, _Py_UNOWNED_TID);
+            return 0;
+        }
+
+        // The local RC is written first. This makes `Py_REFCNT` briefly
+        // over-report instead of under-report, which could otherwise make a
+        // racing `Py_REFCNT(obj) == 1` check think it holds the only reference.
+        _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, (uint32_t)total);
+
+        // `MAYBE_WEAKREF` keeps `_Py_TryIncrefShared` working while the
+        // entire RC is stored in `ob_ref_local`.
+        if (_Py_atomic_compare_exchange_ssize(
+                &obj->ob_ref_shared, &shared,
+                _Py_REF_SHARED(0, _Py_REF_MAYBE_WEAKREF)))
+        {
+            return 1;
+        }
+        _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local);
+        // The caller's reference prevents the merged RC from reaching zero.
+        assert(_Py_REF_IS_MERGED(shared));
+    }
+}
+
+// Drops the reference held by `visited` and marks the object as free, so the
+// next thread touching it takes over the biased RC.
+//
+// This runs during validation, before isolation has been proven for all
+// objects. Marking an object as free is a normal handoff of the biased RC,
+// which is safe as long as:
+// 1. We own the object when we publish the free owner,
+// 2. we're done writing `ob_ref_local` before publishing,
+// 3. the RC is not merged, and
+// 4. `ob_ref_local >= 1`, since a claiming DECREF doesn't check for underflow.
+//
+// None of this depends on isolation. If the close fails later, the object
+// simply stays free in the open region. Objects owned by another thread can
+// only reach this, if a concurrent thread broke isolation. They keep their
+// owner. Objects queued with us are fine, since the BRC forwards them to the
+// new owner.
+//
+// No safepoints are allowed in this function. The GC could otherwise reset
+// `ob_tid` while we assume ownership.
 static void _decref_and_set_free_owner(PyObject *obj)
 {
-    // These asserts can fail if a concurrent thread broke isolation, on this
-    // will be caught by the validation pass of the respective objects.
-    //
     // Immortal should never be passed to this, since they're frozen.
     assert(!_Py_IsImmortal(obj));
-    // Objects can only be queued if a concurrent thread touched the RC
-    assert(!_Py_REF_IS_QUEUED(_Py_atomic_load_ssize(&obj->ob_ref_shared)));
 
-    // We want to mark objects as free, to allow the receiving thread to
-    // take brc ownership. However, we haven't proven full isolation yet, so
-    // we have to account for other threads calling DECREF on the object and
-    // maybe enqueuing it with the owner, which can only be us.
-    //
-    // While the object is owned by us, we can safely manipulate `ob_ref_local`.
-    // We do a manual DECREF if this is known to be safe, otherwise we keep the
-    // current owner.
-    //
-    // This could be avoided, if we mark the objects as free, once we've proven
-    // isolation, however, this would require a second traversal. Also, this
-    // should (hopefully) cover most of the cases.
-    Py_uintptr_t owner = _Py_atomic_load_uintptr(&obj->ob_tid);
-    if (owner != _Py_ThreadId()) {
-        // The object is either merged or marked as free a gain by the GC.
-        // We simply keep it in the current state.
-        assert(owner == _Py_UNOWNED_TID || owner == _Py_FREE_TID);
+    uintptr_t this_tid = _Py_ThreadId();
+    uintptr_t owner = _Py_atomic_load_uintptr(&obj->ob_tid);
+    if (owner == _Py_FREE_TID) {
+        // The GC marked the object as free again, while we were detached
+        // during tracing. We claim it back. The CAS only fails if a concurrent
+        // thread claimed it first.
+        if (!_Py_atomic_compare_exchange_uintptr(&obj->ob_tid, &owner, this_tid)) {
+            Py_DECREF(obj);
+            return;
+        }
+    }
+    else if (owner == _Py_UNOWNED_TID) {
+        // Includes all objects allocated by other threads, since tracing
+        // requests them to be merged.
+        if (!_adopt_merged_object(obj)) {
+            Py_DECREF(obj);
+            return;
+        }
+    }
+    else if (owner != this_tid) {
         Py_DECREF(obj);
         return;
     }
 
-    // If the local RC is one or les, this may deallocate the object. We just
-    // delegate to the normal DECREF and avoid handling all possible edge cases.
+    // If we've been the owner since tracing, the reference from `visited` and
+    // at least one other are local. This can be lower, if we re-claimed the
+    // object after a concurrent thread used it, or if it's only reachable via
+    // weak references. The normal DECREF merges or deallocates it.
     uint32_t local_rc = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local);
     if (local_rc <= 1) {
         Py_DECREF(obj);
         return;
     }
     _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local_rc - 1);
+#ifdef Py_REF_DEBUG
+    _Py_DECREF_DecRefTotal();
+#endif
 
     // Notify the GC that the owner should be set to free and not the allocating
     // thread.
