@@ -10,6 +10,7 @@
 #include "pycore_critical_section.h" // _PyCriticalSection_Resume()
 #include "pycore_dtoa.h"          // _dtoa_state_INIT()
 #include "pycore_freelist.h"      // _PyObject_ClearFreeLists()
+#include "pycore_gc.h"            // _PyObject_GC_IS_ENCAPSULATED()
 #include "pycore_initconfig.h"    // _PyStatus_OK()
 #include "pycore_interpframe.h"   // _PyThreadState_HasStackSpace()
 #include "pycore_object.h"        // _PyType_InitCache()
@@ -2852,6 +2853,11 @@ try_claim_free_object(PyObject *ob, bool check_flag) {
     if (owner == _Py_FREE_TID
         && _Py_atomic_compare_exchange_uintptr(&ob->ob_tid, &owner, this)
     ) {
+        // Mutator discovery re-tracks a member lazily, including when the
+        // region has been opened since it was untracked.
+        if (_PyObject_GC_IS_ENCAPSULATED(ob)) {
+            _Py_atomic_or_uint8(&ob->ob_gc_bits, _PyGC_BITS_TRACKED);
+        }
         return 1;
     }
 

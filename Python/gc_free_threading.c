@@ -83,6 +83,7 @@ struct collection_state {
     struct worklist legacy_finalizers;
     struct worklist wrcb_to_call;
     struct worklist objs_to_decref;
+    _PyObjectStack escaped;
 };
 
 // iterate over a worklist
@@ -158,12 +159,17 @@ gc_is_frozen(PyObject *op)
 }
 
 // Returns true if the owner should be set to `_Py_FREE_TID` instead of the
-// allocating thread. This is used for objects that have been moved between
-// threads. (Currenlty this is only done by regions)
+// allocating thread. This is used for objects owned by a closed region.
 static inline int
 gc_set_free_owner(PyObject *op)
 {
-    return gc_has_bit(op, _PyGC_BITS_FREE_OWNER);
+    return gc_has_bit(op, _PyGC_BITS_REGION_OWNED);
+}
+
+uint64_t
+_PyGC_GetEscapeEpoch(PyInterpreterState *interp)
+{
+    return _Py_atomic_load_uint64(&interp->gc.escape_epoch);
 }
 
 static inline int
@@ -966,8 +972,17 @@ process_delayed_frees(PyInterpreterState *interp, struct collection_state *state
 static int
 visit_decref(PyObject *op, void *arg)
 {
-    if (_PyObject_GC_IS_TRACKED(op)
-        && !_Py_IsImmortal(op)
+    uint8_t bits = _Py_atomic_load_uint8_relaxed(&op->ob_gc_bits);
+    if (!(bits & _PyGC_BITS_TRACKED)) {
+        if (bits & _PyGC_BITS_REGION_OWNED) {
+            // The current collection must finish with the tracked set it
+            // started with. Queue the escaped object for the next collection.
+            struct collection_state *state = (struct collection_state *)arg;
+            (void)_PyObjectStack_Push(&state->escaped, op);
+        }
+        return 0;
+    }
+    if (!_Py_IsImmortal(op)
         && !gc_is_frozen(op)
         && !gc_is_alive(op))
     {
@@ -975,6 +990,17 @@ visit_decref(PyObject *op, void *arg)
         // as (tentatively) unreachable and initialize ob_tid to zero.
         gc_maybe_init_refs(op);
         gc_decref(op);
+    }
+    return 0;
+}
+
+// Queue encapsulated children so the entire escaped subgraph is tracked for
+// the next collection, rather than one level per collection.
+static int
+visit_escaped(PyObject *op, void *arg)
+{
+    if (_PyObject_GC_IS_ENCAPSULATED(op)) {
+        (void)_PyObjectStack_Push((_PyObjectStack *)arg, op);
     }
     return 0;
 }
@@ -1031,7 +1057,7 @@ update_refs(const mi_heap_t *heap, const mi_heap_area_t *area,
     // Subtract internal references from ob_tid. Objects with ob_tid > 0
     // are directly reachable from outside containers, and so can't be
     // collected.
-    Py_TYPE(op)->tp_traverse(op, visit_decref, NULL);
+    Py_TYPE(op)->tp_traverse(op, visit_decref, state);
     return true;
 }
 
@@ -1680,6 +1706,7 @@ _PyGC_InitState(GCState *gcstate)
 {
     // TODO: move to pycore_runtime_init.h once the incremental GC lands.
     gcstate->young.threshold = 2000;
+    gcstate->escape_epoch = 0;
 }
 
 
@@ -2124,6 +2151,7 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
         // be ignored for rest of the GC pass.
         int err = gc_mark_alive_from_roots(interp, state);
         if (err < 0) {
+            _PyObjectStack_Clear(&state->escaped);
             _PyEval_StartTheWorld(interp);
             PyErr_NoMemory();
             return;
@@ -2134,9 +2162,26 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
     // Find unreachable objects
     int err = deduce_unreachable_heap(interp, state);
     if (err < 0) {
+        _PyObjectStack_Clear(&state->escaped);
         _PyEval_StartTheWorld(interp);
         PyErr_NoMemory();
         return;
+    }
+
+    // Re-track escaped region members only after this collection has made
+    // its reachability decisions. This keeps them out of the current cycle
+    // while ensuring their graph is visible to the next collection.
+    bool escaped_region_object = false;
+    PyObject *escaped;
+    while ((escaped = _PyObjectStack_Pop(&state->escaped)) != NULL) {
+        if (_PyObject_GC_IS_ENCAPSULATED(escaped)) {
+            _PyObject_GC_TRACK(escaped);
+            escaped_region_object = true;
+            Py_TYPE(escaped)->tp_traverse(escaped, visit_escaped, &state->escaped);
+        }
+    }
+    if (escaped_region_object) {
+        _Py_atomic_add_uint64(&state->gcstate->escape_epoch, 1);
     }
 
 #ifdef GC_DEBUG
