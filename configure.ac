@@ -5236,9 +5236,9 @@ AS_VAR_IF([ac_cv_efficient_builtin_shufflevector], [yes], [
 AC_MSG_CHECKING([for --with-mimalloc])
 AC_ARG_WITH([mimalloc],
   [AS_HELP_STRING([--with-mimalloc],
-                 [build with mimalloc memory allocator (default is yes if C11 stdatomic.h is available.)])],
+                 [build with mimalloc memory allocator and use it by default (default is yes; required for multi-threading)])],
   [],
-  [with_mimalloc="$ac_cv_header_stdatomic_h"]
+  [with_mimalloc="yes"]
 )
 
 if test "$with_mimalloc" != no; then

@@ -1949,8 +1949,9 @@ Optional Packages:
                           value is a colon separated string with the backend
                           names `ndbm', `gdbm' and `bdb'.
   --with-doc-strings      enable documentation strings (default is yes)
-  --with-mimalloc         build with mimalloc memory allocator (default is yes
-                          if C11 stdatomic.h is available.)
+  --with-mimalloc         build with mimalloc memory allocator and use it by
+                          default (default is yes; required for
+                          multi-threading)
   --with-pymalloc         enable specialized mallocs (default is yes)
   --with-pymalloc-hugepages
                           enable huge page support for pymalloc arenas
@@ -19580,7 +19581,7 @@ if test ${with_mimalloc+y}
 then :
   withval=$with_mimalloc;
 else case e in #(
-  e) with_mimalloc="$ac_cv_header_stdatomic_h"
+  e) with_mimalloc="yes"
  ;;
 esac
 fi
