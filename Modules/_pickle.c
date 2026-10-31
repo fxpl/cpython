@@ -436,6 +436,7 @@ Pdata_dealloc(PyObject *op)
 static PyType_Slot pdata_slots[] = {
     {Py_tp_dealloc, Pdata_dealloc},
     {Py_tp_traverse, _PyObject_VisitType},
+    {Py_tp_reachable, _PyObject_ReachableVisitType},
     {0, NULL},
 };
 
@@ -5296,6 +5297,7 @@ PicklerMemoProxy_clear(PyObject *op)
 static PyType_Slot memoproxy_slots[] = {
     {Py_tp_dealloc, PicklerMemoProxy_dealloc},
     {Py_tp_traverse, PicklerMemoProxy_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, PicklerMemoProxy_clear},
     {Py_tp_methods, picklerproxy_methods},
     {Py_tp_hash, PyObject_HashNotImplemented},
@@ -5447,6 +5449,7 @@ static PyType_Slot pickler_type_slots[] = {
     {Py_tp_clear, Pickler_clear},
     {Py_tp_doc, (char*)_pickle_Pickler___init____doc__},
     {Py_tp_traverse, Pickler_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_init, _pickle_Pickler___init__},
     {Py_tp_new, PyType_GenericNew},
     {Py_tp_alloc, PyType_GenericAlloc},
@@ -7813,6 +7816,7 @@ UnpicklerMemoProxy_clear(PyObject *op)
 static PyType_Slot unpickler_memoproxy_slots[] = {
     {Py_tp_dealloc, UnpicklerMemoProxy_dealloc},
     {Py_tp_traverse, UnpicklerMemoProxy_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, UnpicklerMemoProxy_clear},
     {Py_tp_methods, unpicklerproxy_methods},
     {Py_tp_hash, PyObject_HashNotImplemented},
@@ -7969,6 +7973,7 @@ static PyType_Slot unpickler_type_slots[] = {
     {Py_tp_getattro, Unpickler_getattr},
     {Py_tp_setattro, Unpickler_setattr},
     {Py_tp_traverse, Unpickler_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, Unpickler_clear},
     {Py_tp_methods, Unpickler_methods},
     {Py_tp_getset, Unpickler_getsets},

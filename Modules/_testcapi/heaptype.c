@@ -687,6 +687,7 @@ static PyType_Slot HeapGcCType_slots[] = {
     {Py_tp_members, heapctype_members},
     {Py_tp_dealloc, heapgcctype_dealloc},
     {Py_tp_traverse, heapgcctype_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_doc, (char*)heapgctype__doc__},
     {0, 0},
 };
@@ -1018,6 +1019,7 @@ heapmanaged_dealloc(PyObject *op)
 
 static PyType_Slot HeapCTypeWithManagedDict_slots[] = {
     {Py_tp_traverse, heapmanaged_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_getset, heapctypewithdict_getsetlist},
     {Py_tp_clear, heapmanaged_clear},
     {Py_tp_dealloc, heapmanaged_dealloc},
@@ -1045,6 +1047,7 @@ heapctypewithmanagedweakref_dealloc(PyObject* self)
 
 static PyType_Slot HeapCTypeWithManagedWeakref_slots[] = {
     {Py_tp_traverse, heapgcctype_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_getset, heapctypewithdict_getsetlist},
     {Py_tp_dealloc, heapctypewithmanagedweakref_dealloc},
     {0, 0},
@@ -1339,6 +1342,7 @@ HeapCCollection_item(PyObject *self, Py_ssize_t i)
 static int
 HeapCCollection_traverse(PyObject *self, visitproc visit, void *arg)
 {
+    Py_VISIT(Py_TYPE(self));
     PyObject **data = PyObject_GetItemData(self);
     assert(data == PyObject_GetItemData_DuringGC(self));
     if (!data) {
@@ -1381,6 +1385,7 @@ static PyType_Slot HeapCCollection_slots[] = {
     {Py_sq_length, HeapCCollection_length},
     {Py_sq_item, HeapCCollection_item},
     {Py_tp_traverse, HeapCCollection_traverse},
+    {Py_tp_reachable, PyObject_ReachableFromTraverse},
     {Py_tp_clear, HeapCCollection_clear},
     {Py_tp_dealloc, HeapCCollection_dealloc},
     {Py_tp_doc, (void *)HeapCCollection_doc},

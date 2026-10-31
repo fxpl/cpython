@@ -246,6 +246,12 @@ struct _typeobject {
       * This function must escape to any code that can result in
       * the GC being run, such as Py_DECREF.  */
     _Py_iteritemfunc _tp_iteritem;
+
+    /* call function for all referenced objects (includes non-cyclic refs) */
+    reachableproc tp_reachable;
+
+    /* A callback called before a type is frozen. */
+    prefreezeproc tp_prefreeze;
 };
 
 #define _Py_ATTR_CACHE_UNUSED (30000)  // (see tp_versions_used)
@@ -298,7 +304,12 @@ typedef struct _heaptypeobject {
 PyAPI_FUNC(const char *) _PyType_Name(PyTypeObject *);
 PyAPI_FUNC(PyObject *) _PyType_Lookup(PyTypeObject *, PyObject *);
 PyAPI_FUNC(PyObject *) _PyType_LookupRef(PyTypeObject *, PyObject *);
+PyAPI_FUNC(int) _PyType_HasExtensionSlots(PyTypeObject *);
 PyAPI_FUNC(PyObject *) PyType_GetDict(PyTypeObject *);
+
+/* tp_reachable built from tp_traverse. Visits the type exactly once, whether
+ * or not tp_traverse visits it. */
+PyAPI_FUNC(int) PyObject_ReachableFromTraverse(PyObject *, reachablevisitproc, void *);
 
 PyAPI_FUNC(int) PyObject_Print(PyObject *, FILE *, int);
 PyAPI_FUNC(void) _Py_BreakPoint(void);

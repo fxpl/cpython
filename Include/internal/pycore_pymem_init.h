@@ -19,7 +19,8 @@ extern void _PyMem_RawFree(void *, void *);
 #define PYRAW_ALLOC {NULL, _PyMem_RawMalloc, _PyMem_RawCalloc, _PyMem_RawRealloc, _PyMem_RawFree}
 
 #ifdef WITH_MIMALLOC
-// mimalloc is the default when available; Py_GIL_DISABLED requires it.
+// mimalloc is the default when available
+// Py_GIL_DISABLED and _Py_PYRONA_INTERPRETER_SHARING require it.
 extern void* _PyObject_MiMalloc(void *, size_t);
 extern void* _PyObject_MiCalloc(void *, size_t, size_t);
 extern void _PyObject_MiFree(void *, void *);

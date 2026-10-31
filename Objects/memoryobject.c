@@ -100,6 +100,14 @@ _PyManagedBuffer_FromObject(PyObject *base, int flags)
         return NULL;
     }
 
+    if(_Py_IsDeepImmutable(base)){
+        if(_PyImmutability_DeepFreeze(_PyObject_CAST(mbuf), 0) < 0){
+            PyBuffer_Release(&mbuf->master);
+            Py_DECREF(mbuf);
+            return NULL;
+        }
+    }
+
     return (PyObject *)mbuf;
 }
 
@@ -167,7 +175,8 @@ PyTypeObject _PyManagedBuffer_Type = {
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, /* tp_flags */
     0,                                       /* tp_doc */
     mbuf_traverse,                           /* tp_traverse */
-    mbuf_clear                               /* tp_clear */
+    mbuf_clear,                              /* tp_clear */
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
 
 
@@ -1129,6 +1138,10 @@ static PyObject *
 memoryview_release_impl(PyMemoryViewObject *self)
 /*[clinic end generated code: output=d0b7e3ba95b7fcb9 input=bc71d1d51f4a52f0]*/
 {
+    if (!Py_CHECKWRITE(self)) {
+        return PyErr_WriteToImmutable(self);
+    }
+
     Py_ssize_t exports = get_exports(self);
     if (exports == 0) {
         _memory_release(self);
@@ -2738,6 +2751,11 @@ memory_ass_sub(PyObject *_self, PyObject *key, PyObject *value)
         PyErr_SetString(PyExc_TypeError, "cannot modify read-only memory");
         return -1;
     }
+    // The view itself is mutable; check the exporter.
+    if (view->obj != NULL && !Py_CHECKWRITE(view->obj)) {
+        PyErr_WriteToImmutable(view->obj);
+        return -1;
+    }
     if (value == NULL) {
         PyErr_SetString(PyExc_TypeError, "cannot delete memory");
         return -1;
@@ -3692,7 +3710,22 @@ PyTypeObject _PyMemoryIter_Type = {
     .tp_traverse = memoryiter_traverse,
     .tp_iter = PyObject_SelfIter,
     .tp_iternext = memoryiter_next,
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
 };
+
+/* A frozen memoryview must not hand out writable views of its buffer
+   (memoryview(mv), slicing and the buffer protocol all copy the view). */
+static int
+memory_prefreeze(PyObject *self)
+{
+    PyMemoryViewObject *mv = (PyMemoryViewObject *)self;
+    if (!(mv->flags & _Py_MEMORYVIEW_RELEASED) && !mv->view.readonly) {
+        PyErr_SetString(PyExc_BufferError,
+                        "cannot freeze a writable memoryview");
+        return -1;
+    }
+    return 0;
+}
 
 PyTypeObject PyMemoryView_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0)
@@ -3734,4 +3767,6 @@ PyTypeObject PyMemoryView_Type = {
     0,                                        /* tp_init */
     0,                                        /* tp_alloc */
     memoryview,                               /* tp_new */
+    .tp_reachable = _PyObject_ReachableVisitTypeAndTraverse,
+    .tp_prefreeze = memory_prefreeze,
 };
