@@ -578,12 +578,25 @@ typedef struct {
     int32_t state;
 
     _PyRegion_WrefInfo *wref_info;
+#ifdef Py_GIL_DISABLED
+    // Strong edges from the closed region to objects outside it. A NULL
+    // remset means the contents remain tracked by the GC.
+    _Py_hashtable_t *remset;
+#endif
 } TracingRegionObject;
 
 #define _PyTRegion_CAST(x) _Py_CAST(TracingRegionObject*, x)
 
 static bool region_is_open_lock_held(TracingRegionObject *self) {
     return self->state >= Py_REGION_STATUS_OPEN;
+}
+
+static int32_t region_get_state(TracingRegionObject *self) {
+#ifdef Py_GIL_DISABLED
+    return _Py_atomic_load_int32_relaxed(&self->state);
+#else
+    return self->state;
+#endif
 }
 
 static bool region_is_open(TracingRegionObject *self) {
@@ -594,18 +607,49 @@ static bool region_is_open(TracingRegionObject *self) {
     return res;
 }
 
+#ifdef Py_GIL_DISABLED
+static bool region_is_open_unlocked(TracingRegionObject *self) {
+    return _Py_atomic_load_int32_relaxed(&self->state) >= Py_REGION_STATUS_OPEN;
+}
+#endif
+
+static void region_set_state(TracingRegionObject *self, int32_t state) {
+#ifdef Py_GIL_DISABLED
+    _Py_atomic_store_int32_relaxed(&self->state, state);
+#else
+    self->state = state;
+#endif
+}
+
+static Py_ssize_t region_internal_bridge_refs(TracingRegionObject *self) {
+#ifdef Py_GIL_DISABLED
+    return _Py_atomic_load_ssize_relaxed(&self->internal_bridge_refs);
+#else
+    return self->internal_bridge_refs;
+#endif
+}
+
+static void region_set_internal_bridge_refs(TracingRegionObject *self, Py_ssize_t refs) {
+#ifdef Py_GIL_DISABLED
+    _Py_atomic_store_ssize_relaxed(&self->internal_bridge_refs, refs);
+#else
+    self->internal_bridge_refs = refs;
+#endif
+}
+
 static int region_set_tracing_mark(TracingRegionObject *self) {
     int res = 0;
     Py_BEGIN_CRITICAL_SECTION(self);
-    if (self->state == Py_REGION_STATUS_CLOSED) {
+    int32_t state = region_get_state(self);
+    if (state == Py_REGION_STATUS_CLOSED) {
         res = 1;
-    } else if (self->state == Py_REGION_STATUS_OPEN) {
-        self->state = Py_REGION_STATUS_TRACING;
+    } else if (state == Py_REGION_STATUS_OPEN) {
+        region_set_state(self, Py_REGION_STATUS_TRACING);
     } else {
         // Someone else is tracing the region, mark it as failed.
-        assert(self->state == Py_REGION_STATUS_TRACING
-               || self->state == Py_REGION_STATUS_TRACING_FAILED);
-        self->state = Py_REGION_STATUS_TRACING_FAILED;
+        assert(state == Py_REGION_STATUS_TRACING
+               || state == Py_REGION_STATUS_TRACING_FAILED);
+        region_set_state(self, Py_REGION_STATUS_TRACING_FAILED);
         res = -1;
     }
     Py_END_CRITICAL_SECTION();
@@ -625,14 +669,23 @@ static void region_release_wref_info_lock_held(TracingRegionObject *self) {
 static int region_clear_tracing_mark(TracingRegionObject *self) {
     int res = 0;
     Py_BEGIN_CRITICAL_SECTION(self);
-    assert(self->state != Py_REGION_STATUS_CLOSED && self->state != Py_REGION_STATUS_OPEN);
-    self->state = Py_REGION_STATUS_OPEN;
+    assert(region_get_state(self) != Py_REGION_STATUS_CLOSED
+           && region_get_state(self) != Py_REGION_STATUS_OPEN);
+    region_set_state(self, Py_REGION_STATUS_OPEN);
     region_release_wref_info_lock_held(self);
     Py_END_CRITICAL_SECTION();
     return res;
 }
 
+typedef struct {
+    Py_ssize_t unaccounted_rc;
+    Py_ssize_t inital_rc;
+    bool untracked;
+} region_visited_info_t;
+
 #ifdef Py_GIL_DISABLED
+#define _VisitInfo_CAST(x) _Py_CAST(region_visited_info_t*, x)
+
 // Takes biased RC ownership of a merged object by moving its shared RC into
 // `ob_ref_local`. Returns 0 and leaves the object merged and unowned, if the
 // RC doesn't fit into `ob_ref_local`.
@@ -684,8 +737,9 @@ static int _adopt_merged_object(PyObject *obj)
     }
 }
 
-// Drops the reference held by `visited` and marks the object as free, so the
-// next thread touching it takes over the biased RC.
+// Marks the object as free, so the next thread touching it takes over the
+// biased RC. If we untrack it, retain the trace reference until validation
+// has completed so a failed close can re-track it safely.
 //
 // This runs during validation, before isolation has been proven for all
 // objects. Marking an object as free is a normal handoff of the biased RC,
@@ -703,7 +757,7 @@ static int _adopt_merged_object(PyObject *obj)
 //
 // No safepoints are allowed in this function. The GC could otherwise reset
 // `ob_tid` while we assume ownership.
-static void _decref_and_set_free_owner(PyObject *obj)
+static bool _decref_and_set_free_owner(PyObject *obj, bool untrack)
 {
     // Immortal should never be passed to this, since they're frozen.
     assert(!_Py_IsImmortal(obj));
@@ -716,7 +770,7 @@ static void _decref_and_set_free_owner(PyObject *obj)
         // thread claimed it first.
         if (!_Py_atomic_compare_exchange_uintptr(&obj->ob_tid, &owner, this_tid)) {
             Py_DECREF(obj);
-            return;
+            return false;
         }
     }
     else if (owner == _Py_UNOWNED_TID) {
@@ -724,12 +778,12 @@ static void _decref_and_set_free_owner(PyObject *obj)
         // requests them to be merged.
         if (!_adopt_merged_object(obj)) {
             Py_DECREF(obj);
-            return;
+            return false;
         }
     }
     else if (owner != this_tid) {
         Py_DECREF(obj);
-        return;
+        return false;
     }
 
     // If we've been the owner since tracing, the reference from `visited` and
@@ -739,19 +793,93 @@ static void _decref_and_set_free_owner(PyObject *obj)
     uint32_t local_rc = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local);
     if (local_rc <= 1) {
         Py_DECREF(obj);
-        return;
+        return false;
     }
-    _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local_rc - 1);
+    bool tracked = _PyObject_GC_IS_TRACKED(obj);
+    bool retain_trace_ref = untrack && tracked;
+    if (!retain_trace_ref) {
+        _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local_rc - 1);
 #ifdef Py_REF_DEBUG
-    _Py_DECREF_DecRefTotal();
+        _Py_DECREF_DecRefTotal();
 #endif
+    }
 
-    // Notify the GC that the owner should be set to free and not the allocating
-    // thread.
-    _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_FREE_OWNER);
+    if (tracked) {
+        // Tell GC restoration and mutator discovery that this is a region member.
+        _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_REGION_OWNED);
+    }
+    if (untrack && tracked) {
+        _PyObject_GC_UNTRACK(obj);
+    }
 
     dbg("  - The ob_tid of %p is set to free from %lu", obj, obj->ob_tid);
     _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
+    return retain_trace_ref;
+}
+
+static void _region_release_trace_ref(PyObject *obj)
+{
+    uintptr_t expected = _Py_FREE_TID;
+    if (!_Py_atomic_compare_exchange_uintptr(&obj->ob_tid, &expected, _Py_ThreadId())) {
+        Py_DECREF(obj);
+        return;
+    }
+#ifdef Py_REF_DEBUG
+    _Py_DECREF_DecRefTotal();
+#endif
+    uint32_t local = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local) - 1;
+    _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local);
+    if (local == 0) {
+        _Py_MergeZeroLocalRefcount(obj);
+        return;
+    }
+    _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
+}
+
+static int _untrack_region_owned(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
+{
+    (void)ht;
+    (void)user_data;
+    // A non-NULL value means validation retained a pin for this object.
+    if (value == NULL || !_VisitInfo_CAST((void *)value)->untracked) {
+        return 0;
+    }
+    PyObject *obj = _PyObject_CAST(key);
+    uint8_t bits = _Py_atomic_load_uint8_relaxed(&obj->ob_gc_bits);
+    if ((bits & (_PyGC_BITS_TRACKED | _PyGC_BITS_REGION_OWNED))
+        == (_PyGC_BITS_TRACKED | _PyGC_BITS_REGION_OWNED))
+    {
+        _Py_atomic_and_uint8(&obj->ob_gc_bits, (uint8_t)~_PyGC_BITS_TRACKED);
+    }
+    return 0;
+}
+
+static int _retrack_region_owned(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *user_data)
+{
+    (void)ht;
+    (void)user_data;
+    if (value != NULL && _VisitInfo_CAST((void *)value)->untracked
+        && _PyObject_GC_IS_ENCAPSULATED(_PyObject_CAST(key)))
+    {
+        _PyObject_GC_TRACK(_PyObject_CAST(key));
+    }
+    return 0;
+}
+
+static int add_to_remset(_Py_hashtable_t *remset, PyObject *obj)
+{
+    _Py_hashtable_entry_t *entry = _Py_hashtable_get_entry(remset, obj);
+    if (entry != NULL) {
+        entry->value = (void *)((uintptr_t)entry->value + 1);
+        return 0;
+    }
+    if (_Py_hashtable_set(remset, obj, (void *)1) < 0) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    return 0;
 }
 #endif
 
@@ -760,8 +888,12 @@ static int _region_close_lock_held(
     Py_ssize_t bridge_rc,
     _Py_hashtable_t *visited,
     bool has_weak_refs
+#ifdef Py_GIL_DISABLED
+    , uint64_t escape_epoch
+    , _Py_hashtable_t *remset
+#endif
 ) {
-    if (self->state == Py_REGION_STATUS_TRACING_FAILED) {
+    if (region_get_state(self) == Py_REGION_STATUS_TRACING_FAILED) {
         PyErr_Format(
             PyExc_RuntimeError,
             "the region cannot be closed since a concurrent thread accessed it during tracing");
@@ -777,19 +909,34 @@ static int _region_close_lock_held(
     }
 
     // See comment on `self->internal_bridge_refs`
-    assert(self->internal_bridge_refs == 0);
+    assert(region_internal_bridge_refs(self) == 0);
     if (bridge_rc != 0) {
         assert(bridge_rc >= 0);
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
         dbg("- subtracting %zd internal references from the bridge object %p", bridge_rc, self);
         _Py_RefcntAdd(self, -bridge_rc);
 #endif
-        self->internal_bridge_refs = bridge_rc;
+        region_set_internal_bridge_refs(self, bridge_rc);
     }
 
+#ifdef Py_GIL_DISABLED
+    assert(self->remset == NULL);
+    self->remset = remset;
+#endif
+
     // Mark the region as closed
-    assert(self->state == Py_REGION_STATUS_TRACING);
-    self->state = Py_REGION_STATUS_CLOSED;
+    assert(region_get_state(self) == Py_REGION_STATUS_TRACING);
+    region_set_state(self, Py_REGION_STATUS_CLOSED);
+
+#ifdef Py_GIL_DISABLED
+    // GC may have re-tracked members during validation. Restore the closed
+    // region's untracked state before exposing the bridge as closed.
+    if (remset != NULL
+        && _PyGC_GetEscapeEpoch(_PyInterpreterState_GET()) != escape_epoch)
+    {
+        (void)_Py_hashtable_foreach(visited, _untrack_region_owned, NULL);
+    }
+#endif
     return 0;
 }
 
@@ -798,10 +945,18 @@ static int _region_close(
     Py_ssize_t bridge_rc,
     _Py_hashtable_t *visited,
     bool has_weak_refs
+#ifdef Py_GIL_DISABLED
+    , uint64_t escape_epoch
+    , _Py_hashtable_t *remset
+#endif
 ) {
     int result;
     Py_BEGIN_CRITICAL_SECTION(self);
-    result = _region_close_lock_held(self, bridge_rc, visited, has_weak_refs);
+    result = _region_close_lock_held(self, bridge_rc, visited, has_weak_refs
+#ifdef Py_GIL_DISABLED
+                                     , escape_epoch, remset
+#endif
+                                     );
     Py_END_CRITICAL_SECTION();
     return result;
 }
@@ -812,19 +967,21 @@ static int _region_close(
  * Note that this may resurrect the bridge object. Callers may need to handle this case.
  */
 static void _restore_internal_bridge_refs(TracingRegionObject *self) {
-    if (self->internal_bridge_refs != 0) {
-        assert(self->internal_bridge_refs >= 0);
-        dbg("- adding %zd internal references from the bridge object %p", self->internal_bridge_refs, self);
-        _Py_RefcntAdd(self, self->internal_bridge_refs);
-        self->internal_bridge_refs = 0;
+    Py_ssize_t internal_refs = region_internal_bridge_refs(self);
+    if (internal_refs != 0) {
+        assert(internal_refs >= 0);
+        dbg("- adding %zd internal references from the bridge object %p", internal_refs, self);
+        _Py_RefcntAdd(self, internal_refs);
+        region_set_internal_bridge_refs(self, 0);
     }
 }
 #endif
 
 static void _open_region_lock_held(TracingRegionObject *self) {
-    if (self->state >= Py_REGION_STATUS_OPEN) {
-        if (self->state == Py_REGION_STATUS_TRACING) {
-            self->state = Py_REGION_STATUS_TRACING_FAILED;
+    int32_t state = region_get_state(self);
+    if (state >= Py_REGION_STATUS_OPEN) {
+        if (state == Py_REGION_STATUS_TRACING) {
+            region_set_state(self, Py_REGION_STATUS_TRACING_FAILED);
         }
         return;
     }
@@ -839,10 +996,19 @@ static void _open_region_lock_held(TracingRegionObject *self) {
     assert(gc_list_is_empty(&self->gc_list));
 #else
     // Only recorded on FT, the RC was never adjusted.
-    self->internal_bridge_refs = 0;
+    region_set_internal_bridge_refs(self, 0);
 #endif
 
-    self->state = Py_REGION_STATUS_OPEN;
+#ifdef Py_GIL_DISABLED
+    // Once open, the contents are traversed directly again, so the remset is
+    // no longer valid.
+    if (self->remset != NULL) {
+        _Py_hashtable_destroy(self->remset);
+        self->remset = NULL;
+    }
+#endif
+
+    region_set_state(self, Py_REGION_STATUS_OPEN);
     region_release_wref_info_lock_held(self);
 }
 
@@ -853,6 +1019,12 @@ static void _open_region(TracingRegionObject *self) {
 }
 
 #define PER_REGION_TRACE_LIMIT 2
+
+#ifdef Py_GIL_DISABLED
+// Keep a closed region's contents tracked when its outgoing remset is large
+// relative to the number of objects in the region.
+#define REMSET_MAX_RATIO 4
+#endif
 
 #ifdef Py_GIL_DISABLED
 // How long a tree close waits for another thread to merge the refcounts of a
@@ -1040,11 +1212,6 @@ static int tree_trace_state_wait_non_local_objects(tree_trace_state_t* state, Py
 // ###################################################################
 #pragma region Region Trace State
 
-typedef struct {
-    Py_ssize_t unaccounted_rc;
-    Py_ssize_t inital_rc;
-} region_visited_info_t;
-
 static region_visited_info_t* new_visit_info(Py_ssize_t unaccounted_rc, Py_ssize_t inital_rc) {
     region_visited_info_t *info = PyMem_Calloc(1, sizeof(region_visited_info_t));
     if (info == NULL) {
@@ -1057,8 +1224,6 @@ static region_visited_info_t* new_visit_info(Py_ssize_t unaccounted_rc, Py_ssize
 
     return info;
 }
-
-#define _VisitInfo_CAST(x) _Py_CAST(region_visited_info_t*, x)
 
 typedef struct {
     // List of pending objects. All references are weak, the reference in
@@ -1091,16 +1256,22 @@ typedef struct {
     bool restart;
 
     bool has_weak_refs;
+#ifdef Py_GIL_DISABLED
+    bool untrack;
+    uint64_t escape_epoch;
+    _Py_hashtable_t *remset;
+#endif
 } region_trace_state_t;
 
 static int _region_trace_state_free_visited_entry(
-    _Py_hashtable_t *ht, const void *key, const void *value, void *ignore)
+    _Py_hashtable_t *ht, const void *key, const void *value, void *state_void)
 {
+    (void)ht;
     PyObject* obj = _PyObject_CAST(key);
+    (void)state_void;
 
     // NULL indicates that the entry has already been handled.
     if (value == NULL) {
-        assert((_Py_OB_FLAGS_LOAD(obj) & _Py_REGION_TRACE_FLAG) == 0);
         return 0;
     }
 
@@ -1110,13 +1281,23 @@ static int _region_trace_state_free_visited_entry(
     //
     // We're the owner of the `_Py_REGION_TRACE_FLAG` flag of all objects in
     // the table. We therefore have to clear it.
-    uint16_t ob_flags = _Py_OB_FLAGS_REMOVE(obj, _Py_REGION_RC_CHANGE_FLAG | _Py_REGION_TRACE_FLAG);
-    assert(ob_flags & _Py_REGION_TRACE_FLAG);
-    (void)ob_flags;
+    uint16_t flags = _Py_OB_FLAGS_LOAD(obj);
+    if (flags & _Py_REGION_TRACE_FLAG) {
+        _Py_OB_FLAGS_REMOVE(obj, _Py_REGION_RC_CHANGE_FLAG | _Py_REGION_TRACE_FLAG);
+    }
 #endif
 
-    // Balances the `Py_INCREF(obj)` taken when the object was marked visited.
+#ifdef Py_GIL_DISABLED
+    region_visited_info_t *info = _VisitInfo_CAST((void *)value);
+    if (info->untracked) {
+        _region_release_trace_ref(obj);
+    }
+    else {
+        Py_DECREF(obj);
+    }
+#else
     Py_DECREF(obj);
+#endif
 
     PyMem_Free((void*)value);
 
@@ -1132,10 +1313,16 @@ static void region_trace_state_destroy(region_trace_state_t* state) {
     }
     if (state->visited) {
         (void)_Py_hashtable_foreach(
-            state->visited, _region_trace_state_free_visited_entry, NULL);
+            state->visited, _region_trace_state_free_visited_entry, state);
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
     }
+#ifdef Py_GIL_DISABLED
+    if (state->remset != NULL) {
+        _Py_hashtable_destroy(state->remset);
+        state->remset = NULL;
+    }
+#endif
 }
 
 static int region_trace_state_init(
@@ -1148,6 +1335,11 @@ static int region_trace_state_init(
 ) {
     state->pending = NULL;
     state->visited = NULL;
+#ifdef Py_GIL_DISABLED
+    state->remset = NULL;
+    state->untrack = false;
+    state->escape_epoch = 0;
+#endif
 
     state->pending = PyList_New(0);
     if (state->pending == NULL) {
@@ -1161,6 +1353,16 @@ static int region_trace_state_init(
         PyErr_NoMemory();
         goto error;
     }
+
+#ifdef Py_GIL_DISABLED
+    state->remset = _Py_hashtable_new(
+        _Py_hashtable_hash_ptr,
+        _Py_hashtable_compare_direct);
+    if (state->remset == NULL) {
+        PyErr_NoMemory();
+        goto error;
+    }
+#endif
 
     state->tree_trace_state = tree_trace_state;
     state->bridge = bridge;
@@ -1844,6 +2046,13 @@ static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) 
         region_trace_state_set_restart(state);
         return 0;
     case Py_MOVABLE_MUTEX:
+#ifdef Py_GIL_DISABLED
+        if (!(ref_flags & Py_REACHABLE_WEAK)
+            && add_to_remset(state->remset, obj) < 0)
+        {
+            return TRACE_RES_ERR;
+        }
+#endif
         return 0;
     default:
         Py_UNREACHABLE();
@@ -1876,7 +2085,7 @@ static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) 
     // bridge. However, on free-threading we keep the reference count intact.
     // We manually have to subtract it here.
     if (Region_Check(obj)) {
-        lrc_change -= _PyTRegion_CAST(obj)->internal_bridge_refs;
+        lrc_change -= region_internal_bridge_refs(_PyTRegion_CAST(obj));
     }
 #endif
     dbg("    - moving %p; LRC += %zd", obj, lrc_change);
@@ -2024,6 +2233,15 @@ static int _trace_visit_bridge_ref(PyObject* obj, int ref_flags, region_trace_st
     }
     Py_END_CRITICAL_SECTION();
     if (is_closed) {
+#ifdef Py_GIL_DISABLED
+        // A closed child bridge is not traversed as part of this region, but
+        // the parent remset must retain the edge to it.
+        if (!(ref_flags & Py_REACHABLE_WEAK)
+            && add_to_remset(state->remset, obj) < 0)
+        {
+            return -1;
+        }
+#endif
         return _move_obj(obj, ref_flags, state);
     }
 
@@ -2119,6 +2337,7 @@ static int _trace_visit(PyObject* obj, int ref_flags, void *arg) {
 
 typedef struct {
     PyObject *region;
+    bool untrack;
 } prepare_region_close_state_t;
 
 static _PyRegion_WrefInfo *region_ensure_wref_info(PyObject *region) {
@@ -2252,13 +2471,16 @@ _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_ent
         }
     }
 
-    // ### Cleanup
-    // This cleans up the entry and sets the object owner to free. We set the
-    // entry to NULL, to indicate that this entry has been cleaned up. This is
-    // checked by the cleanup code, if the validation fails in the middle.
-    _decref_and_set_free_owner(obj);
-    PyMem_Free(*value_entry);
-    *value_entry = NULL;
+    // Make eligible objects free and untrack them in this validation pass.
+    // Retain the trace pin for untracked objects until the whole validation
+    // succeeds, so cleanup can re-track them if a later object fails.
+    if (!_decref_and_set_free_owner(obj, state->untrack)) {
+        PyMem_Free(*value_entry);
+        *value_entry = NULL;
+    }
+    else {
+        info->untracked = true;
+    }
 
     return 0;
 error:
@@ -2291,6 +2513,9 @@ error:
 static int _validate_isolation(region_trace_state_t *trace_state) {
     prepare_region_close_state_t state = {
         .region = _PyObject_CAST(trace_state->bridge),
+#ifdef Py_GIL_DISABLED
+        .untrack = trace_state->untrack,
+#endif
     };
 
     int result = 0;
@@ -2302,9 +2527,8 @@ static int _validate_isolation(region_trace_state_t *trace_state) {
         return -1;
     }
 
-    // All objects have been validated and decrefed, the table doesn't have
-    // to be cleaned again.
-    _Py_hashtable_clear(trace_state->visited);
+    // Keep entries for retained trace pins. The state destructor releases
+    // them, or re-tracks them if validation failed.
     return 0;
 }
 
@@ -2330,7 +2554,7 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
             (void *)region_obj);
         return TRACE_RES_ERR;
     } else if (mark_res > 0) {
-        assert(region->state == Py_REGION_STATUS_CLOSED);
+        assert(region_get_state(region) == Py_REGION_STATUS_CLOSED);
         return TRACE_RES_DONE;
     }
 
@@ -2419,18 +2643,45 @@ static int _try_close_region(PyObject *region_obj, tree_trace_state_t *tree_trac
         goto error;
     }
 
+#ifdef Py_GIL_DISABLED
+    // A small remset lets the closed bridge represent references into the
+    // hidden contents. Otherwise leave the region dictionary visible to GC.
+    if (_Py_hashtable_len(state.remset) * REMSET_MAX_RATIO
+        > _Py_hashtable_len(state.visited))
+    {
+        _Py_hashtable_destroy(state.remset);
+        state.remset = NULL;
+    }
+    state.untrack = state.remset != NULL;
+    state.escape_epoch = _PyGC_GetEscapeEpoch(_PyInterpreterState_GET());
+#endif
+
     SUCCEEDS(_validate_isolation(&state));
 
-    SUCCEEDS(_region_close(region, state.bridge_rc, state.visited, state.has_weak_refs));
-
+    SUCCEEDS(_region_close(region, state.bridge_rc, state.visited, state.has_weak_refs
+#ifdef Py_GIL_DISABLED
+                           , state.escape_epoch, state.remset
+#endif
+                           ));
+#ifdef Py_GIL_DISABLED
+    state.remset = NULL;  // now owned by the closed region
+#endif
     goto finally;
 error:
 #ifdef _Py_PYRONA_INTERPRETER_SHARING
     gc_list_dissolve(&region->gc_list);
 #endif
     region_trace_res = TRACE_RES_ERR;
-    region_clear_tracing_mark(region);
 finally:
+    if (region_trace_res == TRACE_RES_ERR) {
+#ifdef Py_GIL_DISABLED
+        if (state.untrack) {
+            (void)_Py_hashtable_foreach(state.visited, _retrack_region_owned, NULL);
+        }
+#endif
+        // Roll back before opening the region, then release the trace pins.
+        region_clear_tracing_mark(region);
+    }
     region_trace_state_destroy(&state);
 
     return region_trace_res;
@@ -2577,7 +2828,11 @@ TracingRegion_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
     // We make the region open by default, this ensures that the first close
     // will handle the region type correctly. Alternatively, we could make them
     // closed in the beginning, but then handle the cases specifically.
-    self->state = Py_REGION_STATUS_OPEN;
+    region_set_state(self, Py_REGION_STATUS_OPEN);
+    region_set_internal_bridge_refs(self, 0);
+#ifdef Py_GIL_DISABLED
+    self->remset = NULL;
+#endif
 
     return _PyObject_CAST(self);
 }
@@ -2642,6 +2897,28 @@ static void _region_delete_contents(TracingRegionObject *self) {
 #endif
 }
 
+#ifdef Py_GIL_DISABLED
+typedef struct {
+    visitproc visit;
+    void *arg;
+} remset_visit_t;
+
+static int _remset_visit(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *data)
+{
+    (void)ht;
+    remset_visit_t *v = (remset_visit_t *)data;
+    uintptr_t count = (uintptr_t)value;
+    for (uintptr_t i = 0; i < count; i++) {
+        int res = v->visit(_PyObject_CAST(key), v->arg);
+        if (res != 0) {
+            return res;
+        }
+    }
+    return 0;
+}
+#endif
+
 static int
 TracingRegion_traverse(PyObject *op, visitproc visit, void *arg) {
     TracingRegionObject *self = _PyTRegion_CAST(op);
@@ -2651,6 +2928,24 @@ TracingRegion_traverse(PyObject *op, visitproc visit, void *arg) {
     // mess with the GC list of this region.
     if (region_is_open(self)) {
         Py_VISIT(self->dict);
+    }
+#elif defined(Py_GIL_DISABLED)
+    // Open regions and regions with a large remset retain ordinary traversal.
+    if (region_is_open_unlocked(self) || self->remset == NULL) {
+        Py_VISIT(self->dict);
+    }
+    else {
+        // Backreferences to the bridge become self-edges; external strong
+        // edges come from the remset.
+        Py_ssize_t internal_refs = region_internal_bridge_refs(self);
+        for (Py_ssize_t i = 0; i < internal_refs; i++) {
+            Py_VISIT(self);
+        }
+        remset_visit_t v = {visit, arg};
+        int res = _Py_hashtable_foreach(self->remset, _remset_visit, &v);
+        if (res != 0) {
+            return res;
+        }
     }
 #else
     Py_VISIT(self->dict);
@@ -2709,6 +3004,14 @@ TracingRegion_dealloc(PyObject *op) {
     }
     // The finalizer opened the region, which released the node
     assert(self->wref_info == NULL);
+
+#ifdef Py_GIL_DISABLED
+    // Normally released by opening; keep this as a backstop for finalization.
+    if (self->remset != NULL) {
+        _Py_hashtable_destroy(self->remset);
+        self->remset = NULL;
+    }
+#endif
 
     Py_BEGIN_CRITICAL_SECTION(self);
     // Make sure any objects added after/during finalization are freed
@@ -2918,7 +3221,7 @@ int _PyTracingRegion_Detach(PyObject* region) {
     // We subtract the internal RCs for sub-interpreters
     Py_ssize_t external_rc = Py_REFCNT(region);
 #else
-    Py_ssize_t external_rc = Py_REFCNT(region) - self->internal_bridge_refs;
+    Py_ssize_t external_rc = Py_REFCNT(region) - region_internal_bridge_refs(self);
 #endif
     if (external_rc > 1) {
         Py_ssize_t outside = external_rc - 1;

@@ -1880,6 +1880,7 @@ class TestConcurrentClose(unittest.TestCase):
         for _ in range(self.ITERATIONS):
             r = Region()
             r.objs = [A() for _ in range(100)]
+            member_ids = {id(obj) for obj in r.objs}
             wref = weakref.ref(r.objs[50])
             stop = threading.Event()
             started = threading.Event()
@@ -1896,6 +1897,8 @@ class TestConcurrentClose(unittest.TestCase):
                 Region.close(r)
             except RuntimeError as e:
                 self.assert_concurrent_error(e)
+                tracked_ids = {id(obj) for obj in gc.get_objects()}
+                self.assertTrue(member_ids <= tracked_ids)
                 self.assertIs(wref(), r.objs[50])
             finally:
                 stop.set()
