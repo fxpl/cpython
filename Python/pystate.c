@@ -2870,6 +2870,35 @@ int _Py_TryClaimFreeObject(PyObject *ob) {
 int _Py_TryClaimFreeObjectDecRef(PyObject *ob) {
     return try_claim_free_object(ob, false);
 }
+
+// Like try_claim_free_object(), but the caller has already checked that the
+// object is not owned by the current thread. Avoid repeating that check on the
+// shared reference-count slow path.
+static inline Py_ALWAYS_INLINE int
+try_claim_free_object_not_owned(PyObject *ob, bool check_flag)
+{
+    uintptr_t owner = _Py_atomic_load_uintptr(&ob->ob_tid);
+    if (check_flag) {
+        _Py_CheckTracingFlag(ob);
+    }
+    if (owner == _Py_FREE_TID) {
+        uintptr_t this = _Py_ThreadId();
+        if (_Py_atomic_compare_exchange_uintptr(&ob->ob_tid, &owner, this)) {
+            if (_PyObject_GC_IS_ENCAPSULATED(ob)) {
+                _Py_atomic_or_uint8(&ob->ob_gc_bits, _PyGC_BITS_TRACKED);
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int _Py_TryClaimFreeObjectNotOwned(PyObject *ob) {
+    return try_claim_free_object_not_owned(ob, true);
+}
+int _Py_TryClaimFreeObjectDecRefNotOwned(PyObject *ob) {
+    return try_claim_free_object_not_owned(ob, false);
+}
 #endif
 
 /***********************************/

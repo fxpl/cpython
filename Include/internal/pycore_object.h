@@ -18,6 +18,13 @@ extern "C" {
 
 #include <stdbool.h>              // bool
 
+#ifdef Py_GIL_DISABLED
+/* The shared refcount slow paths have already checked that the object is not
+   owned by the current thread. */
+extern int _Py_TryClaimFreeObjectNotOwned(PyObject *ob);
+extern int _Py_TryClaimFreeObjectDecRefNotOwned(PyObject *ob);
+#endif
+
 
 // This value is added to `ob_ref_shared` for objects that use deferred
 // reference counting so that they are not immediately deallocated when the

@@ -494,7 +494,7 @@ _Py_DecRefSharedIsDead(PyObject *o, const char *filename, int lineno)
 void
 _Py_IncRefShared(PyObject *o)
 {
-    if (_Py_TryClaimFreeObject(o)) {
+    if (_Py_TryClaimFreeObjectNotOwned(o)) {
         _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, o->ob_ref_local + 1);
     }
     else {
@@ -505,7 +505,7 @@ _Py_IncRefShared(PyObject *o)
 void
 _Py_DecRefSharedDebug(PyObject *o, const char *filename, int lineno)
 {
-    if (_Py_TryClaimFreeObjectDecRef(o)) {
+    if (_Py_TryClaimFreeObjectDecRefNotOwned(o)) {
         uint32_t local = o->ob_ref_local - 1;
         _Py_atomic_store_uint32_relaxed(&o->ob_ref_local, local);
         if (local == 0) {
