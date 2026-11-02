@@ -1735,6 +1735,15 @@ is_immutable_by_construction(struct _Py_immutability_state *state, PyObject *obj
     return 0;
 }
 
+int _PyImmutability_IsImmutableByConstructionType(PyTypeObject *tp)
+{
+    struct _Py_immutability_state *state = get_immutable_state();
+    if (state == NULL) {
+        return -1;
+    }
+    return is_immutable_by_construction_type(state, tp);
+}
+
 typedef struct {
     // Here it's safe to use a hashtable without incrementing the refcount
     // since we have a owning reference to the root and all objects in this

@@ -170,25 +170,10 @@ typedef enum {
     Py_MOVABLE_MUTEX = 3,
 } movable_status_t;
 
-static movable_status_t get_movable_status(PyObject *obj) {
-    // FIXME(regions): xFrednet: Currently it's not possible to set
-    // the movability per object. This instead returns the default
-    // movability for objects. Note that some shallow immutable objects
-    // will not return freeze as their movability.
-
-    // References to immutable objects are allowed
-    if (_Py_IsDeepImmutable(obj)) {
-        return Py_MOVABLE_MUTEX;
-    }
-
-    // Immortal object have no real RC, this makes it infeasible to have them
-    // in a region and dynamically track their ownership. Immortal objects are
-    // intended to be immutable in Python, so it should be safe to implicitly
-    // freeze them.
-    if (_Py_IsImmortal(obj)) {
-        return Py_MOVABLE_FREEZE;
-    }
-
+// The movability of `obj` as far as it follows from its type alone. Every check
+// in here must depend only on `Py_TYPE(obj)`, since the result is cached per type
+// (see `type_cache_t`).
+static movable_status_t get_type_movable_status(PyObject *obj) {
     // Types are a pain for regions since it's likely that objects of one type may
     // end up in multiple regions, requiring the type to be frozen. Types also
     // have a lot of reference pointing to them. Let's hope there is no need to
@@ -262,6 +247,36 @@ static movable_status_t get_movable_status(PyObject *obj) {
     // Regions are theoretically only movable, if they're closed. The traversal
     // checks this manually.
 
+    // For now, we define all other objects as movable by default. (Surely
+    // this will not backfire)
+    return Py_MOVABLE_YES;
+}
+
+// Combines the per-object checks with `type_status`, the result of
+// `get_type_movable_status(obj)`.
+static movable_status_t get_movable_status_with(PyObject *obj, movable_status_t type_status) {
+    // FIXME(regions): xFrednet: Currently it's not possible to set
+    // the movability per object. This instead returns the default
+    // movability for objects. Note that some shallow immutable objects
+    // will not return freeze as their movability.
+
+    // References to immutable objects are allowed
+    if (_Py_IsDeepImmutable(obj)) {
+        return Py_MOVABLE_MUTEX;
+    }
+
+    // Immortal object have no real RC, this makes it infeasible to have them
+    // in a region and dynamically track their ownership. Immortal objects are
+    // intended to be immutable in Python, so it should be safe to implicitly
+    // freeze them.
+    if (_Py_IsImmortal(obj)) {
+        return Py_MOVABLE_FREEZE;
+    }
+
+    if (type_status != Py_MOVABLE_YES) {
+        return type_status;
+    }
+
     // Dicts with per-thread RC are not safe to be moved. We could merge
     // the RC back together, but it's very likely that this shouldn't be in a
     // region to begin with. The dicts of module objects are a good example fo this.
@@ -269,10 +284,15 @@ static movable_status_t get_movable_status(PyObject *obj) {
         return Py_MOVABLE_NO;
     }
 
-    // For now, we define all other objects as movable by default. (Surely
-    // this will not backfire)
     return Py_MOVABLE_YES;
 }
+
+#ifndef NDEBUG
+// Uncached, for assertions. The trace uses `type_cache_movable_status()`.
+static movable_status_t get_movable_status(PyObject *obj) {
+    return get_movable_status_with(obj, get_type_movable_status(obj));
+}
+#endif
 
 // Raises a `RuntimeError` for `tgt`, which `src` references, and attaches both
 static void throw_not_movable_error(PyObject* src, PyObject* tgt)
@@ -1225,6 +1245,67 @@ static region_visited_info_t* new_visit_info(Py_ssize_t unaccounted_rc, Py_ssize
     return info;
 }
 
+// What a trace needs to know about the type of every object it visits: whether
+// instances are immutable by construction, and their type-determined
+// movability. Deriving these takes a global lock and a chain of subtype checks,
+// so a trace caches them in a small direct-mapped table. A cache lives for one
+// trace attempt. Answers could only change by running arbitrary code, which
+// during a trace only happens in pre-freeze hooks, and an attempt that freezes
+// anything is restarted with a new cache.
+#define TYPE_CACHE_LOG2 4
+
+typedef struct {
+    PyTypeObject *type;
+    // A `movable_status_t`, or -1 if not yet known
+    int8_t movable;
+    // 1 or 0, or -1 if not yet known
+    int8_t immutable_by_construction;
+} type_cache_entry_t;
+
+typedef struct {
+    type_cache_entry_t entries[1 << TYPE_CACHE_LOG2];
+} type_cache_t;
+
+static type_cache_entry_t *type_cache_entry(type_cache_t *cache, PyTypeObject *tp) {
+    size_t i = (size_t)(((uint64_t)(uintptr_t)tp * UINT64_C(0x9E3779B97F4A7C15))
+                        >> (64 - TYPE_CACHE_LOG2));
+    type_cache_entry_t *entry = &cache->entries[i];
+    if (entry->type != tp) {
+        entry->type = tp;
+        entry->movable = -1;
+        entry->immutable_by_construction = -1;
+    }
+    return entry;
+}
+
+static movable_status_t type_cache_movable_status(type_cache_t *cache, PyObject *obj) {
+    type_cache_entry_t *entry = type_cache_entry(cache, Py_TYPE(obj));
+    if (entry->movable < 0) {
+        entry->movable = (int8_t)get_type_movable_status(obj);
+    }
+    return get_movable_status_with(obj, (movable_status_t)entry->movable);
+}
+
+// `_PyImmutability_CanViewAsDeepImmutable()` with a cached shortcut for the
+// common answer: objects that are not deeply immutable, not type objects, and
+// whose type isn't immutable by construction can't be viewed as immutable.
+static int type_cache_can_view_as_deep_immutable(type_cache_t *cache, PyObject *obj) {
+    if (!_Py_IsDeepImmutable(obj) && !PyType_Check(obj)) {
+        type_cache_entry_t *entry = type_cache_entry(cache, Py_TYPE(obj));
+        if (entry->immutable_by_construction < 0) {
+            int res = _PyImmutability_IsImmutableByConstructionType(Py_TYPE(obj));
+            if (res < 0) {
+                return -1;
+            }
+            entry->immutable_by_construction = (int8_t)res;
+        }
+        if (!entry->immutable_by_construction) {
+            return 0;
+        }
+    }
+    return _PyImmutability_CanViewAsDeepImmutable(obj);
+}
+
 typedef struct {
     // List of pending objects. All references are weak, the reference in
     // `visited` keep them alive.
@@ -1232,6 +1313,7 @@ typedef struct {
     // A list of all visited objects, mapping from the object to a
     // `region_visited_info_t`
     _Py_hashtable_t *visited;
+    type_cache_t type_cache;
 
     // The trace state belonging to the region tree that this region
     // is a part of.
@@ -1335,6 +1417,7 @@ static int region_trace_state_init(
 ) {
     state->pending = NULL;
     state->visited = NULL;
+    memset(&state->type_cache, 0, sizeof(state->type_cache));
 #ifdef Py_GIL_DISABLED
     state->remset = NULL;
     state->untrack = false;
@@ -2027,7 +2110,7 @@ error:
 #pragma region Region Tracing Impl
 static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) {
     // Check the movability of the object:
-    movable_status_t status = get_movable_status(obj);
+    movable_status_t status = type_cache_movable_status(&state->type_cache, obj);
     switch (status) {
     case Py_MOVABLE_YES:
         break;
@@ -2297,12 +2380,24 @@ static int _trace_visit(PyObject* obj, int ref_flags, void *arg) {
         return 0;
     }
 
+    // References to deeply immutable objects are always allowed. This covers
+    // the type of every traced object, so test the flag before anything else.
+    // A traced object only becomes deeply immutable during a trace by being
+    // frozen, which restarts it: a successful immutability check only marks
+    // graphs that don't reach moved objects. So a completed trace never has
+    // them in `visited`. Should one get there regardless, skipping it here leaves its internal
+    // reference counted as external, which fails the close rather than
+    // closing a region that isn't isolated.
+    if (_Py_IsDeepImmutable(obj)) {
+        return 0;
+    }
+
     // Only check immutability for non-visited objects, the check could
     // otherwise invalidate the check.
     _Py_hashtable_entry_t *entry = _Py_hashtable_get_entry(state->visited, (void*)obj);
     if (entry == NULL) {
         // References to immutable objects are allowed
-        int immutable = _PyImmutability_CanViewAsDeepImmutable(obj);
+        int immutable = type_cache_can_view_as_deep_immutable(&state->type_cache, obj);
         if (immutable < 0) {
             return -1;
         }

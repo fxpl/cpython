@@ -78,6 +78,16 @@ PyAPI_FUNC(int) _PyImmutability_CanViewAsShallowImmutable(PyObject*);
  */
 PyAPI_FUNC(int) _PyImmutability_CanViewAsDeepImmutable(PyObject*);
 
+/* Check whether instances of `tp` are immutable by construction. Type objects
+ * with Py_TPFLAGS_IMMUTABLETYPE are immutable by construction regardless of
+ * their own type, so this answers the question for all objects of type `tp`
+ * except type objects. Registrations are never undone, so a positive answer
+ * remains valid.
+ *
+ * Returns 1 or 0, or -1 with an exception set.
+ */
+PyAPI_FUNC(int) _PyImmutability_IsImmutableByConstructionType(PyTypeObject*);
+
 PyAPI_FUNC(int) _PyImmutability_SetFreezable(PyObject *, _Py_freezable_status);
 PyAPI_FUNC(int) _PyImmutability_GetFreezable(PyObject *);
 PyAPI_FUNC(int) _PyImmutability_UnsetFreezable(PyObject *);
