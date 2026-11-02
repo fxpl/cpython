@@ -1232,18 +1232,15 @@ static int tree_trace_state_wait_non_local_objects(tree_trace_state_t* state, Py
 // ###################################################################
 #pragma region Region Trace State
 
-static region_visited_info_t* new_visit_info(Py_ssize_t unaccounted_rc, Py_ssize_t inital_rc) {
-    region_visited_info_t *info = PyMem_Calloc(1, sizeof(region_visited_info_t));
-    if (info == NULL) {
-        PyErr_NoMemory();
-        return NULL;
-    }
+// Visit infos are bump-allocated from chunks owned by the trace state and
+// released together when the state is destroyed.
+#define VISIT_INFO_CHUNK_LEN 256
 
-    info->unaccounted_rc = unaccounted_rc;
-    info->inital_rc = inital_rc;
-
-    return info;
-}
+typedef struct visit_info_chunk {
+    struct visit_info_chunk *prev;
+    Py_ssize_t used;
+    region_visited_info_t infos[VISIT_INFO_CHUNK_LEN];
+} visit_info_chunk_t;
 
 // What a trace needs to know about the type of every object it visits: whether
 // instances are immutable by construction, and their type-determined
@@ -1314,6 +1311,9 @@ typedef struct {
     // `region_visited_info_t`
     _Py_hashtable_t *visited;
     type_cache_t type_cache;
+    // The chunks holding the `region_visited_info_t` values of `visited`,
+    // most recent first.
+    visit_info_chunk_t *visit_infos;
 
     // The trace state belonging to the region tree that this region
     // is a part of.
@@ -1344,6 +1344,29 @@ typedef struct {
     _Py_hashtable_t *remset;
 #endif
 } region_trace_state_t;
+
+static region_visited_info_t* new_visit_info(
+    region_trace_state_t *state, Py_ssize_t unaccounted_rc, Py_ssize_t inital_rc)
+{
+    visit_info_chunk_t *chunk = state->visit_infos;
+    if (chunk == NULL || chunk->used == VISIT_INFO_CHUNK_LEN) {
+        chunk = PyMem_Malloc(sizeof(visit_info_chunk_t));
+        if (chunk == NULL) {
+            PyErr_NoMemory();
+            return NULL;
+        }
+        chunk->prev = state->visit_infos;
+        chunk->used = 0;
+        state->visit_infos = chunk;
+    }
+
+    region_visited_info_t *info = &chunk->infos[chunk->used++];
+    info->unaccounted_rc = unaccounted_rc;
+    info->inital_rc = inital_rc;
+    info->untracked = false;
+
+    return info;
+}
 
 static int _region_trace_state_free_visited_entry(
     _Py_hashtable_t *ht, const void *key, const void *value, void *state_void)
@@ -1381,8 +1404,6 @@ static int _region_trace_state_free_visited_entry(
     Py_DECREF(obj);
 #endif
 
-    PyMem_Free((void*)value);
-
     return 0;
 }
 
@@ -1398,6 +1419,11 @@ static void region_trace_state_destroy(region_trace_state_t* state) {
             state->visited, _region_trace_state_free_visited_entry, state);
         _Py_hashtable_destroy(state->visited);
         state->visited = NULL;
+    }
+    while (state->visit_infos != NULL) {
+        visit_info_chunk_t *prev = state->visit_infos->prev;
+        PyMem_Free(state->visit_infos);
+        state->visit_infos = prev;
     }
 #ifdef Py_GIL_DISABLED
     if (state->remset != NULL) {
@@ -1418,6 +1444,7 @@ static int region_trace_state_init(
     state->pending = NULL;
     state->visited = NULL;
     memset(&state->type_cache, 0, sizeof(state->type_cache));
+    state->visit_infos = NULL;
 #ifdef Py_GIL_DISABLED
     state->remset = NULL;
     state->untrack = false;
@@ -2174,7 +2201,7 @@ static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) 
     dbg("    - moving %p; LRC += %zd", obj, lrc_change);
     state->external_rc += lrc_change;
 
-    region_visited_info_t *visit_info = new_visit_info(lrc_change, object_rc);
+    region_visited_info_t *visit_info = new_visit_info(state, lrc_change, object_rc);
     if (visit_info == NULL) {
         return -1;
     }
@@ -2220,7 +2247,6 @@ static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) 
         // The tracing flag indicates that this is part of a concurrent trace.
         // This trace fails due to the concurrent access.
         if ((flags_expected & _Py_REGION_TRACE_FLAG) != 0) {
-            PyMem_Free(visit_info);
             Py_DECREF(obj);
             PyErr_Format(
                 PyExc_RuntimeError,
@@ -2238,7 +2264,6 @@ static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) 
         // Cleanup the flags of obj since it's not in `visited`
         _Py_OB_FLAGS_REMOVE(obj, _Py_REGION_RC_CHANGE_FLAG | _Py_REGION_TRACE_FLAG);
 #endif
-        PyMem_Free(visit_info);
         Py_DECREF(obj);
         PyErr_NoMemory();
         return -1;
@@ -2570,7 +2595,6 @@ _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_ent
     // Retain the trace pin for untracked objects until the whole validation
     // succeeds, so cleanup can re-track them if a later object fails.
     if (!_decref_and_set_free_owner(obj, state->untrack)) {
-        PyMem_Free(*value_entry);
         *value_entry = NULL;
     }
     else {
@@ -2580,7 +2604,6 @@ _validate_isolation_visit(_Py_hashtable_t *ht, const void *key, void **value_ent
     return 0;
 error:
     Py_DECREF(obj);
-    PyMem_Free(*value_entry);
     *value_entry = NULL;
 
     PyErr_Format(
@@ -2599,7 +2622,6 @@ error:
 
     // Balances the `Py_INCREF(obj)` taken when the object was marked visited.
     Py_DECREF(obj);
-    PyMem_Free(*value_entry);
     *value_entry = NULL;
     return 0;
 #endif
