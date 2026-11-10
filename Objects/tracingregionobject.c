@@ -901,6 +901,30 @@ static int add_to_remset(_Py_hashtable_t *remset, PyObject *obj)
     }
     return 0;
 }
+
+// Records a strong edge from a region member to the deeply immutable `obj`.
+// Immutables stay tracked while the region is closed, so the remset must
+// subtract the edge, or a cycle through an immutable back into the region
+// can't be collected.
+//
+// Only edges the GC would otherwise subtract are recorded: it ignores immortal
+// and untracked objects. A missing entry only keeps `obj` alive as a root; an
+// extra one could let the GC free an immutable that is still referenced.
+//
+// FIXME(regions): Only some immutables can lead back into a region. Without a
+// filter for those, every heap type gets an entry counting its instances,
+// which makes the GC traversal of the bridge linear in the region size.
+static int remset_add_immutable(_Py_hashtable_t *remset, PyObject *obj, int ref_flags)
+{
+    assert(_Py_IsDeepImmutable(obj));
+    if ((ref_flags & Py_REACHABLE_WEAK)
+        || _Py_IsImmortal(obj)
+        || !_PyObject_GC_IS_TRACKED(obj))
+    {
+        return 0;
+    }
+    return add_to_remset(remset, obj);
+}
 #endif
 
 static int _region_close_lock_held(
@@ -2414,7 +2438,11 @@ static int _trace_visit(PyObject* obj, int ref_flags, void *arg) {
     // reference counted as external, which fails the close rather than
     // closing a region that isn't isolated.
     if (_Py_IsDeepImmutable(obj)) {
+#ifdef Py_GIL_DISABLED
+        return remset_add_immutable(state->remset, obj, ref_flags);
+#else
         return 0;
+#endif
     }
 
     // Only check immutability for non-visited objects, the check could
@@ -2427,7 +2455,11 @@ static int _trace_visit(PyObject* obj, int ref_flags, void *arg) {
             return -1;
         }
         if (immutable) {
+#ifdef Py_GIL_DISABLED
+            return remset_add_immutable(state->remset, obj, ref_flags);
+#else
             return 0;
+#endif
         }
     }
 

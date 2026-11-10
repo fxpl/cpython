@@ -863,6 +863,35 @@ class TestClosedRegionTeardown(unittest.TestCase):
 
         self.assertTrue(local.get(), "the deepest sub-region was not deleted")
 
+    @unittest.skipUnless(support.Py_GIL_DISABLED,
+                         "the remset only exists on free threading")
+    def test_cycle_through_immutable_deleted_by_collector(self):
+        """The collector doesn't see a closed region's contents, only its
+        remset. Unless the remset records edges to immutables, an immutable
+        leading back to the bridge looks externally referenced and keeps the
+        region alive forever."""
+        local = InterpreterLocal(False)
+
+        @freezable
+        class Recorder:
+            def __del__(self, local=local):
+                local.set(True)
+
+        def make_cycle():
+            r = Region()
+            # Enough members that the region closes with a remset
+            r.members = [Recorder() for _ in range(20)]
+            c = Mutex(r)
+            # bridge -> frozen tuple -> mutex -> bridge
+            r.back = deep_freeze((c,))
+            del r
+            c.release()
+
+        make_cycle()
+        gc.collect()
+
+        self.assertTrue(local.get(), "the region was not collected")
+
 
 class TestRegionRef(unittest.TestCase):
     """A region reference does not keep a region open. It checks on every
