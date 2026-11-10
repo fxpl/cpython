@@ -3047,6 +3047,13 @@ static void _region_delete_contents(TracingRegionObject *self) {
 }
 
 #ifdef Py_GIL_DISABLED
+// True if the GC sees the bridge through its remset rather than its contents.
+// Open regions and regions with a large remset retain ordinary traversal.
+static bool region_traverses_remset(TracingRegionObject *self)
+{
+    return !region_is_open_unlocked(self) && self->remset != NULL;
+}
+
 typedef struct {
     visitproc visit;
     void *arg;
@@ -3056,15 +3063,46 @@ static int _remset_visit(
     _Py_hashtable_t *ht, const void *key, const void *value, void *data)
 {
     (void)ht;
+    (void)value;
     remset_visit_t *v = (remset_visit_t *)data;
-    uintptr_t count = (uintptr_t)value;
-    for (uintptr_t i = 0; i < count; i++) {
-        int res = v->visit(_PyObject_CAST(key), v->arg);
-        if (res != 0) {
-            return res;
+    return v->visit(_PyObject_CAST(key), v->arg);
+}
+
+typedef struct {
+    _PyRegion_countedvisitproc visit;
+    void *arg;
+} remset_counted_visit_t;
+
+static int _remset_visit_counted(
+    _Py_hashtable_t *ht, const void *key, const void *value, void *data)
+{
+    (void)ht;
+    remset_counted_visit_t *v = (remset_counted_visit_t *)data;
+    return v->visit(_PyObject_CAST(key), (Py_ssize_t)(uintptr_t)value, v->arg);
+}
+
+// `tp_traverse` reports each remset target once. That is all reachability
+// needs, but the GC passes that subtract internal references need every edge.
+// They use this instead, which reports each target once with its edge count.
+int
+_PyTracingRegion_TraverseCounted(PyObject *op, _PyRegion_countedvisitproc visit,
+                                 void *arg)
+{
+    assert(Region_Check(op));
+    TracingRegionObject *self = _PyTRegion_CAST(op);
+    // The world is stopped, so this agrees with `TracingRegion_traverse()`.
+    if (!region_traverses_remset(self)) {
+        return 0;
+    }
+    Py_ssize_t internal_refs = region_internal_bridge_refs(self);
+    if (internal_refs > 0) {
+        if (visit(op, internal_refs, arg) != 0) {
+            return 1;
         }
     }
-    return 0;
+    remset_counted_visit_t v = {visit, arg};
+    (void)_Py_hashtable_foreach(self->remset, _remset_visit_counted, &v);
+    return 1;
 }
 #endif
 
@@ -3079,15 +3117,14 @@ TracingRegion_traverse(PyObject *op, visitproc visit, void *arg) {
         Py_VISIT(self->dict);
     }
 #elif defined(Py_GIL_DISABLED)
-    // Open regions and regions with a large remset retain ordinary traversal.
-    if (region_is_open_unlocked(self) || self->remset == NULL) {
+    if (!region_traverses_remset(self)) {
         Py_VISIT(self->dict);
     }
     else {
-        // Backreferences to the bridge become self-edges; external strong
-        // edges come from the remset.
-        Py_ssize_t internal_refs = region_internal_bridge_refs(self);
-        for (Py_ssize_t i = 0; i < internal_refs; i++) {
+        // Backreferences to the bridge become a self-edge; external strong
+        // edges come from the remset. Each target is visited once, see
+        // `_PyTracingRegion_TraverseCounted()` for the edge counts.
+        if (region_internal_bridge_refs(self) > 0) {
             Py_VISIT(self);
         }
         remset_visit_t v = {visit, arg};

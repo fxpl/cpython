@@ -892,6 +892,33 @@ class TestClosedRegionTeardown(unittest.TestCase):
 
         self.assertTrue(local.get(), "the region was not collected")
 
+    @unittest.skipUnless(support.Py_GIL_DISABLED,
+                         "the remset only exists on free threading")
+    def test_cycle_through_shared_immutable_deleted_by_collector(self):
+        """Like test_cycle_through_immutable_deleted_by_collector, but the
+        immutable is the type of many members. The remset holds one entry for
+        all their edges to it, which the collector must count in full."""
+        local = InterpreterLocal(False)
+
+        def make_cycle():
+            @freezable
+            class Recorder:
+                def __del__(self, local=local):
+                    local.set(True)
+
+            r = Region()
+            r.members = [Recorder() for _ in range(20)]
+            c = Mutex(r)
+            # bridge -> Recorder (frozen on close, 20 edges) -> mutex -> bridge
+            Recorder.back = c
+            del r
+            c.release()
+
+        make_cycle()
+        gc.collect()
+
+        self.assertTrue(local.get(), "the region was not collected")
+
 
 class TestRegionRef(unittest.TestCase):
     """A region reference does not keep a region open. It checks on every

@@ -7,6 +7,7 @@
 #include "pycore_freelist.h"      // _PyObject_ClearFreeLists()
 #include "pycore_gc.h"
 #include "pycore_genobject.h"     // _PyGen_GetGeneratorFromFrame()
+#include "pycore_immutability.h"  // _PyTracingRegion_TraverseCounted()
 #include "pycore_initconfig.h"    // _PyStatus_NO_MEMORY()
 #include "pycore_interp.h"        // PyInterpreterState.gc
 #include "pycore_interpframe.h"   // _PyFrame_GetLocalsArray()
@@ -233,12 +234,6 @@ gc_add_refs(PyObject *op, Py_ssize_t refs)
 {
     assert(_PyObject_GC_IS_TRACKED(op));
     op->ob_tid += refs;
-}
-
-static inline void
-gc_decref(PyObject *op)
-{
-    op->ob_tid -= 1;
 }
 
 static Py_ssize_t
@@ -968,9 +963,9 @@ process_delayed_frees(PyInterpreterState *interp, struct collection_state *state
     _PyMem_ProcessDelayedNoDealloc((PyThreadState *)current_tstate, queue_freed_object, state);
 }
 
-// Subtract an incoming reference from the computed "gc_refs" refcount.
+// Subtract `n` incoming references from the computed "gc_refs" refcount.
 static int
-visit_decref(PyObject *op, void *arg)
+visit_decref_n(PyObject *op, Py_ssize_t n, void *arg)
 {
     uint8_t bits = _Py_atomic_load_uint8_relaxed(&op->ob_gc_bits);
     if (!(bits & _PyGC_BITS_TRACKED)) {
@@ -989,9 +984,31 @@ visit_decref(PyObject *op, void *arg)
         // If update_refs hasn't reached this object yet, mark it
         // as (tentatively) unreachable and initialize ob_tid to zero.
         gc_maybe_init_refs(op);
-        gc_decref(op);
+        gc_add_refs(op, -n);
     }
     return 0;
+}
+
+// Subtract an incoming reference from the computed "gc_refs" refcount.
+static int
+visit_decref(PyObject *op, void *arg)
+{
+    return visit_decref_n(op, 1, arg);
+}
+
+// Like `tp_traverse(op, visit, arg)`, but a closed region bridge reports each
+// remset target once with its edge count, instead of once per edge. For the
+// passes that count references; the others only need `tp_traverse`.
+static inline void
+traverse_counted(PyObject *op, visitproc visit,
+                 _PyRegion_countedvisitproc visit_n, void *arg)
+{
+    if (Py_IS_TYPE(op, &_PyTracingRegion_Type)
+        && _PyTracingRegion_TraverseCounted(op, visit_n, arg))
+    {
+        return;
+    }
+    (void)Py_TYPE(op)->tp_traverse(op, visit, arg);
 }
 
 // Queue encapsulated children so the entire escaped subgraph is tracked for
@@ -1057,7 +1074,7 @@ update_refs(const mi_heap_t *heap, const mi_heap_area_t *area,
     // Subtract internal references from ob_tid. Objects with ob_tid > 0
     // are directly reachable from outside containers, and so can't be
     // collected.
-    Py_TYPE(op)->tp_traverse(op, visit_decref, state);
+    traverse_counted(op, visit_decref, visit_decref_n, state);
     return true;
 }
 
@@ -1845,12 +1862,20 @@ show_stats_each_generations(GCState *gcstate)
 
 // Traversal callback for handle_resurrected_objects.
 static int
-visit_decref_unreachable(PyObject *op, void *data)
+visit_decref_unreachable_n(PyObject *op, Py_ssize_t n, void *data)
 {
     if (gc_is_unreachable(op) && _PyObject_GC_IS_TRACKED(op)) {
-        op->ob_ref_local -= 1;
+        // `n` is at most op's refcount, which handle_resurrected_objects()
+        // has made fit into `ob_ref_local`.
+        op->ob_ref_local -= (uint32_t)n;
     }
     return 0;
+}
+
+static int
+visit_decref_unreachable(PyObject *op, void *data)
+{
+    return visit_decref_unreachable_n(op, 1, data);
 }
 
 int
@@ -1916,8 +1941,11 @@ handle_resurrected_objects(struct collection_state *state)
         // Subtract one to account for the reference from the worklist.
         op->ob_ref_local -= 1;
 
-        traverseproc traverse = Py_TYPE(op)->tp_traverse;
-        (void)traverse(op, visit_decref_unreachable, NULL);
+        // Currently, no bridge reaches this with a remset: its finalizer has
+        // opened the region, and a finalized region can't be closed again.
+        // Count anyway, in case finalization keeps closed regions closed.
+        traverse_counted(op, visit_decref_unreachable,
+                         visit_decref_unreachable_n, NULL);
     }
 
     // Find resurrected objects

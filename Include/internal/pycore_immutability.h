@@ -16,6 +16,17 @@ PyAPI_FUNC(void) _PyTracingRegion_Open(PyObject* region);
 PyAPI_FUNC(int) _PyTracingRegion_Detach(PyObject* region);
 PyAPI_FUNC(int) _PyTracingRegion_Attach(PyObject* region, _PyPyrona_owner_id_t owner);
 
+#ifdef Py_GIL_DISABLED
+/* Visits `op` as a target of `n` edges. */
+typedef int (*_PyRegion_countedvisitproc)(PyObject *op, Py_ssize_t n, void *arg);
+
+/* Reports the edges of a closed bridge seen through its remset with their
+ * multiplicity, instead of once per edge. Returns 1 if it did, and 0 if the
+ * caller must use tp_traverse. Only safe while the world is stopped. */
+PyAPI_FUNC(int) _PyTracingRegion_TraverseCounted(
+    PyObject *op, _PyRegion_countedvisitproc visit, void *arg);
+#endif
+
 typedef struct _PyRegion_WrefInfo _PyRegion_WrefInfo;
 PyAPI_FUNC(void) _PyRegion_WrefInfoDecRef(_PyRegion_WrefInfo*);
 PyAPI_FUNC(void) _PyRegion_WrefInfoDecRefLockHeld(_PyRegion_WrefInfo*);
