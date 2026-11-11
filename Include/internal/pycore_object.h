@@ -618,7 +618,7 @@ _PyObject_InitVar(PyVarObject *op, PyTypeObject *typeobj, Py_ssize_t size)
  * allows call sites to specialize for the immortal/local case.
  */
 static inline int
-_Py_TryIncrefFast(PyObject *op) {
+_Py_TryIncrefLocal(PyObject *op, bool claim_free) {
     uint32_t local = _Py_atomic_load_uint32_relaxed(&op->ob_ref_local);
     local += 1;
     if (local == 0) {
@@ -626,7 +626,9 @@ _Py_TryIncrefFast(PyObject *op) {
         _Py_INCREF_IMMORTAL_STAT_INC();
         return 1;
     }
-    if (_Py_IsOwnedByCurrentThread(op) || _Py_TryClaimFreeObject(op)) {
+    if (_Py_IsOwnedByCurrentThread(op)
+        || (claim_free && _Py_TryClaimFreeObject(op)))
+    {
         _Py_INCREF_STAT_INC();
         _Py_atomic_store_uint32_relaxed(&op->ob_ref_local, local);
 #ifdef Py_REF_DEBUG
@@ -635,6 +637,29 @@ _Py_TryIncrefFast(PyObject *op) {
         return 1;
     }
     return 0;
+}
+
+static inline int
+_Py_TryIncrefFast(PyObject *op) {
+    return _Py_TryIncrefLocal(op, true);
+}
+
+
+extern PyAPI_FUNC(void) _Py_DecRefSharedNoClaim(PyObject *op);
+
+// Like `Py_DECREF()`, but never claims a free object.
+static inline void
+_Py_DecRefNoClaim(PyObject *op)
+{
+    if (_Py_IsImmortal(op) || _Py_IsOwnedByCurrentThread(op)) {
+        Py_DECREF(op);
+        return;
+    }
+    _Py_DECREF_STAT_INC();
+#ifdef Py_REF_DEBUG
+    _Py_DECREF_DecRefTotal();
+#endif
+    _Py_DecRefSharedNoClaim(op);
 }
 
 static inline int
@@ -662,18 +687,21 @@ _Py_TryIncRefShared(PyObject *op)
     }
 }
 
-/* Tries to incref the object op and ensures that *src still points to it. */
+/* Tries to incref the object op and ensures that *src still points to it.
+ *
+ * The reference is speculative, so free objects are never claimed: `op` may
+ * have moved into a region that closed before the incref. */
 static inline int
 _Py_TryIncrefCompare(PyObject **src, PyObject *op)
 {
-    if (_Py_TryIncrefFast(op)) {
+    if (_Py_TryIncrefLocal(op, false)) {
         return 1;
     }
     if (!_Py_TryIncRefShared(op)) {
         return 0;
     }
     if (op != _Py_atomic_load_ptr(src)) {
-        Py_DECREF(op);
+        _Py_DecRefNoClaim(op);
         return 0;
     }
     return 1;

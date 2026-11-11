@@ -7,6 +7,7 @@
 #include "pycore_freelist.h"      // _PyObject_ClearFreeLists()
 #include "pycore_gc.h"
 #include "pycore_genobject.h"     // _PyGen_GetGeneratorFromFrame()
+#include "pycore_immutability.h"  // _PyTracingRegion_TraverseCounted()
 #include "pycore_initconfig.h"    // _PyStatus_NO_MEMORY()
 #include "pycore_interp.h"        // PyInterpreterState.gc
 #include "pycore_interpframe.h"   // _PyFrame_GetLocalsArray()
@@ -83,6 +84,7 @@ struct collection_state {
     struct worklist legacy_finalizers;
     struct worklist wrcb_to_call;
     struct worklist objs_to_decref;
+    _PyObjectStack escaped;
 };
 
 // iterate over a worklist
@@ -158,12 +160,17 @@ gc_is_frozen(PyObject *op)
 }
 
 // Returns true if the owner should be set to `_Py_FREE_TID` instead of the
-// allocating thread. This is used for objects that have been moved between
-// threads. (Currenlty this is only done by regions)
+// allocating thread. This is used for objects owned by a closed region.
 static inline int
 gc_set_free_owner(PyObject *op)
 {
-    return gc_has_bit(op, _PyGC_BITS_FREE_OWNER);
+    return gc_has_bit(op, _PyGC_BITS_REGION_OWNED);
+}
+
+uint64_t
+_PyGC_GetEscapeEpoch(PyInterpreterState *interp)
+{
+    return _Py_atomic_load_uint64(&interp->gc.escape_epoch);
 }
 
 static inline int
@@ -227,12 +234,6 @@ gc_add_refs(PyObject *op, Py_ssize_t refs)
 {
     assert(_PyObject_GC_IS_TRACKED(op));
     op->ob_tid += refs;
-}
-
-static inline void
-gc_decref(PyObject *op)
-{
-    op->ob_tid -= 1;
 }
 
 static Py_ssize_t
@@ -607,7 +608,19 @@ typedef struct {
     gc_span_stack_t spans;
     PyObject *buffer[BUFFER_SIZE];
     bool use_prefetch;
+    // The collection's escape stack, see `visit_decref()`
+    _PyObjectStack *escaped;
 } gc_mark_args_t;
+
+// Alive objects are skipped by `update_refs()`, so escaped region members
+// below them have to be queued here.
+static inline void
+gc_mark_untracked(PyObject *op, gc_mark_args_t *args)
+{
+    if (gc_has_bit(op, _PyGC_BITS_REGION_OWNED)) {
+        (void)_PyObjectStack_Push(args->escaped, op);
+    }
+}
 
 
 // Returns number of entries in buffer
@@ -702,6 +715,7 @@ gc_mark_enqueue_no_buffer(PyObject *op, gc_mark_args_t *args)
         return 0;
     }
     if (!gc_has_bit(op,  _PyGC_BITS_TRACKED)) {
+        gc_mark_untracked(op, args);
         return 0;
     }
     if (gc_is_alive(op)) {
@@ -962,19 +976,62 @@ process_delayed_frees(PyInterpreterState *interp, struct collection_state *state
     _PyMem_ProcessDelayedNoDealloc((PyThreadState *)current_tstate, queue_freed_object, state);
 }
 
-// Subtract an incoming reference from the computed "gc_refs" refcount.
+// Subtract `n` incoming references from the computed "gc_refs" refcount.
 static int
-visit_decref(PyObject *op, void *arg)
+visit_decref_n(PyObject *op, Py_ssize_t n, void *arg)
 {
-    if (_PyObject_GC_IS_TRACKED(op)
-        && !_Py_IsImmortal(op)
+    uint8_t bits = _Py_atomic_load_uint8_relaxed(&op->ob_gc_bits);
+    if (!(bits & _PyGC_BITS_TRACKED)) {
+        if (bits & _PyGC_BITS_REGION_OWNED) {
+            // The current collection must finish with the tracked set it
+            // started with. Queue the escaped object for the next collection.
+            struct collection_state *state = (struct collection_state *)arg;
+            (void)_PyObjectStack_Push(&state->escaped, op);
+        }
+        return 0;
+    }
+    if (!_Py_IsImmortal(op)
         && !gc_is_frozen(op)
         && !gc_is_alive(op))
     {
         // If update_refs hasn't reached this object yet, mark it
         // as (tentatively) unreachable and initialize ob_tid to zero.
         gc_maybe_init_refs(op);
-        gc_decref(op);
+        gc_add_refs(op, -n);
+    }
+    return 0;
+}
+
+// Subtract an incoming reference from the computed "gc_refs" refcount.
+static int
+visit_decref(PyObject *op, void *arg)
+{
+    return visit_decref_n(op, 1, arg);
+}
+
+// Like `tp_traverse(op, visit, arg)`, but a closed region bridge reports each
+// remset target once with its edge count, instead of once per edge. For the
+// passes that count references; the others only need `tp_traverse`.
+static inline void
+traverse_counted(PyObject *op, visitproc visit,
+                 _PyRegion_countedvisitproc visit_n, void *arg)
+{
+    if (Py_IS_TYPE(op, &_PyTracingRegion_Type)
+        && _PyTracingRegion_TraverseCounted(op, visit_n, arg))
+    {
+        return;
+    }
+    (void)Py_TYPE(op)->tp_traverse(op, visit, arg);
+}
+
+// Queue encapsulated children so the entire escaped subgraph is tracked for
+// the next collection, rather than one level per collection.
+static int
+visit_escaped(PyObject *op, void *arg)
+{
+    if (_PyObject_GC_SHOULD_RETRACH(op)) {
+        // If we're out of memory stop the visit
+        return _PyObjectStack_Push((_PyObjectStack *)arg, op);
     }
     return 0;
 }
@@ -1031,7 +1088,7 @@ update_refs(const mi_heap_t *heap, const mi_heap_area_t *area,
     // Subtract internal references from ob_tid. Objects with ob_tid > 0
     // are directly reachable from outside containers, and so can't be
     // collected.
-    Py_TYPE(op)->tp_traverse(op, visit_decref, NULL);
+    traverse_counted(op, visit_decref, visit_decref_n, state);
     return true;
 }
 
@@ -1319,6 +1376,7 @@ gc_propagate_alive_prefetch(gc_mark_args_t *args)
         PyObject *op = gc_mark_buffer_pop(args);
 
         if (!gc_has_bit(op, _PyGC_BITS_TRACKED)) {
+            gc_mark_untracked(op, args);
             continue;
         }
 
@@ -1394,7 +1452,7 @@ gc_mark_alive_from_roots(PyInterpreterState *interp,
     // Check that all objects don't have alive bit set
     gc_visit_heaps(interp, &validate_alive_bits, &state->base);
 #endif
-    gc_mark_args_t mark_args = { 0 };
+    gc_mark_args_t mark_args = { .escaped = &state->escaped };
 
     // Using prefetch instructions is only a win if the set of objects being
     // examined by the GC does not fit into CPU caches.  Otherwise, using the
@@ -1680,6 +1738,7 @@ _PyGC_InitState(GCState *gcstate)
 {
     // TODO: move to pycore_runtime_init.h once the incremental GC lands.
     gcstate->young.threshold = 2000;
+    gcstate->escape_epoch = 1; // We start at 1, epochs can be invalidated with a -= 1
 }
 
 
@@ -1818,12 +1877,20 @@ show_stats_each_generations(GCState *gcstate)
 
 // Traversal callback for handle_resurrected_objects.
 static int
-visit_decref_unreachable(PyObject *op, void *data)
+visit_decref_unreachable_n(PyObject *op, Py_ssize_t n, void *data)
 {
     if (gc_is_unreachable(op) && _PyObject_GC_IS_TRACKED(op)) {
-        op->ob_ref_local -= 1;
+        // `n` is at most op's refcount, which handle_resurrected_objects()
+        // has made fit into `ob_ref_local`.
+        op->ob_ref_local -= (uint32_t)n;
     }
     return 0;
+}
+
+static int
+visit_decref_unreachable(PyObject *op, void *data)
+{
+    return visit_decref_unreachable_n(op, 1, data);
 }
 
 int
@@ -1889,8 +1956,11 @@ handle_resurrected_objects(struct collection_state *state)
         // Subtract one to account for the reference from the worklist.
         op->ob_ref_local -= 1;
 
-        traverseproc traverse = Py_TYPE(op)->tp_traverse;
-        (void)traverse(op, visit_decref_unreachable, NULL);
+        // Currently, no bridge reaches this with a remset: its finalizer has
+        // opened the region, and a finalized region can't be closed again.
+        // Count anyway, in case finalization keeps closed regions closed.
+        traverse_counted(op, visit_decref_unreachable,
+                         visit_decref_unreachable_n, NULL);
     }
 
     // Find resurrected objects
@@ -2124,6 +2194,7 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
         // be ignored for rest of the GC pass.
         int err = gc_mark_alive_from_roots(interp, state);
         if (err < 0) {
+            _PyObjectStack_Clear(&state->escaped);
             _PyEval_StartTheWorld(interp);
             PyErr_NoMemory();
             return;
@@ -2134,9 +2205,32 @@ gc_collect_internal(PyInterpreterState *interp, struct collection_state *state, 
     // Find unreachable objects
     int err = deduce_unreachable_heap(interp, state);
     if (err < 0) {
+        _PyObjectStack_Clear(&state->escaped);
         _PyEval_StartTheWorld(interp);
         PyErr_NoMemory();
         return;
+    }
+
+    // Re-track escaped region members only after this collection has made
+    // its reachability decisions. This keeps them out of the current cycle
+    // while ensuring their graph is visible to the next collection.
+    bool escaped_region_object = false;
+    PyObject *escaped;
+    while ((escaped = _PyObjectStack_Pop(&state->escaped)) != NULL) {
+        if (_PyObject_GC_SHOULD_RETRACH(escaped)) {
+            _PyObject_GC_TRACK(escaped);
+            escaped_region_object = true;
+
+            if (Py_TYPE(escaped)->tp_traverse(escaped, visit_escaped, &state->escaped)) {
+                // Out of memory: This is not a critical failure, it only means
+                // that we can't discover the entire escaped tree. The missed
+                // objects will be discovered and retracked in the next iteration.
+                // For now we retrack what we found.
+            }
+        }
+    }
+    if (escaped_region_object) {
+        _Py_atomic_add_uint64(&state->gcstate->escape_epoch, 1);
     }
 
 #ifdef GC_DEBUG

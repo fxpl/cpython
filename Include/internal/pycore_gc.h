@@ -43,10 +43,21 @@ static inline PyObject* _Py_FROM_GC(PyGC_Head *gc) {
 #  define _PyGC_BITS_SHARED         (1<<4)
 #  define _PyGC_BITS_ALIVE          (1<<5)    // Reachable from a known root.
 #  define _PyGC_BITS_DEFERRED       (1<<6)    // Use deferred reference counting
-#  define _PyGC_BITS_FREE_OWNER     (1<<7)    // Object is in a closed region
+// Object is or was part of a region, when discovered without the _PyGC_BITS_TRACKED
+// bit it should be retracked
+#  define _PyGC_BITS_REGION_OWNED   (1<<7)
 #endif
 
 #ifdef Py_GIL_DISABLED
+
+/* A closed-region object the GC does not see: region-owned and untracked. */
+static inline int
+_PyObject_GC_SHOULD_RETRACH(PyObject *op)
+{
+    uint8_t bits = _Py_atomic_load_uint8_relaxed(&op->ob_gc_bits);
+    return (bits & (_PyGC_BITS_REGION_OWNED | _PyGC_BITS_TRACKED))
+            == _PyGC_BITS_REGION_OWNED;
+}
 
 static inline void
 _PyObject_SET_GC_BITS(PyObject *op, uint8_t new_bits)
@@ -291,7 +302,9 @@ static inline void _PyObject_GC_UNTRACK(
 #endif
 
 #ifdef Py_GIL_DISABLED
-    _PyObject_CLEAR_GC_BITS(op, _PyGC_BITS_TRACKED);
+    // Untracked objects with `_PyGC_BITS_REGION_OWNED` set are retracked on
+    // discovery by the GC.
+    _PyObject_CLEAR_GC_BITS(op, _PyGC_BITS_TRACKED | _PyGC_BITS_REGION_OWNED);
 #else
     PyGC_Head *gc = _Py_AS_GC(op);
     PyGC_Head *prev = _PyGCHead_PREV(gc);
@@ -359,6 +372,10 @@ extern void _PyGC_Freeze(PyInterpreterState *interp);
 extern void _PyGC_Unfreeze(PyInterpreterState *interp);
 /* Number of frozen objects */
 extern Py_ssize_t _PyGC_GetFreezeCount(PyInterpreterState *interp);
+#ifdef Py_GIL_DISABLED
+/* Number of collections that re-tracked a region-owned object. */
+extern uint64_t _PyGC_GetEscapeEpoch(PyInterpreterState *interp);
+#endif
 
 extern PyObject *_PyGC_GetObjects(PyInterpreterState *interp, int generation);
 extern PyObject *_PyGC_GetReferrers(PyInterpreterState *interp, PyObject *objs);

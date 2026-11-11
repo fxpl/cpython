@@ -533,6 +533,15 @@ _Py_DecRefShared(PyObject *o)
 }
 
 void
+_Py_DecRefSharedNoClaim(PyObject *o)
+{
+    if (_Py_DecRefSharedIsDead(o, NULL, 0)) {
+        _Py_CLEAR_IMMUTABLE(o);
+        _Py_Dealloc(o);
+    }
+}
+
+void
 _Py_MergeZeroLocalRefcount(PyObject *op)
 {
     assert(op->ob_ref_local == 0);

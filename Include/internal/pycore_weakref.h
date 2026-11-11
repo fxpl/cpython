@@ -151,7 +151,7 @@ static inline PyObject* _PyWeakref_GET_REF(PyObject *ref_obj)
     // The referenced object was in a region that was closed in the mean time
     // we retry using the Region version of TryIncRef
     if (_Py_atomic_load_ptr(&ref->wr_region_info) != NULL) {
-        Py_DECREF(obj);
+        _Py_DecRefNoClaim(obj);
         return _PyRegion_WrefTryIncRef(ref);
     }
 
