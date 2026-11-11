@@ -2823,6 +2823,32 @@ _Py_GetThreadLocal_Addr(void)
     return (uintptr_t)&_Py_tss_tstate;
 }
 
+
+static inline Py_ALWAYS_INLINE int
+try_claim_free_object(PyObject *ob, bool clear_flag) {
+    // If the object is currently free, we try to claim ownership
+    uintptr_t owner = _Py_atomic_load_uintptr(&ob->ob_tid);
+    if (owner == _Py_FREE_TID) {
+        uintptr_t this = _Py_ThreadId();
+        if (_Py_atomic_compare_exchange_uintptr(&ob->ob_tid, &owner, this)) {
+            // We only need to clear the flag on succees, as failure will
+            // cause the caller to take the slow path and clear the flag there
+            if (clear_flag) {
+                _PyObject_ClearRegionRcChangeFlag(ob);
+            }
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int _Py_TryClaimFreeObject(PyObject *ob) {
+    return try_claim_free_object(ob, true);
+}
+int _Py_TryClaimFreeObjectDecRef(PyObject *ob) {
+    return try_claim_free_object(ob, false);
+}
 #endif
 
 /***********************************/

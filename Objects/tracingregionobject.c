@@ -667,6 +667,133 @@ static int region_clear_tracing_mark(TracingRegionObject *self) {
     return res;
 }
 
+#ifdef Py_GIL_DISABLED
+// Takes biased RC ownership of a merged object by moving its shared RC into
+// `ob_ref_local`. Returns 0 and leaves the object merged and unowned, if the
+// RC doesn't fit into `ob_ref_local`.
+//
+// This doesn't require isolation. Other threads never compare `ob_tid` with
+// our ID, so their RC operations keep going to `ob_ref_shared`:
+// - Until the CAS succeeds, the object stays merged and the caller's reference
+//   prevents the shared RC from reaching zero.
+// - After the CAS, a DECREF can queue the object with us. Merging our queue
+//   forwards it to the new owner, once the object has been made free.
+//
+// The caller must not hit a safepoint before it publishes a new owner, since
+// the GC expects `ob_tid == 0` for merged objects.
+static int _adopt_merged_object(PyObject *obj) {
+    Py_ssize_t shared = _Py_atomic_load_ssize(&obj->ob_ref_shared);
+    if (!_Py_REF_IS_MERGED(shared)) {
+        // `ob_tid == 0` implies a merged RC
+        return 0;
+    }
+
+    _Py_atomic_store_uintptr(&obj->ob_tid, _Py_ThreadId());
+    uint32_t local = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local);
+    for (;;) {
+        Py_ssize_t total = (Py_ssize_t)local
+            + Py_ARITHMETIC_RIGHT_SHIFT(Py_ssize_t, shared, _Py_REF_SHARED_SHIFT);
+        if (total >= (Py_ssize_t)_Py_IMMORTAL_REFCNT_LOCAL) {
+            // Nothing has been committed yet, so the object can be given back.
+            _Py_atomic_store_uintptr(&obj->ob_tid, _Py_UNOWNED_TID);
+            return 0;
+        }
+
+        // The local RC is written first. This makes `Py_REFCNT` briefly
+        // over-report instead of under-report, which could otherwise make a
+        // racing `Py_REFCNT(obj) == 1` check think it holds the only reference.
+        _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, (uint32_t)total);
+
+        // The `_Py_REF_MAYBE_WEAKREF` is covered by the merged flags.
+        // We set it t
+        // `MAYBE_WEAKREF` keeps `_Py_TryIncrefShared` working while the
+        // entire RC is stored in `ob_ref_local`.
+        if (_Py_atomic_compare_exchange_ssize(
+                &obj->ob_ref_shared, &shared,
+                _Py_REF_SHARED(0, _Py_REF_MAYBE_WEAKREF)))
+        {
+            return 1;
+        }
+        _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local);
+        // The caller's reference prevents the merged RC from reaching zero.
+        assert(_Py_REF_IS_MERGED(shared));
+    }
+}
+
+// Drops the reference held by `visited` and marks the object as free, so the
+// next thread touching it takes over the biased RC.
+//
+// This runs during validation, before isolation has been proven for all
+// objects. Marking an object as free is a normal handoff of the biased RC,
+// which is safe as long as:
+// 1. We own the object when we publish the free owner,
+// 2. we're done writing `ob_ref_local` before publishing,
+// 3. the RC is not merged, and
+// 4. `ob_ref_local >= 1`, since a claiming DECREF doesn't check for underflow.
+//
+// None of this depends on isolation. If the close fails later, the object
+// simply stays free in the open region. Objects owned by another thread can
+// only reach this, if a concurrent thread broke isolation. They keep their
+// owner. Objects queued with us are fine, since the BRC forwards them to the
+// new owner.
+//
+// No safepoints are allowed in this function. The GC could otherwise reset
+// `ob_tid` while we assume ownership.
+static void _decref_and_set_free_owner(PyObject *obj)
+{
+    // These asserts can fail if a concurrent thread broke isolation, on this
+    // will be caught by the validation pass of the respective objects.
+    //
+    // Immortal should never be passed to this, since they're frozen.
+    assert(!_Py_IsImmortal(obj));
+
+    uintptr_t this_tid = _Py_ThreadId();
+    uintptr_t owner = _Py_atomic_load_uintptr(&obj->ob_tid);
+    if (owner == _Py_FREE_TID) {
+        // The GC marked the object as free again, while we were detached
+        // during tracing. We claim it back. The CAS only fails if a concurrent
+        // thread claimed it first.
+        if (!_Py_atomic_compare_exchange_uintptr(&obj->ob_tid, &owner, this_tid)) {
+            Py_DECREF(obj);
+            return;
+        }
+    }
+    else if (owner == _Py_UNOWNED_TID) {
+        // Includes all objects allocated by other threads, since tracing
+        // requests them to be merged.
+        if (!_adopt_merged_object(obj)) {
+            Py_DECREF(obj);
+            return;
+        }
+    }
+    else if (owner != this_tid) {
+        Py_DECREF(obj);
+        return;
+    }
+
+    // If we've been the owner since tracing, the reference from `visited` and
+    // at least one other are local. This can be lower, if we re-claimed the
+    // object after a concurrent thread used it, or if it's only reachable via
+    // weak references. The normal DECREF merges or deallocates it.
+    uint32_t local_rc = _Py_atomic_load_uint32_relaxed(&obj->ob_ref_local);
+    if (local_rc <= 1) {
+        Py_DECREF(obj);
+        return;
+    }
+    _Py_atomic_store_uint32_relaxed(&obj->ob_ref_local, local_rc - 1);
+#ifdef Py_REF_DEBUG
+    _Py_DECREF_DecRefTotal();
+#endif
+
+    // Notify the GC that the owner should be set to free and not the allocating
+    // thread.
+    _Py_atomic_or_uint8(&obj->ob_gc_bits, _PyGC_BITS_FREE_OWNER);
+
+    dbg("  - The ob_tid of %p is set to free from %lu", obj, obj->ob_tid);
+    _Py_atomic_store_uintptr_release(&obj->ob_tid, _Py_FREE_TID);
+}
+#endif
+
 static int _region_close_lock_held(
     TracingRegionObject *self,
     Py_ssize_t bridge_rc,
@@ -901,7 +1028,8 @@ static int tree_trace_state_wait_non_local_objects(tree_trace_state_t* state, Py
                 // The owner may have detached with `obj` still in its merge
                 // queue; merge it on the owner's behalf if so.
                 uintptr_t owner = _Py_atomic_load_uintptr_relaxed(&obj->ob_tid);
-                if (owner != _Py_UNOWNED_TID && owner != _Py_ThreadId())
+                if (owner != _Py_UNOWNED_TID && owner != _Py_FREE_TID
+                    && owner != _Py_ThreadId())
                 {
                     _Py_brc_merge_for_detached_owner(owner);
                 }
@@ -1926,7 +2054,20 @@ static int _move_obj(PyObject* obj, int ref_flags, region_trace_state_t* state) 
 
 #ifdef Py_GIL_DISABLED
     uintptr_t this_tid = _Py_ThreadId();
-    if (owner != this_tid && owner != _Py_UNOWNED_TID) {
+    if (owner == _Py_FREE_TID) {
+        // The object was marked as free, the INCREF for the visited set will have
+        // claimed ownership of the object for this thread. If not, we have a
+        // concurrent access and fail.
+        if (_Py_atomic_load_uintptr(&obj->ob_tid) ==  this_tid) {
+            owner = this_tid;
+        } else {
+            PyErr_Format(
+                PyExc_RuntimeError,
+                "the region cannot be closed due to a concurrent access to the object at %p",
+                obj);
+            return -1;
+        }
+    } else if (owner != this_tid && owner != _Py_UNOWNED_TID) {
         Py_INCREF(obj);
         _Py_brc_queue_object(obj);
         dbg("      - requesting RC ownership for %p from %lu", obj, owner);
@@ -2230,9 +2371,9 @@ finally:;
     uint16_t ob_flags = _Py_OB_FLAGS_REMOVE(obj, _Py_REGION_TRACE_FLAG);
     assert(ob_flags & _Py_REGION_TRACE_FLAG);
     (void)ob_flags;
-    // We set the entry to NULL, to indicate that this  entry has been cleaned up.
+    // We set the entry to NULL, to indicate that this entry has been cleaned up.
     // This is checked by the cleanup code, if the  validation fails in the middle.
-    Py_DECREF(obj);
+    _decref_and_set_free_owner(obj);
     *value_entry = NULL;
 
     return result;
