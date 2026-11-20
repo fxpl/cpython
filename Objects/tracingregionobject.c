@@ -2589,13 +2589,14 @@ static int _validate_isolation(region_trace_state_t *trace_state) {
         return -1;
     }
 
+#ifdef Py_GIL_DISABLED
     // An object couldn't be untracked, meaning the GC can discover the region
     // an retrack objects. We change the epoch to invalidate the remset
     if (state.untrack != trace_state->untrack) {
         assert(!state.untrack);
         trace_state->escape_epoch -= 1;
     }
-
+#endif
     // All objects have been validated and decrefed, the table doesn't have
     // to be cleaned again.
     _Py_hashtable_clear(trace_state->visited);
